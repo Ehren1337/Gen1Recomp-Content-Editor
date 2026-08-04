@@ -124,11 +124,16 @@ LOVE window:
 ## Pack for sharing
 
 ```powershell
-.\scripts\pack_content_editor.ps1
+.\scripts\pack_content_editor.ps1              # windows + linux
+.\scripts\pack_content_editor.ps1 -Platform linux
 ```
 
-Builds `dist/win/gen1recomp-content-editor-win64.zip` without ROM-derived
-caches. See `tools/content-editor/PACK_README.md`.
+Builds cache-free packs:
+
+- `dist/win/gen1recomp-content-editor-win64.zip`
+- `dist/linux/gen1recomp-content-editor-linux64.tar.gz` (LÖVE AppImage)
+
+See `tools/content-editor/PACK_README.md`.
 
 ## Maps
 

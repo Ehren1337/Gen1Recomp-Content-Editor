@@ -31,6 +31,128 @@ local function commandOutput(command)
   return result ~= "" and result or nil
 end
 
+local function shellQuote(s)
+  return "'" .. tostring(s or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function hasCommand(name)
+  -- Run via env -i-less host PATH. AppImages often see a tool in PATH that
+  -- cannot actually show a GUI from inside the sandbox.
+  local path = commandOutput(
+    "command -v " .. name .. " 2>/dev/null || which " .. name .. " 2>/dev/null")
+  return path ~= nil, path
+end
+
+-- Run a dialog command; returns path, status ("ok"|"cancel"|"fail").
+-- Zenity/kdialog use exit 1 for user cancel; other non-zero = failed to show.
+local function runDialog(cmd)
+  -- Capture stdout + exit code. Keep stderr quiet.
+  local wrapped = string.format(
+    "OUT=$(%s 2>/dev/null); EC=$?; printf '%%s\\n' \"$OUT\"; printf '__EC:%%s\\n' \"$EC\"",
+    cmd)
+  local pipe = io.popen(wrapped, "r")
+  if not pipe then return nil, "fail" end
+  local body = pipe:read("*a") or ""
+  pipe:close()
+  local ec = tonumber(body:match("__EC:(%d+)")) or -1
+  local out = trim((body:gsub("\n?__EC:%d+%s*$", "")))
+  if out ~= "" and ec == 0 then return out, "ok" end
+  if out ~= "" then return out, "ok" end -- some tools omit exit 0
+  if ec == 1 then return nil, "cancel" end
+  return nil, "fail"
+end
+
+-- Convert Windows "Label|*.gb;*.gbc|All|*.*" filters to zenity/kdialog forms.
+local function linuxFileFilters(filter)
+  filter = filter or "All files (*.*)|*.*"
+  local zenity, kdialog = {}, {}
+  local parts = {}
+  for part in (filter .. "|"):gmatch("([^|]*)|") do
+    parts[#parts + 1] = part
+  end
+  for i = 1, #parts - 1, 2 do
+    local label = parts[i]
+    local pats = parts[i + 1] or "*.*"
+    local globs = {}
+    for g in pats:gmatch("[^;]+") do
+      g = trim(g)
+      if g ~= "" then globs[#globs + 1] = g end
+    end
+    if #globs > 0 then
+      zenity[#zenity + 1] = string.format("--file-filter=%s",
+        shellQuote(label .. " | " .. table.concat(globs, " ")))
+      kdialog[#kdialog + 1] = table.concat(globs, " ") .. "|" .. label
+    end
+  end
+  return zenity, kdialog
+end
+
+local function linuxPickFile(title, filter)
+  title = title or "Choose a file"
+  local zenFilters, kdFilters = linuxFileFilters(filter)
+  local home = os.getenv("HOME") or "."
+  local sawCancel = false
+
+  if hasCommand("zenity") then
+    local cmd = "zenity --file-selection --title=" .. shellQuote(title)
+    for _, f in ipairs(zenFilters) do cmd = cmd .. " " .. f end
+    local path, st = runDialog(cmd)
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true else
+      -- failed to show — try another backend
+    end
+  end
+  if hasCommand("kdialog") then
+    local filt = kdFilters[1] or "*.*|All files"
+    local path, st = runDialog(string.format(
+      "kdialog --getopenfilename %s %s --title %s",
+      shellQuote(home), shellQuote(filt), shellQuote(title)))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("yad") then
+    local path, st = runDialog("yad --file --title=" .. shellQuote(title))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+
+  -- AppImage/host mismatch often looks like cancel with no window. Caller
+  -- should offer a path paste box for both cancel and unavailable.
+  if sawCancel then return nil, "cancel" end
+  return nil, "unavailable"
+end
+
+local function linuxPickFolder(title, startPath)
+  title = title or "Choose a folder"
+  startPath = startPath or (os.getenv("HOME") or ".")
+  local sawCancel = false
+
+  if hasCommand("zenity") then
+    local path, st = runDialog(string.format(
+      "zenity --file-selection --directory --title=%s --filename=%s",
+      shellQuote(title), shellQuote(startPath .. "/")))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("kdialog") then
+    local path, st = runDialog(string.format(
+      "kdialog --getexistingdirectory %s --title %s",
+      shellQuote(startPath), shellQuote(title)))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("yad") then
+    local path, st = runDialog(string.format(
+      "yad --file --directory --title=%s --filename=%s",
+      shellQuote(title), shellQuote(startPath .. "/")))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+
+  if sawCancel then return nil, "cancel" end
+  return nil, "unavailable"
+end
+
 function ModIO.repoRoot()
   if love and love.filesystem and love.filesystem.getSource then
     return love.filesystem.getSource()
@@ -201,31 +323,90 @@ function ModIO.save(modDir, project)
   return true
 end
 
+-- Escape for PowerShell single-quoted strings.
+local function psQuote(s)
+  return tostring(s or ""):gsub("'", "''")
+end
+
+-- Write a temp .ps1 and run it (avoids -Command quoting breakage). Returns
+-- stdout path or nil.
+local function windowsRunPs1(body)
+  local tmp = os.getenv("TEMP") or os.getenv("TMP") or "."
+  local ps1 = tmp .. "\\pokeport_ce_picker_" .. tostring(os.time())
+    .. tostring(math.random(1000, 9999)) .. ".ps1"
+  local f = io.open(ps1, "wb")
+  if not f then return nil end
+  -- UTF-8 BOM so PowerShell parses Unicode paths/titles correctly
+  f:write(string.char(0xEF, 0xBB, 0xBF))
+  f:write(body)
+  f:close()
+  local out = commandOutput(string.format(
+    'powershell -NoProfile -STA -ExecutionPolicy Bypass -File "%s"', ps1))
+  pcall(os.remove, ps1)
+  if out then
+    out = out:gsub("\r", ""):gsub("\n$", "")
+    out = trim(out)
+  end
+  return (out and out ~= "") and out or nil
+end
+
+-- TopMost owner form so the dialog is not buried under the LÖVE window.
+local function windowsDialogPreamble()
+  return table.concat({
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type -AssemblyName System.Drawing",
+    "[System.Windows.Forms.Application]::EnableVisualStyles()",
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+    "$owner = New-Object System.Windows.Forms.Form",
+    "$owner.TopMost = $true",
+    "$owner.ShowInTaskbar = $false",
+    "$owner.FormBorderStyle = 'FixedToolWindow'",
+    "$owner.StartPosition = 'Manual'",
+    "$owner.Size = New-Object System.Drawing.Size(1,1)",
+    "$owner.Location = New-Object System.Drawing.Point(-32000,-32000)",
+    "$owner.Opacity = 0",
+    "$owner.Show()",
+    "$owner.Activate()",
+  }, "\r\n")
+end
+
+local function windowsDialogEpilogue()
+  return table.concat({
+    "$owner.Close()",
+    "$owner.Dispose()",
+  }, "\r\n")
+end
+
+-- Returns path, status ("ok"|"cancel"|"unavailable").
+-- Older callers that only use the first return still work.
 function ModIO.chooseFolder(title, startPath)
   local platform = (love and love.system and love.system.getOS
                     and love.system.getOS()) or ""
   title = title or "Choose a folder"
   startPath = startPath or ModIO.repoRoot()
   if platform == "OS X" then
-    return commandOutput(string.format(
+    local path = commandOutput(string.format(
       [[osascript -e 'POSIX path of (choose folder with prompt "%s" default location POSIX file "%s")' 2>/dev/null]],
       title:gsub('"', '\\"'), startPath:gsub('"', '\\"')))
+    return path, path and "ok" or "cancel"
   elseif platform == "Windows" then
-    local script = table.concat({
-      "Add-Type -AssemblyName System.Windows.Forms;",
-      "$d=New-Object System.Windows.Forms.FolderBrowserDialog;",
-      string.format("$d.Description='%s';", title:gsub("'", "''")),
-      string.format("$d.SelectedPath='%s';", startPath:gsub("'", "''")),
-      "if($d.ShowDialog() -eq 'OK'){[Console]::Write($d.SelectedPath)}",
-    })
-    return commandOutput(
-      'powershell -NoProfile -STA -Command "' .. script .. '"')
+    local body = table.concat({
+      windowsDialogPreamble(),
+      "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+      string.format("$d.Description = '%s'", psQuote(title)),
+      string.format("$d.SelectedPath = '%s'", psQuote(startPath)),
+      "$d.ShowNewFolderButton = $false",
+      "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {",
+      "  [Console]::Write($d.SelectedPath)",
+      "}",
+      windowsDialogEpilogue(),
+    }, "\r\n")
+    local path = windowsRunPs1(body)
+    return path, path and "ok" or "cancel"
   elseif platform == "Linux" then
-    return commandOutput(string.format(
-      [[zenity --file-selection --directory --title="%s" --filename="%s/" 2>/dev/null]],
-      title, startPath))
+    return linuxPickFolder(title, startPath)
   end
-  return nil
+  return nil, "unavailable"
 end
 
 function ModIO.chooseModDir()
@@ -238,24 +419,40 @@ function ModIO.chooseFile(title, filter)
   title = title or "Choose a file"
   filter = filter or "All files (*.*)|*.*"
   if platform == "OS X" then
-    return commandOutput(string.format(
+    local path = commandOutput(string.format(
       [[osascript -e 'POSIX path of (choose file with prompt "%s")' 2>/dev/null]],
       title:gsub('"', '\\"')))
+    return path, path and "ok" or "cancel"
   elseif platform == "Windows" then
-    local script = table.concat({
-      "Add-Type -AssemblyName System.Windows.Forms;",
-      "$d=New-Object System.Windows.Forms.OpenFileDialog;",
-      string.format("$d.Title='%s';", title:gsub("'", "''")),
-      string.format("$d.Filter='%s';", filter:gsub("'", "''")),
-      "if($d.ShowDialog() -eq 'OK'){[Console]::Write($d.FileName)}",
-    })
-    return commandOutput(
-      'powershell -NoProfile -STA -Command "' .. script .. '"')
+    -- Mirror RomImporter: copy pick to an ASCII temp path when it's a ROM so
+    -- console codepage cannot mangle non-ASCII folder names.
+    local isRom = filter:lower():find("%.gb") ~= nil
+    local bodyLines = {
+      windowsDialogPreamble(),
+      "$d = New-Object System.Windows.Forms.OpenFileDialog",
+      string.format("$d.Title = '%s'", psQuote(title)),
+      string.format("$d.Filter = '%s'", psQuote(filter)),
+      "$d.Multiselect = $false",
+      "$d.CheckFileExists = $true",
+      "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {",
+    }
+    if isRom then
+      bodyLines[#bodyLines + 1] =
+        "  $t = Join-Path $env:TEMP 'pokeport_ce_rom_pick.gb'"
+      bodyLines[#bodyLines + 1] =
+        "  Copy-Item -LiteralPath $d.FileName -Destination $t -Force"
+      bodyLines[#bodyLines + 1] = "  [Console]::Write($t)"
+    else
+      bodyLines[#bodyLines + 1] = "  [Console]::Write($d.FileName)"
+    end
+    bodyLines[#bodyLines + 1] = "}"
+    bodyLines[#bodyLines + 1] = windowsDialogEpilogue()
+    local path = windowsRunPs1(table.concat(bodyLines, "\r\n"))
+    return path, path and "ok" or "cancel"
   elseif platform == "Linux" then
-    return commandOutput(string.format(
-      [[zenity --file-selection --title="%s" 2>/dev/null]], title))
+    return linuxPickFile(title, filter)
   end
-  return nil
+  return nil, "unavailable"
 end
 
 function ModIO.copyFile(src, dest)

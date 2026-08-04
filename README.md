@@ -26,12 +26,16 @@ Windows (bundled runtime):
 **Portable pack (share with others)**
 
 ```powershell
-.\scripts\pack_content_editor.ps1
+.\scripts\pack_content_editor.ps1              # windows + linux
+.\scripts\pack_content_editor.ps1 -Platform linux
+.\scripts\pack_content_editor.ps1 -Platform windows
 ```
 
-Gives `dist/win/gen1recomp-content-editor-win64.zip`. The zip **excludes**
-`data/generated`, `assets/generated`, ROMs, and `portable.txt`. Recipients
-unzip anywhere and double-click `ContentEditor.bat` (LÖVE is included).
+Outputs (no ROM cache):
+
+- `dist/win/gen1recomp-content-editor-win64.zip` → `ContentEditor.bat`
+- `dist/linux/gen1recomp-content-editor-linux64.tar.gz` → `./ContentEditor.sh`
+  (after `chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage`)
 
 On **Project → GAME DATA** they can **Link Recomp** (reuse an existing
 install’s cache), **Import ROM** (cache in the LÖVE save directory), or
@@ -154,8 +158,12 @@ python tools/tmx_import.py path/to/maps --mod mods/my_content
 ## Pack for sharing (maintainers)
 
 ```powershell
-.\scripts\pack_content_editor.ps1
+.\scripts\pack_content_editor.ps1 -Platform all
 ```
 
-Output: `dist/win/gen1recomp-content-editor-win64.zip` — editor + runtime +
-fixtures + sample mods, **no ROM cache**. Recipients only need Windows 64-bit.
+Outputs:
+
+- `dist/win/gen1recomp-content-editor-win64.zip`
+- `dist/linux/gen1recomp-content-editor-linux64.tar.gz`
+
+Editor + LÖVE runtime + fixtures + sample mods, **no ROM cache**.

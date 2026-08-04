@@ -8,16 +8,29 @@ link a Gen1Recomp install or import your own ROM.
 
 ## Run
 
-1. Unzip this folder (anywhere — not inside Gen1Recomp).
-2. Double-click `ContentEditor.bat`.
-3. On **Project** → **GAME DATA**:
-   - **Link Recomp** — pick your Gen1Recomp folder (must already have imported a ROM), or
-   - **Import ROM** — choose a clean US Red/Blue/Yellow `.gb` (cache goes to the LÖVE save directory, not this pack), or
-   - **Use fixtures** — keep stub data for light authoring.
-4. **Project** → Open `mods\New_PokemonTest`, or **Create** a new mod.
-5. Edit on the other tabs → **Save**.
+**Windows:** unzip anywhere → double-click `ContentEditor.bat`.
 
-Save writes `mods\<id>\editor_project.lua` and `main.lua`.
+**Linux (x86_64):**
+
+```sh
+tar -xzf gen1recomp-content-editor-linux64.tar.gz
+cd gen1recomp-content-editor-linux64
+chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage
+./ContentEditor.sh
+```
+
+File dialogs need `zenity`, `kdialog`, or `yad` (e.g. `sudo apt install zenity`).
+Without one, Link Recomp / Import ROM opens an in-app path paste box instead.
+
+Then on **Project** → **GAME DATA**:
+
+- **Link Recomp** — pick your Gen1Recomp folder (must already have imported a ROM), or
+- **Import ROM** — choose a clean US Red/Blue/Yellow `.gb` (cache goes to the LÖVE save directory, not this pack), or
+- **Use fixtures** — keep stub data for light authoring.
+
+**Project** → Open `mods/New_PokemonTest`, or **Create** a new mod → edit → **Save**.
+
+Save writes `mods/<id>/editor_project.lua` and `main.lua`.
 
 ## Playtest
 
@@ -32,6 +45,6 @@ Zip and send the `mods\<your_mod>\` folder.
 
 ## Notes
 
-- Windows 64-bit. LÖVE is included — no install needed.
-- Do **not** ship ROM files (`.gb`) or `data\generated` / `assets\generated`.
-- More detail: `docs\content-editor.md`
+- Windows 64-bit and Linux x86_64 packs. LÖVE 11.5 is included.
+- Do **not** ship ROM files (`.gb`) or `data/generated` / `assets/generated`.
+- More detail: `docs/content-editor.md`

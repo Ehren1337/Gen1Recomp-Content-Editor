@@ -20,9 +20,12 @@ Portable zip for sharing (Windows):
 .\scripts\pack_content_editor.ps1
 ```
 
-Output: `dist/win/gen1recomp-content-editor-win64.zip` (no ROM cache).
-Recipients unzip, run `ContentEditor.bat`, then **Link Recomp** or
-**Import ROM** on the Project tab for full data.
+Outputs (no ROM cache):
+
+- `dist/win/gen1recomp-content-editor-win64.zip` → `ContentEditor.bat`
+- `dist/linux/gen1recomp-content-editor-linux64.tar.gz` → `./ContentEditor.sh`
+
+Then **Link Recomp** or **Import ROM** on the Project tab for full data.
 
 See [docs/content-editor.md](../../docs/content-editor.md) and
 [PACK_README.md](PACK_README.md).

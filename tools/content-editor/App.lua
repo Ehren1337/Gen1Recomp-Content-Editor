@@ -355,9 +355,13 @@ local function resolveLoveExe(searchRoots)
   for _, root in ipairs(searchRoots or {}) do
     if root and root ~= "" then
       local candidates = {
+        -- Windows portable / checkout
         root .. sep .. "love" .. sep .. "love.exe",
         root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe",
         root .. sep .. "love.exe",
+        -- Linux portable AppImage / binary
+        root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage",
+        root .. sep .. "love" .. sep .. "love",
       }
       for _, path in ipairs(candidates) do
         local f = io.open(path, "rb")
@@ -563,22 +567,93 @@ function App.update(dt)
   if not S._filePick then return end
   local req = S._filePick
   S._filePick = nil
-  local path
+  local path, status
   if req.kind == "folder" then
-    path = ModIO.chooseFolder(req.title, req.startPath)
+    path, status = ModIO.chooseFolder(req.title, req.startPath)
   else
-    path = ModIO.chooseFile(req.title, req.filter)
+    path, status = ModIO.chooseFile(req.title, req.filter)
   end
-  if not path then
-    say("Open cancelled / picker unavailable")
+  if path then
+    if req.cb then
+      local ok, err = pcall(req.cb, path)
+      if not ok then
+        say("Import failed: " .. tostring(err))
+      end
+    end
     return
   end
-  if req.cb then
-    local ok, err = pcall(req.cb, path)
+
+  -- Native dialogs often fail silently (Linux AppImage / Windows dialog
+  -- buried under LÖVE). Always offer an in-app path box instead of only
+  -- "Open cancelled".
+  local osName = (love.system.getOS and love.system.getOS()) or ""
+  local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
+  S._pathPrompt = {
+    title = req.title or "Enter path",
+    kind = req.kind or "file",
+    value = req.startPath or home,
+    cb = req.cb,
+    hint = req.kind == "folder"
+      and "Paste the Gen1Recomp folder path, then OK"
+      or "Paste the full .gb / file path, then OK",
+  }
+  if osName == "Linux" and status == "unavailable" then
+    say("No file dialog — paste a path below (or: sudo apt install zenity)")
+  else
+    say("Paste a path below if the file dialog did not appear, or Cancel")
+  end
+end
+
+local function finishPathPrompt(accepted)
+  if not S or not S._pathPrompt then return end
+  local prompt = S._pathPrompt
+  S._pathPrompt = nil
+  if not accepted then
+    say("Open cancelled")
+    return
+  end
+  local path = tostring(prompt.value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if path == "" then
+    say("Open cancelled")
+    return
+  end
+  if prompt.cb then
+    local ok, err = pcall(prompt.cb, path)
     if not ok then
       say("Import failed: " .. tostring(err))
     end
   end
+end
+
+local function drawPathPrompt(W, H, s)
+  local prompt = S._pathPrompt
+  if not prompt then return end
+  Kit.blockClicks = true
+  Theme.col({ 0, 0, 0 }, 0.72)
+  love.graphics.rectangle("fill", 0, 0, W, H)
+  local boxW = math.min(640 * s, W - 40 * s)
+  local boxH = 170 * s
+  local bx = (W - boxW) / 2
+  local by = (H - boxH) / 2
+  Kit.card(bx, by, boxW, boxH, 12 * s)
+  Kit.text("small", tostring(prompt.title or "Enter path"),
+    bx + 16 * s, by + 16 * s, PAL.heading)
+  Kit.text("micro", tostring(prompt.hint or "Paste an absolute path"),
+    bx + 16 * s, by + 40 * s, PAL.muted)
+  local fieldH = 34 * s
+  local edited = Kit.textfield("path_prompt", bx + 16 * s, by + 68 * s,
+    boxW - 32 * s, fieldH, prompt.value or "", "/path/to/...")
+  if edited ~= nil then prompt.value = edited end
+  local btnW = 100 * s
+  if Kit.button(bx + boxW - 16 * s - btnW * 2 - 10 * s, by + boxH - 48 * s,
+      btnW, 32 * s, "Cancel", { kind = "ghost" }) then
+    finishPathPrompt(false)
+  end
+  if Kit.button(bx + boxW - 16 * s - btnW, by + boxH - 48 * s,
+      btnW, 32 * s, "OK", { kind = "primary" }) then
+    finishPathPrompt(true)
+  end
+  Kit.blockClicks = false
 end
 
 function App.draw()
@@ -622,8 +697,9 @@ function App.draw()
   rbtn("Undo", "ghost", function() App.undo() end, History.canUndo(S),
     "Undo last content edit (Ctrl+Z)")
   rbtn("Open", "ghost", function()
-    local p = ModIO.chooseModDir()
-    if p then App.openMod(p) else say("Open cancelled / picker unavailable") end
+    App.pickFolder("Choose a mod folder", function(path)
+      App.openMod(path)
+    end, ModIO.modsRoot())
   end, true, "Open an existing mods/ folder")
 
   local tabY = railH + 70 * s
@@ -641,8 +717,8 @@ function App.draw()
   local contentY = tabY + tabH + 16 * s
   local contentH = H - contentY - 44 * s
   History.beginFrame(S)
-  -- Block underlying panel hits while the shared palette modal is up.
-  if PalettePicker.isOpen(S) then Kit.blockClicks = true end
+  -- Block underlying panel hits while a modal is up.
+  if PalettePicker.isOpen(S) or S._pathPrompt then Kit.blockClicks = true end
   local panel = PANELS[S.tab]
   if panel and panel.draw then
     panel.draw(S, 20 * s, contentY, W - 40 * s, contentH, App)
@@ -659,10 +735,14 @@ function App.draw()
   Kit.textRight("micro", "Undo Ctrl+Z   Redo Ctrl+Y   Save Ctrl+S   Esc",
     W - 20 * s, statusTy, PAL.faint)
 
-  -- Re-enable hits so the modal itself can receive clicks.
+  -- Re-enable hits so modals themselves can receive clicks.
   if PalettePicker.isOpen(S) then
     Kit.blockClicks = false
     PalettePicker.draw(S, 0, 0, W, H)
+  end
+  if S._pathPrompt then
+    Kit.blockClicks = false
+    drawPathPrompt(W, H, s)
   end
 
   Kit.endFrame()
@@ -681,6 +761,16 @@ function App.keypressed(key)
       return App.redo()
     end
     return App.undo()
+  end
+  if S._pathPrompt then
+    if key == "return" or key == "kpenter" then
+      finishPathPrompt(true)
+      return
+    end
+    if key == "escape" then
+      finishPathPrompt(false)
+      return
+    end
   end
   if Kit.keypressed(key) then return end
   if key == "escape" then
