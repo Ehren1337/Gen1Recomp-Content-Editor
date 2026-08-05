@@ -29,6 +29,8 @@ local AiClasses = require("AiClasses")
 local BattleAnims = require("BattleAnims")
 local BattleAnimPreview = require("BattleAnimPreview")
 local Player = require("Player")
+local Ui = require("Ui")
+local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
 
 local App = {}
@@ -56,6 +58,8 @@ local TABS = {
     tip = "Trainer AI classes (item use / switching)" },
   { id = "player",   label = "PLAYER",
     tip = "Player overworld sprites, walk anim frames, battle pics" },
+  { id = "ui",       label = "UI",
+    tip = "Title/splash, theme, fonts, strings, town map, badge icons" },
   { id = "items",    label = "ITEMS",
     tip = "Items and bag effect templates" },
   { id = "pokemon",  label = "POKEMON",
@@ -91,6 +95,7 @@ local PANELS = {
   trainers = Trainers,
   ai = AiClasses,
   player = Player,
+  ui = Ui,
   audio = Audio,
   gfx = Gfx,
   events = Events,
@@ -531,6 +536,7 @@ function App.close()
   if S then
     pcall(function() Audio.stopPreview(S) end)
     pcall(function() BattleAnimPreview.stop(S) end)
+    pcall(function() UiPreview.stop(S) end)
   end
   if anyDirty(S) then
     if not S._quitArmed then
@@ -556,6 +562,9 @@ local function cycleTab(delta)
   if (prev == "moves" or prev == "anims")
       and S.tab ~= "moves" and S.tab ~= "anims" then
     pcall(function() BattleAnimPreview.stop(S) end)
+  end
+  if prev == "ui" and S.tab ~= "ui" then
+    pcall(function() UiPreview.stop(S) end)
   end
   say("Tab: " .. TABS[idx].label)
 end
@@ -634,6 +643,12 @@ function App.update(dt)
   if S.battleAnimPreview
       or S.tab == "moves" or S.tab == "anims" then
     pcall(function() BattleAnimPreview.update(S, dt or 0) end)
+  end
+  if S.uiPreview or S.tab == "ui" then
+    pcall(function() UiPreview.update(S, dt or 0) end)
+  end
+  if S.tab == "maps" and Maps.update then
+    pcall(function() Maps.update(S, dt or 0) end)
   end
   if S._romImporter then
     local imp = S._romImporter
@@ -802,6 +817,9 @@ function App.draw()
       if (S.tab == "moves" or S.tab == "anims")
           and t.id ~= "moves" and t.id ~= "anims" then
         pcall(function() BattleAnimPreview.stop(S) end)
+      end
+      if S.tab == "ui" and t.id ~= "ui" then
+        pcall(function() UiPreview.stop(S) end)
       end
       S.tab = t.id
     end

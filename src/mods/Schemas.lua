@@ -1228,6 +1228,34 @@ R.field = {
     playerSprites = f.rec{
       walk = f.opt(f.str), bike = f.opt(f.str), surf = f.opt(f.str),
       fly = f.opt(f.str), surfPikachu = f.opt(f.str) },
+    -- TitleState branding (logo / version ribbon / copyright / music).
+    -- Image fields accept a plain path string or { path = ... } (importer).
+    title = f.rec{
+      logo = f.opt(f.any), version = f.opt(f.any),
+      versionRibbon = f.opt(f.any),
+      music = f.opt(f.str), copyrightText = f.opt(f.str),
+      cycleSpecies = f.opt(f.list(f.str)),
+      layout = f.opt(f.str),
+      pikachu = f.opt(f.any), pikaBubble = f.opt(f.any) },
+    -- IntroMovie / YellowIntro splash branding.
+    intro = f.rec{
+      skip = f.opt(f.bool), music = f.opt(f.str),
+      studio = f.opt(f.rec{ logo = f.opt(f.any), credit = f.opt(f.str) }),
+      gamefreakLogo = f.opt(f.any), gamefreakText = f.opt(f.any),
+      bigStar = f.opt(f.any), fallingStar = f.opt(f.any),
+      fallingStarBlink = f.opt(f.any) },
+    -- Shared dialogue / YES-NO box geometry (src/ui/Theme.lua).
+    theme = f.rec{
+      cursor = f.opt(f.any), cursorHollow = f.opt(f.any),
+      moreArrow = f.opt(f.any),
+      textBox = f.opt(f.rec{
+        tx = f.opt(f.int(0)), ty = f.opt(f.int(0)),
+        tw = f.opt(f.int(1)), th = f.opt(f.int(1)),
+        maxCols = f.opt(f.int(1)) }),
+      choiceBox = f.opt(f.rec{
+        tx = f.opt(f.int(0)), ty = f.opt(f.int(0)),
+        tw = f.opt(f.int(1)), th = f.opt(f.int(1)) }),
+      border = f.opt(f.any) },
     -- the new-game and boot config a total conversion replaces
     boot = f.rec{
       startMap = f.opt(f.str), startX = f.opt(f.int(0)), startY = f.opt(f.int(0)),

@@ -1045,7 +1045,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
 
   Kit.popClip()
 
-  Kit.text("micro", "drag empty to pan · click map to select · wheel zoom",
+  Kit.text("micro", "drag empty / MMB / hold WASD to pan · click map · wheel zoom",
     viewX + 6 * s, viewY + viewH - 16 * s, PAL.faint)
 
   -- Side panel: connections for the selected map
@@ -1642,34 +1642,40 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local tool = S.mapTool or "paint"
   local brush = (tool == "paint" or tool == "erase" or tool == "pick")
   local over = Kit.hit(vx, vy, vw, vh)
-  if Kit.mouseDown and not Kit.blockClicks and (S._mapDrag or over) then
+  -- Middle / right button always pans (Kit.mouseDown is left-only).
+  local auxPan = false
+  if love and love.mouse and love.mouse.isDown then
+    auxPan = love.mouse.isDown(2) or love.mouse.isDown(3)
+  end
+  local spacePan = love.keyboard.isDown("space")
+    or love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt")
+  local panHeld = (auxPan or spacePan)
+    and not Kit.blockClicks
+    and (over or (S._mapDrag and S._mapDrag.pan))
+
+  if panHeld then
+    local d = S._mapDrag
+    if not d or not d.pan then
+      S._mapDrag = {
+        mx = Kit.mouseX, my = Kit.mouseY,
+        camX = S.mapCamX or 0, camY = S.mapCamY or 0,
+        pan = true,
+      }
+    else
+      S.mapCamX = d.camX - (Kit.mouseX - d.mx) / S.mapZoom
+      S.mapCamY = d.camY - (Kit.mouseY - d.my) / S.mapZoom
+    end
+  elseif Kit.mouseDown and not Kit.blockClicks and (S._mapDrag or over) then
     if brush and over then
-      -- Drag paints / erases / picks; Space (or middle-button feel via SELECT) pans.
-      local pan = love.keyboard.isDown("space") or love.keyboard.isDown("lalt")
-        or love.keyboard.isDown("ralt")
-      if pan then
-        local d = S._mapDrag
-        if not d or not d.pan then
-          S._mapDrag = {
-            mx = Kit.mouseX, my = Kit.mouseY,
-            camX = S.mapCamX or 0, camY = S.mapCamY or 0,
-            pan = true,
-          }
-        else
-          S.mapCamX = d.camX - (Kit.mouseX - d.mx) / S.mapZoom
-          S.mapCamY = d.camY - (Kit.mouseY - d.my) / S.mapZoom
-        end
-      else
-        S._mapDrag = { brush = true }
-        local z = S.mapZoom or 2
-        local wx = (Kit.mouseX - vx) / z + (S.mapCamX or 0)
-        local wy = (Kit.mouseY - vy) / z + (S.mapCamY or 0)
-        local cx, cy = math.floor(wx / CELL), math.floor(wy / CELL)
-        local key = cx .. "," .. cy
-        if S._lastPaintCell ~= key then
-          S._lastPaintCell = key
-          applyToolAtCell(S, mapDef, cx, cy, App)
-        end
+      S._mapDrag = { brush = true }
+      local z = S.mapZoom or 2
+      local wx = (Kit.mouseX - vx) / z + (S.mapCamX or 0)
+      local wy = (Kit.mouseY - vy) / z + (S.mapCamY or 0)
+      local cx, cy = math.floor(wx / CELL), math.floor(wy / CELL)
+      local key = cx .. "," .. cy
+      if S._lastPaintCell ~= key then
+        S._lastPaintCell = key
+        applyToolAtCell(S, mapDef, cx, cy, App)
       end
     else
       local d = S._mapDrag
@@ -1724,13 +1730,46 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local hint
   local ts = tostring(mapDef.tileset or "?")
   if brush then
-    hint = string.format("%.1fx  tileset=%s  block=%s  drag=paint  Space+drag=pan",
+    hint = string.format(
+      "%.1fx  %s  blk=%s  drag=paint  MMB/RMB/Space=pan  hold WASD",
       S.mapZoom, ts, tostring(S.paintBlock or 1))
   else
-    hint = string.format("%.1fx  tileset=%s  drag=pan  click=%s",
+    hint = string.format("%.1fx  %s  drag=pan  hold WASD  click=%s",
       S.mapZoom, ts, tool)
   end
   Kit.text("micro", hint, vx + 6 * s, vy + vh - 16 * s, PAL.faint)
+end
+
+-- Hold WASD / arrows to pan continuously (Shift = faster).
+function Maps.update(S, dt)
+  if not S or S.mapTilesetPicker then return end
+  if Kit.focus then return end
+  if Kit.blockClicks then return end
+  if not (love and love.keyboard and love.keyboard.isDown) then return end
+  local dx, dy = 0, 0
+  if love.keyboard.isDown("left") or love.keyboard.isDown("a") then dx = dx - 1 end
+  if love.keyboard.isDown("right") or love.keyboard.isDown("d") then dx = dx + 1 end
+  if love.keyboard.isDown("up") or love.keyboard.isDown("w") then dy = dy - 1 end
+  if love.keyboard.isDown("down") or love.keyboard.isDown("s") then dy = dy + 1 end
+  if dx == 0 and dy == 0 then return end
+  local len = math.sqrt(dx * dx + dy * dy)
+  dx, dy = dx / len, dy / len
+  local speed = 320 -- screen px / sec
+  if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
+    speed = speed * 2.5
+  end
+  dt = tonumber(dt) or 0
+  if S.mapViewMode == "world" then
+    local z = math.max(0.04, S.worldZoom or 0.25)
+    local step = (speed * dt) / z
+    S.worldCamX = (S.worldCamX or 0) + dx * step
+    S.worldCamY = (S.worldCamY or 0) + dy * step
+  else
+    local z = math.max(0.25, S.mapZoom or 2)
+    local step = (speed * dt) / z
+    S.mapCamX = (S.mapCamX or 0) + dx * step
+    S.mapCamY = (S.mapCamY or 0) + dy * step
+  end
 end
 
 function Maps.wheelmoved(S, dy)
@@ -1753,33 +1792,20 @@ end
 function Maps.keypressed(S, key)
   -- Escape / typing handled at App while the tileset modal is up.
   if S.mapTilesetPicker then return true end
+  -- WASD / arrows pan continuously in Maps.update (hold to move).
+  if key == "up" or key == "down" or key == "left" or key == "right"
+      or key == "w" or key == "a" or key == "s" or key == "d" then
+    return true
+  end
   if S.mapViewMode == "world" then
-    local step = 64 / math.max(0.04, S.worldZoom or 0.25)
-    if key == "up" or key == "w" then
-      S.worldCamY = (S.worldCamY or 0) - step
-    elseif key == "down" or key == "s" then
-      S.worldCamY = (S.worldCamY or 0) + step
-    elseif key == "left" or key == "a" then
-      S.worldCamX = (S.worldCamX or 0) - step
-    elseif key == "right" or key == "d" then
-      S.worldCamX = (S.worldCamX or 0) + step
-    elseif key == "=" or key == "+" then
+    if key == "=" or key == "+" then
       S.worldZoom = clampWorldZoom((S.worldZoom or 0.25) + 0.05)
     elseif key == "-" then
       S.worldZoom = clampWorldZoom((S.worldZoom or 0.25) - 0.05)
     end
     return
   end
-  local step = CELL
-  if key == "up" or key == "w" then
-    S.mapCamY = (S.mapCamY or 0) - step
-  elseif key == "down" or key == "s" then
-    S.mapCamY = (S.mapCamY or 0) + step
-  elseif key == "left" or key == "a" then
-    S.mapCamX = (S.mapCamX or 0) - step
-  elseif key == "right" or key == "d" then
-    S.mapCamX = (S.mapCamX or 0) + step
-  elseif key == "=" or key == "+" then
+  if key == "=" or key == "+" then
     S.mapZoom = clampZoom((S.mapZoom or 2) + 0.25)
   elseif key == "-" then
     S.mapZoom = clampZoom((S.mapZoom or 2) - 0.25)

@@ -1038,9 +1038,11 @@ function ModWriter.emitMain(project)
   for _, key in ipairs(constKeys) do
     local val = constants[key]
     if key == "badges" or key == "hmMoves" or key == "encounterBuckets" then
+      local lit = emitTableLiteral(val, 1)
+      if key == "badges" then lit = rewriteModPaths(lit) end
       out[#out + 1] = string.format(
         "  mod.content.constants:override(%q, %s)",
-        key, emitTableLiteral(val, 1))
+        key, lit)
     else
       out[#out + 1] = string.format(
         "  mod.content.constants:patch(%q, %s)",
@@ -1049,13 +1051,53 @@ function ModWriter.emitMain(project)
     out[#out + 1] = ""
   end
 
-  -- field.boot
+  -- field.boot (includes boot.screens when set)
   if type(project.boot) == "table" and next(project.boot) then
     out[#out + 1] = string.format(
       "  mod.content.field:patch(%q, %s)",
       "boot", emitTableLiteral(project.boot, 1))
     out[#out + 1] = ""
   end
+
+  -- field.title / intro / theme / townMap (UI tab)
+  for _, key in ipairs({ "title", "intro", "theme", "townMap" }) do
+    local rec = project[key]
+    if type(rec) == "table" and next(rec) then
+      local lit = rewriteModPaths(emitTableLiteral(stripEditorFields(rec), 1))
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)", key, lit)
+      out[#out + 1] = ""
+    end
+  end
+
+  -- font pages
+  local fontIds = {}
+  for fid in pairs(project.font or {}) do fontIds[#fontIds + 1] = fid end
+  table.sort(fontIds)
+  for _, fid in ipairs(fontIds) do
+    local raw = project.font[fid]
+    if type(raw) == "table" then
+      local rec = stripEditorFields(raw)
+      local verb = (raw._isNew == false) and "patch" or "register"
+      local lit = rewriteModPaths(emitTableLiteral(rec, 1))
+      out[#out + 1] = string.format("  mod.content.font:%s(%q, %s)",
+        verb, fid, lit)
+      out[#out + 1] = ""
+    end
+  end
+
+  -- engine Strings() overrides
+  local strIds = {}
+  for sid in pairs(project.strings or {}) do strIds[#strIds + 1] = sid end
+  table.sort(strIds)
+  for _, sid in ipairs(strIds) do
+    local body = project.strings[sid]
+    if type(body) == "string" and body ~= "" then
+      out[#out + 1] = string.format("  mod.content.strings:override(%q, %s)",
+        sid, escapeStr(body))
+    end
+  end
+  if #strIds > 0 then out[#out + 1] = "" end
 
   -- field.playerSprites (walk / bike / surf / fly / surfPikachu remaps)
   if type(project.playerSprites) == "table" then

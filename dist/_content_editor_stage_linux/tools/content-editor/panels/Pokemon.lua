@@ -562,10 +562,19 @@ local function drawTmhm(S, mon, mutate, App, formX, fy, formW, fh, s)
   Kit.text("micro", "Comma-separated move ids this species can learn via TM/HM.",
     formX, fy, PAL.muted)
   fy = fy + 20 * s
+  -- Keep a draft string while focused so a trailing comma (mid-list typing)
+  -- is not wiped when we re-join from the parsed array each frame.
   local joined = table.concat(mon.tmhm or {}, ",")
-  local v = field(S, App, "pk_tmhm", formX, fy, formW - 20 * s, fh, joined,
+  if S._pkTmhmDraftFor ~= S.pokemonId or Kit.focus ~= "pk_tmhm" then
+    S._pkTmhmDraft = joined
+    S._pkTmhmDraftFor = S.pokemonId
+  end
+  local shown = S._pkTmhmDraft or joined
+  local v = field(S, App, "pk_tmhm", formX, fy, formW - 20 * s, fh, shown,
     "MEGA_PUNCH,TOXIC,…")
-  if v ~= joined then
+  if v ~= shown then
+    S._pkTmhmDraft = v
+    S._pkTmhmDraftFor = S.pokemonId
     mon = mutate()
     mon.tmhm = parseMoveList(v)
   end

@@ -82,6 +82,12 @@ function State.blankProject(id, name)
     battle_anims = {}, -- registry ids: MOVE / subanim:N / tilesheet:N
     playerSprites = {}, -- field.playerSprites slot -> sprite id
     playerPics = {},    -- field.playerPics slot -> image path
+    title = {},         -- field.title (logo, music, copyright, …)
+    intro = {},         -- field.intro (studio splash, skip, …)
+    theme = {},         -- field.theme (textBox / choiceBox / cursors)
+    font = {},          -- font page overrides
+    strings = {},       -- engine Strings() overrides (source -> text)
+    townMap = {},       -- field.townMap
     -- Oak's Lab ball remap: vanillaSpecies -> { species, level }
     starterRemap = {},
     nextMapIndex = 1000,
@@ -115,6 +121,12 @@ function State.ensureProjectFields(project)
   project.battle_anims = project.battle_anims or {}
   project.playerSprites = project.playerSprites or {}
   project.playerPics = project.playerPics or {}
+  project.title = project.title or {}
+  project.intro = project.intro or {}
+  project.theme = project.theme or {}
+  project.font = project.font or {}
+  project.strings = project.strings or {}
+  project.townMap = project.townMap or {}
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
   project.starterRemap = project.starterRemap or {}
