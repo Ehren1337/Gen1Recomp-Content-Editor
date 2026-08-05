@@ -230,6 +230,132 @@ local function ensureOwned(S, mapId)
   return copy
 end
 
+-- ---- block selection / shift ------------------------------------------------
+
+local function normalizeBlockSel(sel)
+  if type(sel) ~= "table" then return nil end
+  local x0 = math.min(sel.x0 or 0, sel.x1 or 0)
+  local x1 = math.max(sel.x0 or 0, sel.x1 or 0)
+  local y0 = math.min(sel.y0 or 0, sel.y1 or 0)
+  local y1 = math.max(sel.y0 or 0, sel.y1 or 0)
+  return x0, y0, x1, y1
+end
+
+local function clampBlockSel(map, x0, y0, x1, y1)
+  local mw = math.max(1, map.width or 1)
+  local mh = math.max(1, map.height or 1)
+  x0 = math.max(0, math.min(mw - 1, x0))
+  x1 = math.max(0, math.min(mw - 1, x1))
+  y0 = math.max(0, math.min(mh - 1, y0))
+  y1 = math.max(0, math.min(mh - 1, y1))
+  if x0 > x1 then x0, x1 = x1, x0 end
+  if y0 > y1 then y0, y1 = y1, y0 end
+  return x0, y0, x1, y1
+end
+
+local function selectAllBlocks(map)
+  if not map then return nil end
+  local mw = math.max(1, map.width or 1)
+  local mh = math.max(1, map.height or 1)
+  return { x0 = 0, y0 = 0, x1 = mw - 1, y1 = mh - 1 }
+end
+
+local function cellInBlockSel(cx, cy, x0, y0, x1, y1)
+  return cx >= x0 * 2 and cx <= x1 * 2 + 1
+     and cy >= y0 * 2 and cy <= y1 * 2 + 1
+end
+
+-- Shift blocks (+ warps/objects/signs in the region) by dx/dy blocks.
+-- Vacated source cells that are not covered by the destination get borderBlock.
+local function shiftMapRegion(S, mapId, x0, y0, x1, y1, dx, dy, App)
+  dx = math.floor(tonumber(dx) or 0)
+  dy = math.floor(tonumber(dy) or 0)
+  if dx == 0 and dy == 0 then return false, "offset is 0" end
+  local map = ensureOwned(S, mapId)
+  if not map or type(map.blocks) ~= "table" then
+    return false, "no map"
+  end
+  x0, y0, x1, y1 = clampBlockSel(map, x0, y0, x1, y1)
+  local w, h = map.width, map.height
+  local fill = map.borderBlock or 0
+  local buf = {}
+  for by = y0, y1 do
+    for bx = x0, x1 do
+      buf[#buf + 1] = {
+        bx, by, map.blocks[by * w + bx + 1] or 0,
+      }
+    end
+  end
+  for by = y0, y1 do
+    for bx = x0, x1 do
+      map.blocks[by * w + bx + 1] = fill
+    end
+  end
+  for _, e in ipairs(buf) do
+    local nx, ny = e[1] + dx, e[2] + dy
+    if nx >= 0 and ny >= 0 and nx < w and ny < h then
+      map.blocks[ny * w + nx + 1] = e[3]
+    end
+  end
+
+  local cellDx, cellDy = dx * 2, dy * 2
+  local maxCx, maxCy = w * 2, h * 2
+  local function shiftList(list)
+    local out = {}
+    for _, ent in ipairs(list or {}) do
+      local ex, ey = ent.x or 0, ent.y or 0
+      if cellInBlockSel(ex, ey, x0, y0, x1, y1) then
+        local nx, ny = ex + cellDx, ey + cellDy
+        if nx >= 0 and ny >= 0 and nx < maxCx and ny < maxCy then
+          ent.x, ent.y = nx, ny
+          out[#out + 1] = ent
+        end
+      else
+        out[#out + 1] = ent
+      end
+    end
+    return out
+  end
+  map.warps = shiftList(map.warps)
+  map.objects = shiftList(map.objects)
+  for i, obj in ipairs(map.objects or {}) do
+    obj.index = i
+  end
+  map.signs = shiftList(map.signs)
+
+  local sx0, sy0 = x0 + dx, y0 + dy
+  local sx1, sy1 = x1 + dx, y1 + dy
+  sx0, sy0, sx1, sy1 = clampBlockSel(map, sx0, sy0, sx1, sy1)
+  S.mapSel = { x0 = sx0, y0 = sy0, x1 = sx1, y1 = sy1 }
+  S._mapSelFor = map.id or mapId
+
+  if S.data and S.data.maps then
+    S.data.maps[map.id or mapId] = map
+  end
+  MapLoader.invalidate(map.id or mapId)
+  App.markDirty()
+  S.status = string.format("Shifted selection by (%d, %d) blocks", dx, dy)
+  return true
+end
+
+local function drawSelectionOverlay(S, mapDef)
+  local draft = S._mapSelDraft
+  local sel = draft or S.mapSel
+  local x0, y0, x1, y1 = normalizeBlockSel(sel)
+  if not x0 then return end
+  x0, y0, x1, y1 = clampBlockSel(mapDef, x0, y0, x1, y1)
+  local camX, camY = S.mapCamX or 0, S.mapCamY or 0
+  local px = x0 * BLOCK_PX - camX
+  local py = y0 * BLOCK_PX - camY
+  local pw = (x1 - x0 + 1) * BLOCK_PX
+  local ph = (y1 - y0 + 1) * BLOCK_PX
+  love.graphics.setColor(0.27, 0.85, 0.55, 0.18)
+  love.graphics.rectangle("fill", px, py, pw, ph)
+  love.graphics.setColor(0.27, 0.85, 0.55, 0.85)
+  love.graphics.rectangle("line", px, py, pw, ph)
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 local function resolveEncounters(S, mapId, mapDef)
   if mapDef and mapDef.encounters then return mapDef.encounters, true end
   if S.data and S.data.encounters and S.data.encounters[mapId] then
@@ -1440,12 +1566,16 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     State.ensureProjectFields(S.project)
     local label = State.mapLabel(S, mapDef.id)
     S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
+    local beat = State.modFlag(S.project,
+      "BEAT_" .. (mapDef.id or "MAP") .. "_" .. n)
+    S.project.eventFlags = S.project.eventFlags or {}
+    S.project.eventFlags[beat] = true
     S.project.trainer_headers[label][n] = {
       range = 2,
       battle = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Battle",
       won = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Won",
       after = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "After",
-      event = State.modFlag(S.project, "BEAT_" .. class .. "_" .. n),
+      event = beat,
       opponent = class,
       party = 1,
     }
@@ -1642,12 +1772,14 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       map.widthCells * CELL, map.heightCells * CELL)
     drawCollisionOverlay(S, mapDef)
     drawMarkerOverlays(S, mapDef)
+    drawSelectionOverlay(S, mapDef)
     love.graphics.pop()
     love.graphics.setScissor()
   end
 
   local tool = S.mapTool or "paint"
   local brush = (tool == "paint" or tool == "erase" or tool == "pick")
+  local selecting = (tool == "select")
   local over = Kit.hit(vx, vy, vw, vh)
   -- Middle / right button always pans (Kit.mouseDown is left-only).
   local auxPan = false
@@ -1660,7 +1792,17 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     and not Kit.blockClicks
     and (over or (S._mapDrag and S._mapDrag.pan))
 
+  local function mouseBlock()
+    local z = S.mapZoom or 2
+    local wx = (Kit.mouseX - vx) / z + (S.mapCamX or 0)
+    local wy = (Kit.mouseY - vy) / z + (S.mapCamY or 0)
+    local bx = math.floor(wx / BLOCK_PX)
+    local by = math.floor(wy / BLOCK_PX)
+    return bx, by
+  end
+
   if panHeld then
+    S._mapSelDraft = nil
     local d = S._mapDrag
     if not d or not d.pan then
       S._mapDrag = {
@@ -1684,6 +1826,27 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         S._lastPaintCell = key
         applyToolAtCell(S, mapDef, cx, cy, App)
       end
+    elseif selecting and over then
+      local bx, by = mouseBlock()
+      local d = S._mapDrag
+      if not d or not d.marquee then
+        S._mapDrag = {
+          mx = Kit.mouseX, my = Kit.mouseY,
+          camX = S.mapCamX or 0, camY = S.mapCamY or 0,
+          marquee = true, moved = false,
+          bx0 = bx, by0 = by,
+        }
+        S._mapSelDraft = { x0 = bx, y0 = by, x1 = bx, y1 = by }
+      else
+        local mdx = Kit.mouseX - d.mx
+        local mdy = Kit.mouseY - d.my
+        if math.abs(mdx) > 3 or math.abs(mdy) > 3 then
+          d.moved = true
+        end
+        S._mapSelDraft = {
+          x0 = d.bx0, y0 = d.by0, x1 = bx, y1 = by,
+        }
+      end
     else
       local d = S._mapDrag
       if not d then
@@ -1703,7 +1866,23 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       end
     end
   elseif S._mapDrag then
-    if not S._mapDrag.brush and not S._mapDrag.pan and not S._mapDrag.moved then
+    if S._mapDrag.marquee then
+      if S._mapDrag.moved and S._mapSelDraft then
+        local x0, y0, x1, y1 = normalizeBlockSel(S._mapSelDraft)
+        x0, y0, x1, y1 = clampBlockSel(mapDef, x0, y0, x1, y1)
+        S.mapSel = { x0 = x0, y0 = y0, x1 = x1, y1 = y1 }
+        S._mapSelFor = mapDef.id or S.mapId
+        S.status = string.format("Selected blocks (%d,%d)–(%d,%d)",
+          x0, y0, x1, y1)
+      else
+        local z = S.mapZoom or 2
+        local wx = (S._mapDrag.mx - vx) / z + S._mapDrag.camX
+        local wy = (S._mapDrag.my - vy) / z + S._mapDrag.camY
+        local cx, cy = math.floor(wx / CELL), math.floor(wy / CELL)
+        applyToolAtCell(S, mapDef, cx, cy, App)
+      end
+      S._mapSelDraft = nil
+    elseif not S._mapDrag.brush and not S._mapDrag.pan and not S._mapDrag.moved then
       local z = S.mapZoom or 2
       local wx = (S._mapDrag.mx - vx) / z + S._mapDrag.camX
       local wy = (S._mapDrag.my - vy) / z + S._mapDrag.camY
@@ -1740,6 +1919,10 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     hint = string.format(
       "%.1fx  %s  blk=%s  drag=paint  MMB/RMB/Space=pan  hold WASD",
       S.mapZoom, ts, tostring(S.paintBlock or 1))
+  elseif selecting then
+    hint = string.format(
+      "%.1fx  %s  drag=marquee  Apply shift  MMB/RMB/Space=pan",
+      S.mapZoom, ts)
   else
     hint = string.format("%.1fx  %s  drag=pan  hold WASD  click=%s",
       S.mapZoom, ts, tool)
@@ -2154,27 +2337,49 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   end) then return py end
 
   if prow("Size W x H (blocks)", function(fx, fy, fw, fh_)
-    local ww = field(App, "mp_w", fx, fy, 60 * s, fh_, tostring(map.width), "10")
-    local hh = field(App, "mp_h", fx + 70 * s, fy, 60 * s, fh_, tostring(map.height), "9")
-    local nw, nh = tonumber(ww) or map.width, tonumber(hh) or map.height
-    nw = math.max(1, math.min(64, nw))
-    nh = math.max(1, math.min(64, nh))
-    if nw ~= map.width or nh ~= map.height then
-      map = mutate()
-      local nb = {}
-      for yb = 0, nh - 1 do
-        for xb = 0, nw - 1 do
-          local old = (yb < map.height and xb < map.width)
-            and map.blocks[yb * map.width + xb + 1] or 1
-          nb[yb * nw + xb + 1] = old
+    -- Draft while typing; commit on Enter / focus leaving both fields.
+    -- Live apply on "1" of "12" would crop the map to width 1.
+    local draft = S._mapSizeDraft
+    if draft == nil or draft.forId ~= map.id then
+      draft = {
+        forId = map.id,
+        w = tostring(map.width),
+        h = tostring(map.height),
+      }
+      S._mapSizeDraft = draft
+    end
+    local ww = Kit.textfield("mp_w", fx, fy, 60 * s, fh_, draft.w, "10")
+    local hh = Kit.textfield("mp_h", fx + 70 * s, fy, 60 * s, fh_, draft.h, "9")
+    local sizing = (Kit.focus == "mp_w" or Kit.focus == "mp_h")
+    if sizing then
+      draft.w, draft.h = ww, hh
+    else
+      local nw = math.max(1, math.min(64, tonumber(ww) or map.width))
+      local nh = math.max(1, math.min(64, tonumber(hh) or map.height))
+      S._mapSizeDraft = nil
+      if nw ~= map.width or nh ~= map.height then
+        map = mutate()
+        local nb = {}
+        for yb = 0, nh - 1 do
+          for xb = 0, nw - 1 do
+            local old = (yb < map.height and xb < map.width)
+              and map.blocks[yb * map.width + xb + 1] or 1
+            nb[yb * nw + xb + 1] = old
+          end
         end
+        map.width, map.height, map.blocks = nw, nh, nb
+        MapLoader.invalidate(map.id)
+        S._mapCenteredFor = nil
+        App.markDirty()
       end
-      map.width, map.height, map.blocks = nw, nh, nb
-      MapLoader.invalidate(map.id)
-      S._mapCenteredFor = nil
-      App.markDirty()
     end
   end) then return py end
+
+  if py + 16 * s <= listBottom then
+    Kit.text("micro", "Size applies on Enter / click away",
+      px + 10 * s, py, PAL.faint)
+    py = py + 16 * s
+  end
 
   if prow("Tileset", function(fx, fy, fw, fh_)
     local label = Kit.ellipsize("mono", map.tileset or "?", fw - 100 * s)
@@ -2839,12 +3044,16 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
         if not S.project.trainer_headers[label][idx] then
           local base = "_" .. (map.id or "MAP") .. "Trainer" .. idx
+          local beat = State.modFlag(S.project,
+            "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
+          S.project.eventFlags = S.project.eventFlags or {}
+          S.project.eventFlags[beat] = true
           S.project.trainer_headers[label][idx] = {
             range = 2,
             battle = base .. "Battle",
             won = base .. "Won",
             after = base .. "After",
-            event = State.modFlag(S.project, "BEAT_TRAINER_" .. idx),
+            event = beat,
             opponent = map.objects[i].trainerClass,
             party = 1,
           }
@@ -2919,8 +3128,12 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         copy.battle = copy.battle or (base .. "Battle")
         copy.won = copy.won or (base .. "Won")
         copy.after = copy.after or (base .. "After")
-        copy.event = copy.event
-          or State.modFlag(S.project, "BEAT_TRAINER_" .. idx)
+        if not copy.event or copy.event == "" then
+          copy.event = State.modFlag(S.project,
+            "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
+        end
+        S.project.eventFlags = S.project.eventFlags or {}
+        S.project.eventFlags[copy.event] = true
         S.project.trainer_headers[label][idx] = copy
         for _, key in ipairs({ "battle", "won", "after" }) do
           local tid = copy[key]
@@ -2981,6 +3194,27 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     editLine("Before battle", "battle", "Let's fight!")
     editLine("On win", "won", "I lost...")
     editLine("After (defeated)", "after", "You're strong.")
+
+    row("Beat flag", function(fx, fy, fw, fh_)
+      -- Field id includes object index so typing never bleeds across trainers.
+      local cur = (hdr and hdr.event) or ""
+      local v = field(App, "ob_ev_" .. i, fx, fy, fw, fh_, cur, "MOD_BEAT_…")
+      v = (v ~= "" and v) or nil
+      if v ~= (cur ~= "" and cur or nil) then
+        local h = ensureHdr()
+        if not v then
+          v = State.modFlag(S.project,
+            "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
+        else
+          v = State.modFlag(S.project, v)
+        end
+        h.event = v
+        S.project.eventFlags = S.project.eventFlags or {}
+        S.project.eventFlags[v] = true
+        hdr = h
+        App.markDirty()
+      end
+    end)
   end
 
   row("Hidden", function(fx, fy, fw, fh_)
@@ -3522,6 +3756,8 @@ function Maps.draw(S, x, y, w, h, App)
       S._mapIdDraft = nil
       S._mapCenteredFor = nil
       S._mapPaletteFor = nil
+      S.mapSel, S._mapSelDraft, S._mapShiftDraft = nil, nil, nil
+      S._mapSelFor = id
       S.mapObjectIndex, S.mapWarpIndex, S.mapSignIndex = 1, 1, 1
       if S.mapViewMode == "world" then S._worldFitKey = nil end
     end
@@ -3582,7 +3818,7 @@ function Maps.draw(S, x, y, w, h, App)
     { id = "paint", tip = "Stamp the selected block (drag to paint)" },
     { id = "erase", tip = "Paint block 0 (empty / void)" },
     { id = "pick", tip = "Click the map to sample a block into the brush" },
-    { id = "select", tip = "Pan the map (or hold Space while painting)" },
+    { id = "select", tip = "Drag a block marquee; shift with dx/dy (Space/MMB pans)" },
     { id = "warp", tip = "Place or select warps" },
     { id = "object", tip = "Place NPCs / objects" },
     { id = "sign", tip = "Place signs" },
@@ -3622,10 +3858,94 @@ function Maps.draw(S, x, y, w, h, App)
     S._mapCenteredFor = nil
   end
 
-  -- Paint / view strip under tools
+  -- Paint / view strip under tools (SELECT gets shift controls instead)
   local barY = y + 30 * s
   local barH = 34 * s
-  if map then
+  if S._mapSelFor ~= S.mapId then
+    S.mapSel, S._mapSelDraft, S._mapShiftDraft = nil, nil, nil
+    S._mapSelFor = S.mapId
+  end
+  if map and (S.mapTool or "paint") == "select" then
+    barH = 38 * s
+    local bx = mainX
+    if Kit.button(bx, barY + 4 * s, 44 * s, 28 * s, "All", {
+        kind = "accent", tooltip = "Select every block on this map",
+      }) then
+      S.mapSel = selectAllBlocks(map)
+      S._mapSelFor = S.mapId
+      S.status = "Selected all blocks"
+    end
+    bx = bx + 48 * s
+    if Kit.button(bx, barY + 4 * s, 52 * s, 28 * s, "Clear", {
+        kind = "ghost", tooltip = "Clear block selection",
+      }) then
+      S.mapSel, S._mapSelDraft = nil, nil
+      S.status = "Selection cleared"
+    end
+    bx = bx + 58 * s
+    Kit.text("micro", "dx", bx, barY + 2 * s, PAL.caption)
+    Kit.text("micro", "dy", bx + 54 * s, barY + 2 * s, PAL.caption)
+    local draft = S._mapShiftDraft
+    if draft == nil or draft.forId ~= S.mapId then
+      draft = { forId = S.mapId, dx = "0", dy = "0" }
+      S._mapShiftDraft = draft
+    end
+    local dxStr = Kit.textfield("mp_sh_dx", bx, barY + 14 * s, 48 * s, 22 * s,
+      draft.dx, "0")
+    local dyStr = Kit.textfield("mp_sh_dy", bx + 54 * s, barY + 14 * s, 48 * s, 22 * s,
+      draft.dy, "0")
+    local shifting = (Kit.focus == "mp_sh_dx" or Kit.focus == "mp_sh_dy")
+    if shifting then
+      draft.dx, draft.dy = dxStr, dyStr
+    else
+      draft.dx = tostring(math.floor(tonumber(dxStr) or 0))
+      draft.dy = tostring(math.floor(tonumber(dyStr) or 0))
+    end
+    bx = bx + 112 * s
+    local function applyShift(dx, dy)
+      local sel = S.mapSel
+      if not sel then
+        S.status = "Select a region (or All) before shifting"
+        return
+      end
+      local x0, y0, x1, y1 = normalizeBlockSel(sel)
+      if not x0 then
+        S.status = "Select a region (or All) before shifting"
+        return
+      end
+      shiftMapRegion(S, S.mapId, x0, y0, x1, y1, dx, dy, App)
+      map = resolveMapDef(S, S.mapId)
+    end
+    if Kit.button(bx, barY + 4 * s, 56 * s, 28 * s, "Apply", {
+        kind = "good",
+        tooltip = "Shift by dx,dy blocks (+dx east, +dy south; use +dy after growing height to free north)",
+      }) then
+      applyShift(tonumber(draft.dx) or 0, tonumber(draft.dy) or 0)
+    end
+    bx = bx + 62 * s
+    local nudges = {
+      { label = "←", dx = -1, dy = 0 },
+      { label = "→", dx = 1, dy = 0 },
+      { label = "↑", dx = 0, dy = -1 },
+      { label = "↓", dx = 0, dy = 1 },
+    }
+    for _, n in ipairs(nudges) do
+      if Kit.button(bx, barY + 4 * s, 28 * s, 28 * s, n.label, {
+          kind = "ghost",
+          tooltip = string.format("Nudge selection by (%d, %d) blocks", n.dx, n.dy),
+        }) then
+        applyShift(n.dx, n.dy)
+      end
+      bx = bx + 32 * s
+    end
+    local x0, y0, x1, y1 = normalizeBlockSel(S.mapSel)
+    if x0 then
+      Kit.text("micro", string.format("sel (%d,%d)–(%d,%d)", x0, y0, x1, y1),
+        bx + 4 * s, barY + 12 * s, PAL.faint)
+    else
+      Kit.text("micro", "drag marquee or All", bx + 4 * s, barY + 12 * s, PAL.faint)
+    end
+  elseif map then
     local thumb = 28 * s
     local tsId = map.tileset
     drawBlockThumb(S, tsId, S.paintBlock or 1, mainX, barY, thumb)

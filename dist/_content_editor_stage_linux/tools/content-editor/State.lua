@@ -30,7 +30,7 @@ function State.new()
     eventsMode = "scripts", -- scripts | saveflags
     -- map editor tool state
     paintBlock = 1,
-    mapTool = "paint",   -- paint | erase | warp | object | sign | trainer
+    mapTool = "paint",   -- paint | erase | pick | select | warp | object | sign | trainer
     mapZoom = 2,
     mapCamX = 0,
     mapCamY = 0,

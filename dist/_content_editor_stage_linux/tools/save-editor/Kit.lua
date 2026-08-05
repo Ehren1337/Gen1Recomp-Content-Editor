@@ -166,6 +166,13 @@ end
 function Kit.textinput(text)
   if not Kit.focus then return false end
   if type(text) ~= "string" or text == "" then return true end
+  -- Ctrl/Cmd combos are handled in keypressed (paste/copy); do not also
+  -- insert the bare letter from platforms that still emit textinput.
+  if love and love.keyboard and (
+      love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+      or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")) then
+    return true
+  end
   -- Ignore raw newlines from IME / paste; fields are single-line.
   if text == "\n" or text == "\r" then return true end
   edits[#edits + 1] = text
@@ -181,6 +188,23 @@ end
 local function shiftDown()
   return love and love.keyboard and (
     love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift"))
+end
+
+local function clipboardGet()
+  if not (love and love.system and love.system.getClipboardText) then
+    return ""
+  end
+  local ok, text = pcall(love.system.getClipboardText)
+  if not ok or type(text) ~= "string" then return "" end
+  return text
+end
+
+local function clipboardSet(text)
+  if not (love and love.system and love.system.setClipboardText) then
+    return false
+  end
+  local ok = pcall(love.system.setClipboardText, tostring(text or ""))
+  return ok and true or false
 end
 
 -- Returns true when the key was consumed by the focused field, so App can
@@ -207,6 +231,15 @@ function Kit.keypressed(key)
     return true
   elseif key == "a" and ctrlDown() then
     edits[#edits + 1] = "select_all"
+    return true
+  elseif key == "c" and ctrlDown() then
+    edits[#edits + 1] = "copy"
+    return true
+  elseif key == "x" and ctrlDown() then
+    edits[#edits + 1] = "cut"
+    return true
+  elseif key == "v" and ctrlDown() then
+    edits[#edits + 1] = { "paste", clipboardGet() }
     return true
   elseif key == "return" or key == "kpenter" or key == "escape" then
     edits[#edits + 1] = "\r"
@@ -702,6 +735,15 @@ function Kit.textfield(id, x, y, w, h, value, placeholder)
           moveCaret(0, keep)
         elseif op == "end" then
           moveCaret(#text, keep)
+        elseif op == "paste" then
+          local clip = flatOneLine(keep or "")
+          if clip ~= "" then
+            deleteSel()
+            local c = Kit.caret or 0
+            text = text:sub(1, c) .. clip .. text:sub(c + 1)
+            Kit.caret = c + #clip
+            clearSel()
+          end
         end
       elseif e == "\b" then
         if not deleteSel() then
@@ -726,6 +768,24 @@ function Kit.textfield(id, x, y, w, h, value, placeholder)
       elseif e == "select_all" then
         Kit.selAnchor = 0
         Kit.caret = #text
+      elseif e == "copy" then
+        local a, b = selRange()
+        if a ~= b then
+          clipboardSet(text:sub(a + 1, b))
+        elseif text ~= "" then
+          clipboardSet(text)
+        end
+      elseif e == "cut" then
+        local a, b = selRange()
+        if a ~= b then
+          clipboardSet(text:sub(a + 1, b))
+          deleteSel()
+        elseif text ~= "" then
+          clipboardSet(text)
+          text = ""
+          Kit.caret = 0
+          clearSel()
+        end
       elseif type(e) == "string" then
         deleteSel()
         local c = Kit.caret or 0

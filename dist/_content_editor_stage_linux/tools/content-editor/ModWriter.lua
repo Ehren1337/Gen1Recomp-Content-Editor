@@ -981,7 +981,11 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- trainer_headers keyed by map label
+  -- trainer_headers keyed by map label.
+  -- Deep registries treat a contiguous { [1]=…, [2]=… } payload as an array
+  -- and CONCAT it — so a beat-flag edit appended duplicate headers and every
+  -- trainer kept sharing the first flag.  Force a dictionary merge with a
+  -- DELETE sentinel key (same pattern as the schema's per-index example).
   local thLabels = {}
   for lbl in pairs(project.trainer_headers or {}) do
     thLabels[#thLabels + 1] = lbl
@@ -990,10 +994,26 @@ function ModWriter.emitMain(project, baseData)
   for _, lbl in ipairs(thLabels) do
     local headers = project.trainer_headers[lbl]
     if type(headers) == "table" and next(headers) then
-      out[#out + 1] = string.format(
-        "  mod.content.trainer_headers:patch(%q, %s)",
-        lbl, emitTableLiteral(headers, 1))
-      out[#out + 1] = ""
+      local idxs = {}
+      for idx in pairs(headers) do
+        if type(idx) == "number" then idxs[#idxs + 1] = idx end
+      end
+      table.sort(idxs)
+      if #idxs > 0 then
+        out[#out + 1] = string.format(
+          "  mod.content.trainer_headers:patch(%q, {", lbl)
+        out[#out + 1] = '    ["_"] = mod.DELETE,'
+        for _, idx in ipairs(idxs) do
+          local hdr = headers[idx]
+          if type(hdr) == "table" then
+            local clean = stripEditorFields(hdr)
+            local lit = emitTableLiteral(clean, 2)
+            out[#out + 1] = string.format("    [%d] = %s,", idx, lit)
+          end
+        end
+        out[#out + 1] = "  })"
+        out[#out + 1] = ""
+      end
     end
   end
 

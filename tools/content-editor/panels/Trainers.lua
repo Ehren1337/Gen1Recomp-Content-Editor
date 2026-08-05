@@ -932,60 +932,78 @@ function Trainers.draw(S, x, y, w, h, App)
       Kit.text("micro", "Object index", viewX, fy, PAL.muted)
       local idxStr = field(App, "tr_hdr_idx", viewX + 100 * s, fy, 50 * s, fh,
         tostring(objIndex), "1")
-      S.trainerHeaderIndex = tonumber(idxStr) or 1
+      local newIdx = tonumber(idxStr) or 1
+      if newIdx ~= objIndex then
+        -- Avoid one focused textfield writing the previous trainer's flag
+        -- into the next object index.
+        Kit.blur()
+        S.trainerHeaderIndex = newIdx
+        objIndex = newIdx
+      end
       fy = fy + fh + 6 * s
-      local hdr = S.project.trainer_headers[label][S.trainerHeaderIndex]
+      local idx = S.trainerHeaderIndex
+      local fid = "_" .. idx
+      local uniq = (mapId or "MAP") .. "_" .. idx
+      local hdr = S.project.trainer_headers[label][idx]
+      -- Defaults are per map+object so trainers never share a beat flag.
       local draft = hdr or {
         range = 2,
-        battle = "_" .. (S.trainerId or "T") .. "Battle",
-        won = "_" .. (S.trainerId or "T") .. "Won",
-        after = "_" .. (S.trainerId or "T") .. "After",
-        event = State.modFlag(S.project, "BEAT_" .. (S.trainerId or "T")),
+        battle = "_" .. uniq .. "Battle",
+        won = "_" .. uniq .. "Won",
+        after = "_" .. uniq .. "After",
+        event = State.modFlag(S.project, "BEAT_" .. uniq),
         opponent = S.trainerId,
         party = 1,
       }
       local function touchHdr()
         S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-        if not S.project.trainer_headers[label][S.trainerHeaderIndex] then
-          S.project.trainer_headers[label][S.trainerHeaderIndex] = {
+        if not S.project.trainer_headers[label][idx] then
+          S.project.trainer_headers[label][idx] = {
             range = draft.range, battle = draft.battle, won = draft.won,
             after = draft.after, event = draft.event,
             opponent = S.trainerId, party = draft.party,
           }
         end
-        hdr = S.project.trainer_headers[label][S.trainerHeaderIndex]
+        hdr = S.project.trainer_headers[label][idx]
         hdr.opponent = S.trainerId
         App.markDirty()
         return hdr
       end
-      local range = tonumber(field(App, "tr_hdr_range", viewX, fy, 50 * s, fh,
+      local range = tonumber(field(App, "tr_hdr_range" .. fid, viewX, fy, 50 * s, fh,
         tostring(draft.range or 2), "2")) or 2
       if range ~= (draft.range or 2) then draft = touchHdr(); draft.range = range end
       Kit.text("micro", "sight range", viewX + 58 * s, fy + 6 * s, PAL.faint)
       fy = fy + fh + 4 * s
-      local partyN = tonumber(field(App, "tr_hdr_party", viewX, fy, 50 * s, fh,
+      local partyN = tonumber(field(App, "tr_hdr_party" .. fid, viewX, fy, 50 * s, fh,
         tostring(draft.party or 1), "1")) or 1
       if partyN ~= (draft.party or 1) then draft = touchHdr(); draft.party = partyN end
       Kit.text("micro", "party #", viewX + 58 * s, fy + 6 * s, PAL.faint)
       fy = fy + fh + 4 * s
-      local battle = field(App, "tr_hdr_b", viewX, fy, viewW, fh,
+      local battle = field(App, "tr_hdr_b" .. fid, viewX, fy, viewW, fh,
         draft.battle or "", "_Battle")
       if battle ~= (draft.battle or "") then draft = touchHdr(); draft.battle = battle end
       fy = fy + fh + 4 * s
-      local won = field(App, "tr_hdr_w", viewX, fy, viewW, fh,
+      local won = field(App, "tr_hdr_w" .. fid, viewX, fy, viewW, fh,
         draft.won or "", "_Won")
       if won ~= (draft.won or "") then draft = touchHdr(); draft.won = won end
       fy = fy + fh + 4 * s
-      local after = field(App, "tr_hdr_a", viewX, fy, viewW, fh,
+      local after = field(App, "tr_hdr_a" .. fid, viewX, fy, viewW, fh,
         draft.after or "", "_After")
       if after ~= (draft.after or "") then draft = touchHdr(); draft.after = after end
       fy = fy + fh + 4 * s
-      local event = field(App, "tr_hdr_e", viewX, fy, viewW, fh,
+      local event = field(App, "tr_hdr_e" .. fid, viewX, fy, viewW, fh,
         draft.event or "", "MOD_BEAT_")
-      if event ~= (draft.event or "") then draft = touchHdr(); draft.event = event end
+      if event ~= (draft.event or "") then
+        draft = touchHdr()
+        local full = State.modFlag(S.project,
+          (event ~= "" and event) or ("BEAT_" .. uniq))
+        draft.event = full
+        S.project.eventFlags = S.project.eventFlags or {}
+        S.project.eventFlags[full] = true
+      end
       fy = fy + fh + 8 * s
       if S.project.trainer_headers[label]
-          and S.project.trainer_headers[label][S.trainerHeaderIndex] then
+          and S.project.trainer_headers[label][idx] then
         for _, key in ipairs({ "battle", "won", "after" }) do
           local tid = draft[key]
           if type(tid) == "string" and tid:sub(1, 1) == "_" and not S.project.text[tid] then
