@@ -1,0 +1,674 @@
+-- Disk IO for content-editor projects: scaffold, load, save under mods/.
+
+local ModWriter = require("ModWriter")
+local State = require("State")
+local Json = require("src.link.Json")
+
+local ModIO = {}
+
+local function join(a, b)
+  if a:sub(-1) == "/" or a:sub(-1) == "\\" then return a .. b end
+  return a .. package.config:sub(1, 1) .. b
+end
+
+local MANIFEST_KEY_ORDER = {
+  "id", "name", "version", "api", "entry", "profile", "game_version",
+  "category", "priority", "permissions", "dependencies", "optional_dependencies",
+  "conflicts", "incompatible", "experimental", "language", "affects_link",
+  "description", "github", "options_schema", "assets_transforms",
+}
+
+local function trim(value)
+  return value and value:gsub("^%s+", ""):gsub("%s+$", "") or ""
+end
+
+local function commandOutput(command)
+  local pipe = io.popen(command, "r")
+  if not pipe then return nil end
+  local result = pipe:read("*a")
+  pipe:close()
+  result = trim(result)
+  return result ~= "" and result or nil
+end
+
+local function shellQuote(s)
+  return "'" .. tostring(s or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function hasCommand(name)
+  -- Run via env -i-less host PATH. AppImages often see a tool in PATH that
+  -- cannot actually show a GUI from inside the sandbox.
+  local path = commandOutput(
+    "command -v " .. name .. " 2>/dev/null || which " .. name .. " 2>/dev/null")
+  return path ~= nil, path
+end
+
+-- Run a dialog command; returns path, status ("ok"|"cancel"|"fail").
+-- Zenity/kdialog use exit 1 for user cancel; other non-zero = failed to show.
+local function runDialog(cmd)
+  -- Capture stdout + exit code. Keep stderr quiet.
+  local wrapped = string.format(
+    "OUT=$(%s 2>/dev/null); EC=$?; printf '%%s\\n' \"$OUT\"; printf '__EC:%%s\\n' \"$EC\"",
+    cmd)
+  local pipe = io.popen(wrapped, "r")
+  if not pipe then return nil, "fail" end
+  local body = pipe:read("*a") or ""
+  pipe:close()
+  local ec = tonumber(body:match("__EC:(%d+)")) or -1
+  local out = trim((body:gsub("\n?__EC:%d+%s*$", "")))
+  if out ~= "" and ec == 0 then return out, "ok" end
+  if out ~= "" then return out, "ok" end -- some tools omit exit 0
+  if ec == 1 then return nil, "cancel" end
+  return nil, "fail"
+end
+
+-- Convert Windows "Label|*.gb;*.gbc|All|*.*" filters to zenity/kdialog forms.
+local function linuxFileFilters(filter)
+  filter = filter or "All files (*.*)|*.*"
+  local zenity, kdialog = {}, {}
+  local parts = {}
+  for part in (filter .. "|"):gmatch("([^|]*)|") do
+    parts[#parts + 1] = part
+  end
+  for i = 1, #parts - 1, 2 do
+    local label = parts[i]
+    local pats = parts[i + 1] or "*.*"
+    local globs = {}
+    for g in pats:gmatch("[^;]+") do
+      g = trim(g)
+      if g ~= "" then globs[#globs + 1] = g end
+    end
+    if #globs > 0 then
+      zenity[#zenity + 1] = string.format("--file-filter=%s",
+        shellQuote(label .. " | " .. table.concat(globs, " ")))
+      kdialog[#kdialog + 1] = table.concat(globs, " ") .. "|" .. label
+    end
+  end
+  return zenity, kdialog
+end
+
+local function linuxPickFile(title, filter)
+  title = title or "Choose a file"
+  local zenFilters, kdFilters = linuxFileFilters(filter)
+  local home = os.getenv("HOME") or "."
+  local sawCancel = false
+
+  if hasCommand("zenity") then
+    local cmd = "zenity --file-selection --title=" .. shellQuote(title)
+    for _, f in ipairs(zenFilters) do cmd = cmd .. " " .. f end
+    local path, st = runDialog(cmd)
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true else
+      -- failed to show — try another backend
+    end
+  end
+  if hasCommand("kdialog") then
+    local filt = kdFilters[1] or "*.*|All files"
+    local path, st = runDialog(string.format(
+      "kdialog --getopenfilename %s %s --title %s",
+      shellQuote(home), shellQuote(filt), shellQuote(title)))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("yad") then
+    local path, st = runDialog("yad --file --title=" .. shellQuote(title))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+
+  -- AppImage/host mismatch often looks like cancel with no window. Caller
+  -- should offer a path paste box for both cancel and unavailable.
+  if sawCancel then return nil, "cancel" end
+  return nil, "unavailable"
+end
+
+local function linuxPickFolder(title, startPath)
+  title = title or "Choose a folder"
+  startPath = startPath or (os.getenv("HOME") or ".")
+  local sawCancel = false
+
+  if hasCommand("zenity") then
+    local path, st = runDialog(string.format(
+      "zenity --file-selection --directory --title=%s --filename=%s",
+      shellQuote(title), shellQuote(startPath .. "/")))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("kdialog") then
+    local path, st = runDialog(string.format(
+      "kdialog --getexistingdirectory %s --title %s",
+      shellQuote(startPath), shellQuote(title)))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+  if hasCommand("yad") then
+    local path, st = runDialog(string.format(
+      "yad --file --directory --title=%s --filename=%s",
+      shellQuote(title), shellQuote(startPath .. "/")))
+    if path then return path, "ok" end
+    if st == "cancel" then sawCancel = true end
+  end
+
+  if sawCancel then return nil, "cancel" end
+  return nil, "unavailable"
+end
+
+function ModIO.repoRoot()
+  if love and love.filesystem and love.filesystem.getSource then
+    return love.filesystem.getSource()
+  end
+  return "."
+end
+
+function ModIO.modsRoot()
+  return join(ModIO.repoRoot(), "mods")
+end
+
+function ModIO.isValidId(id)
+  return type(id) == "string" and id:match("^[%w%-_]+$") ~= nil
+end
+
+function ModIO.projectPath(modDir)
+  return join(modDir, "editor_project.lua")
+end
+
+function ModIO.exists(path)
+  local f = io.open(path, "rb")
+  if f then f:close(); return true end
+  return false
+end
+
+function ModIO.engineVersion()
+  local ok, Version = pcall(require, "src.core.Version")
+  if ok and Version and Version.engine then return Version.engine end
+  return "0.0.0-dev"
+end
+
+function ModIO.create(id, name)
+  if not ModIO.isValidId(id) then
+    return nil, "bad id (use letters, numbers, _ or -)"
+  end
+  local dest = join(ModIO.modsRoot(), id)
+  if ModIO.exists(join(dest, "manifest.json")) then
+    return nil, dest .. " already exists"
+  end
+  local engine = ModIO.engineVersion()
+  local major = tonumber(engine:match("^(%d+)")) or 0
+  local nextMajor = major + 1
+  local display = name or id:gsub("[_%-]", " "):gsub("(%a)([%w]*)", function(a, b)
+    return a:upper() .. b:lower()
+  end)
+
+  local function mkdir(path)
+    if love and love.filesystem and love.filesystem.createDirectory then
+      -- love.filesystem is sandboxed; use os.execute for source-tree mods
+    end
+    local sep = package.config:sub(1, 1)
+    if sep == "\\" then
+      os.execute('mkdir "' .. path .. '" 2>nul')
+    else
+      os.execute('mkdir -p "' .. path .. '"')
+    end
+  end
+
+  mkdir(dest)
+  mkdir(join(dest, "assets"))
+
+  local manifest = string.format([[{
+  "id": "%s",
+  "name": "%s",
+  "version": "0.1.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "game_version": ">=%s <%d.0.0",
+  "category": "GAMEPLAY",
+  "priority": 100,
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "incompatible": [],
+  "experimental": false,
+  "description": "Authored with the Gen1Recomp content editor"
+}
+]], id, display, engine, nextMajor)
+
+  local mf, err = io.open(join(dest, "manifest.json"), "wb")
+  if not mf then return nil, err end
+  mf:write(manifest)
+  mf:close()
+
+  local keep = io.open(join(dest, "assets", ".gitkeep"), "wb")
+  if keep then keep:close() end
+
+  local project = State.blankProject(id, display)
+  local ok, werr = ModIO.save(dest, project)
+  if not ok then return nil, werr end
+  return dest, project
+end
+
+local function mainLooksHandWritten(modDir)
+  local mainPath = join(modDir, "main.lua")
+  local f = io.open(mainPath, "rb")
+  if not f then return false end
+  local body = f:read("*a") or ""
+  f:close()
+  if body == "" then return false end
+  -- Content-editor emits this banner; anything else is treated as authored Lua.
+  if body:find("generated by tools/content%-editor", 1, false) then
+    return false
+  end
+  return true
+end
+
+function ModIO.load(modDir)
+  local path = ModIO.projectPath(modDir)
+  if not ModIO.exists(path) then
+    local id = modDir:match("[/\\]([^/\\]+)$") or "mod"
+    local project = State.blankProject(id, id)
+    if mainLooksHandWritten(modDir) then
+      project._protectMain = true
+      return project,
+        "hand-written main.lua detected — Save will NOT overwrite it (use a new mod id for the content editor)"
+    end
+    return project, "no editor_project.lua; started empty project (Save regenerates main.lua)"
+  end
+  local chunk, err = loadfile(path)
+  if not chunk then return nil, err end
+  local ok, project = pcall(chunk)
+  if not ok then return nil, project end
+  if type(project) ~= "table" then return nil, "editor_project.lua must return a table" end
+  return State.ensureProjectFields(project)
+end
+
+function ModIO.save(modDir, project)
+  if project._protectMain then
+    return false,
+      "this mod has a hand-written main.lua (e.g. example_mew_starter); "
+      .. "create a new mod id instead of overwriting it"
+  end
+
+  local body = ModWriter.serializeProject(project)
+  local path = ModIO.projectPath(modDir)
+  local tmp = path .. ".tmp"
+  local f, err = io.open(tmp, "wb")
+  if not f then return false, err end
+  local wok, werr = f:write(body)
+  if not wok then f:close(); os.remove(tmp); return false, werr end
+  f:close()
+  os.remove(path)
+  local ok, rerr = os.rename(tmp, path)
+  if not ok then return false, tostring(rerr) end
+
+  local main = ModWriter.emitMain(project)
+  local mainPath = join(modDir, "main.lua")
+  local mf, merr = io.open(mainPath, "wb")
+  if not mf then return false, merr end
+  mf:write(main)
+  mf:close()
+
+  -- keep manifest name in sync when present
+  local manifestPath = join(modDir, "manifest.json")
+  if ModIO.exists(manifestPath) and project.name then
+    local mh = io.open(manifestPath, "rb")
+    if mh then
+      local text = mh:read("*a")
+      mh:close()
+      text = text:gsub('"name"%s*:%s*"[^"]*"',
+        string.format('"name": "%s"', project.name:gsub('"', '\\"')))
+      local mw = io.open(manifestPath, "wb")
+      if mw then mw:write(text); mw:close() end
+    end
+  end
+  return true
+end
+
+-- Escape for PowerShell single-quoted strings.
+local function psQuote(s)
+  return tostring(s or ""):gsub("'", "''")
+end
+
+-- Write a temp .ps1 and run it (avoids -Command quoting breakage). Returns
+-- stdout path or nil.
+local function windowsRunPs1(body)
+  local tmp = os.getenv("TEMP") or os.getenv("TMP") or "."
+  local ps1 = tmp .. "\\pokeport_ce_picker_" .. tostring(os.time())
+    .. tostring(math.random(1000, 9999)) .. ".ps1"
+  local f = io.open(ps1, "wb")
+  if not f then return nil end
+  -- UTF-8 BOM so PowerShell parses Unicode paths/titles correctly
+  f:write(string.char(0xEF, 0xBB, 0xBF))
+  f:write(body)
+  f:close()
+  local out = commandOutput(string.format(
+    'powershell -NoProfile -STA -ExecutionPolicy Bypass -File "%s"', ps1))
+  pcall(os.remove, ps1)
+  if out then
+    out = out:gsub("\r", ""):gsub("\n$", "")
+    out = trim(out)
+  end
+  return (out and out ~= "") and out or nil
+end
+
+-- TopMost owner form so the dialog is not buried under the LÖVE window.
+local function windowsDialogPreamble()
+  return table.concat({
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type -AssemblyName System.Drawing",
+    "[System.Windows.Forms.Application]::EnableVisualStyles()",
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+    "$owner = New-Object System.Windows.Forms.Form",
+    "$owner.TopMost = $true",
+    "$owner.ShowInTaskbar = $false",
+    "$owner.FormBorderStyle = 'FixedToolWindow'",
+    "$owner.StartPosition = 'Manual'",
+    "$owner.Size = New-Object System.Drawing.Size(1,1)",
+    "$owner.Location = New-Object System.Drawing.Point(-32000,-32000)",
+    "$owner.Opacity = 0",
+    "$owner.Show()",
+    "$owner.Activate()",
+  }, "\r\n")
+end
+
+local function windowsDialogEpilogue()
+  return table.concat({
+    "$owner.Close()",
+    "$owner.Dispose()",
+  }, "\r\n")
+end
+
+-- Returns path, status ("ok"|"cancel"|"unavailable").
+-- Older callers that only use the first return still work.
+function ModIO.chooseFolder(title, startPath)
+  local platform = (love and love.system and love.system.getOS
+                    and love.system.getOS()) or ""
+  title = title or "Choose a folder"
+  startPath = startPath or ModIO.repoRoot()
+  if platform == "OS X" then
+    local path = commandOutput(string.format(
+      [[osascript -e 'POSIX path of (choose folder with prompt "%s" default location POSIX file "%s")' 2>/dev/null]],
+      title:gsub('"', '\\"'), startPath:gsub('"', '\\"')))
+    return path, path and "ok" or "cancel"
+  elseif platform == "Windows" then
+    local body = table.concat({
+      windowsDialogPreamble(),
+      "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+      string.format("$d.Description = '%s'", psQuote(title)),
+      string.format("$d.SelectedPath = '%s'", psQuote(startPath)),
+      "$d.ShowNewFolderButton = $false",
+      "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {",
+      "  [Console]::Write($d.SelectedPath)",
+      "}",
+      windowsDialogEpilogue(),
+    }, "\r\n")
+    local path = windowsRunPs1(body)
+    return path, path and "ok" or "cancel"
+  elseif platform == "Linux" then
+    return linuxPickFolder(title, startPath)
+  end
+  return nil, "unavailable"
+end
+
+function ModIO.chooseModDir()
+  return ModIO.chooseFolder("Choose a mod folder", ModIO.modsRoot())
+end
+
+function ModIO.chooseFile(title, filter)
+  local platform = (love and love.system and love.system.getOS
+                    and love.system.getOS()) or ""
+  title = title or "Choose a file"
+  filter = filter or "All files (*.*)|*.*"
+  if platform == "OS X" then
+    local path = commandOutput(string.format(
+      [[osascript -e 'POSIX path of (choose file with prompt "%s")' 2>/dev/null]],
+      title:gsub('"', '\\"')))
+    return path, path and "ok" or "cancel"
+  elseif platform == "Windows" then
+    -- Mirror RomImporter: copy pick to an ASCII temp path when it's a ROM so
+    -- console codepage cannot mangle non-ASCII folder names.
+    local isRom = filter:lower():find("%.gb") ~= nil
+    local bodyLines = {
+      windowsDialogPreamble(),
+      "$d = New-Object System.Windows.Forms.OpenFileDialog",
+      string.format("$d.Title = '%s'", psQuote(title)),
+      string.format("$d.Filter = '%s'", psQuote(filter)),
+      "$d.Multiselect = $false",
+      "$d.CheckFileExists = $true",
+      "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {",
+    }
+    if isRom then
+      bodyLines[#bodyLines + 1] =
+        "  $t = Join-Path $env:TEMP 'pokeport_ce_rom_pick.gb'"
+      bodyLines[#bodyLines + 1] =
+        "  Copy-Item -LiteralPath $d.FileName -Destination $t -Force"
+      bodyLines[#bodyLines + 1] = "  [Console]::Write($t)"
+    else
+      bodyLines[#bodyLines + 1] = "  [Console]::Write($d.FileName)"
+    end
+    bodyLines[#bodyLines + 1] = "}"
+    bodyLines[#bodyLines + 1] = windowsDialogEpilogue()
+    local path = windowsRunPs1(table.concat(bodyLines, "\r\n"))
+    return path, path and "ok" or "cancel"
+  elseif platform == "Linux" then
+    return linuxPickFile(title, filter)
+  end
+  return nil, "unavailable"
+end
+
+function ModIO.copyFile(src, dest)
+  local inf = io.open(src, "rb")
+  if not inf then return false, "cannot read " .. tostring(src) end
+  local data = inf:read("*a")
+  inf:close()
+  local dir = dest:match("^(.*)[/\\][^/\\]+$")
+  if dir then
+    local sep = package.config:sub(1, 1)
+    if sep == "\\" then
+      os.execute('mkdir "' .. dir .. '" 2>nul')
+    else
+      os.execute('mkdir -p "' .. dir .. '"')
+    end
+  end
+  local out = io.open(dest, "wb")
+  if not out then return false, "cannot write " .. tostring(dest) end
+  out:write(data)
+  out:close()
+  return true
+end
+
+function ModIO.listMods()
+  local root = ModIO.modsRoot()
+  local out = {}
+  local sep = package.config:sub(1, 1)
+  local cmd
+  if sep == "\\" then
+    cmd = string.format('dir /b /ad "%s" 2>nul', root)
+  else
+    cmd = string.format('ls -1 "%s" 2>/dev/null', root)
+  end
+  local pipe = io.popen(cmd, "r")
+  if not pipe then return out end
+  for line in pipe:lines() do
+    line = trim(line)
+    if line ~= "" and line ~= "examples" and ModIO.exists(join(join(root, line), "manifest.json")) then
+      out[#out + 1] = line
+    end
+  end
+  pipe:close()
+  table.sort(out)
+  return out
+end
+
+function ModIO.modDir(id)
+  if not id or id == "" then return nil end
+  return join(ModIO.modsRoot(), id)
+end
+
+function ModIO.readText(path)
+  local f, err = io.open(path, "rb")
+  if not f then return nil, err end
+  local body = f:read("*a") or ""
+  f:close()
+  return body
+end
+
+function ModIO.writeText(path, body)
+  local tmp = path .. ".tmp"
+  local f, err = io.open(tmp, "wb")
+  if not f then return false, err end
+  local ok, werr = f:write(body or "")
+  if not ok then f:close(); os.remove(tmp); return false, werr end
+  f:close()
+  os.remove(path)
+  local renamed, rerr = os.rename(tmp, path)
+  if not renamed then return false, tostring(rerr) end
+  return true
+end
+
+local function encodeJsonValue(v, indent)
+  local t = type(v)
+  if v == nil then return "null" end
+  if t == "boolean" then return v and "true" or "false" end
+  if t == "number" then
+    if v == math.floor(v) then return string.format("%d", v) end
+    return string.format("%.17g", v)
+  end
+  if t == "string" then
+    return '"' .. v:gsub('[%c"\\]', function(c)
+      if c == '"' then return '\\"' end
+      if c == "\\" then return "\\\\" end
+      if c == "\n" then return "\\n" end
+      if c == "\r" then return "\\r" end
+      if c == "\t" then return "\\t" end
+      return string.format("\\u%04x", c:byte())
+    end) .. '"'
+  end
+  if t ~= "table" then error("cannot encode " .. t) end
+  local n = #v
+  local isArray = n > 0 or next(v) == nil
+  if isArray then
+    if n == 0 then return "[]" end
+    local parts = { "[" }
+    for i = 1, n do
+      parts[#parts + 1] = (i > 1 and ", " or "") .. encodeJsonValue(v[i], indent)
+    end
+    parts[#parts + 1] = "]"
+    return table.concat(parts)
+  end
+  local keys, seen = {}, {}
+  for _, key in ipairs(MANIFEST_KEY_ORDER) do
+    if v[key] ~= nil then
+      keys[#keys + 1] = key
+      seen[key] = true
+    end
+  end
+  local extras = {}
+  for key in pairs(v) do
+    if not seen[key] then extras[#extras + 1] = key end
+  end
+  table.sort(extras)
+  for _, key in ipairs(extras) do keys[#keys + 1] = key end
+  if #keys == 0 then return "{}" end
+  local pad = indent .. "  "
+  local parts = { "{\n" }
+  for i, key in ipairs(keys) do
+    parts[#parts + 1] = pad .. encodeJsonValue(key, pad) .. ": "
+      .. encodeJsonValue(v[key], pad)
+    parts[#parts + 1] = (i < #keys and ",\n" or "\n")
+  end
+  parts[#parts + 1] = indent .. "}"
+  return table.concat(parts)
+end
+
+function ModIO.encodeManifest(data)
+  return encodeJsonValue(data or {}, "") .. "\n"
+end
+
+function ModIO.readManifest(modId)
+  local dir = ModIO.modDir(modId)
+  if not dir then return nil, "no mod id" end
+  local path = join(dir, "manifest.json")
+  local body, err = ModIO.readText(path)
+  if not body then return nil, err end
+  local data, derr = Json.decode(body)
+  if not data then return nil, derr end
+  return data, path
+end
+
+function ModIO.writeManifest(modId, data)
+  local dir = ModIO.modDir(modId)
+  if not dir then return false, "no mod id" end
+  local path = join(dir, "manifest.json")
+  return ModIO.writeText(path, ModIO.encodeManifest(data))
+end
+
+-- Lua files under a mod (root + one subdirectory level).
+function ModIO.listModLuaFiles(modId)
+  local dir = ModIO.modDir(modId)
+  local out, seen = {}, {}
+  if not dir then return out end
+  local sep = package.config:sub(1, 1)
+  local function add(rel)
+    rel = tostring(rel or ""):gsub("\\", "/")
+    if rel ~= "" and rel:lower():match("%.lua$") and not seen[rel] then
+      seen[rel] = true
+      out[#out + 1] = rel
+    end
+  end
+  local function listNames(cmd)
+    local names = {}
+    local pipe = io.popen(cmd, "r")
+    if not pipe then return names end
+    for line in pipe:lines() do
+      line = trim(line)
+      if line ~= "" and line ~= "." and line ~= ".." then
+        names[#names + 1] = line
+      end
+    end
+    pipe:close()
+    return names
+  end
+  if sep == "\\" then
+    for _, name in ipairs(listNames(string.format('dir /b /a-d "%s\\*.lua" 2>nul', dir))) do
+      add(name)
+    end
+    for _, sub in ipairs(listNames(string.format('dir /b /ad "%s" 2>nul', dir))) do
+      for _, name in ipairs(listNames(
+          string.format('dir /b /a-d "%s\\%s\\*.lua" 2>nul', dir, sub))) do
+        add(sub .. "/" .. name)
+      end
+    end
+  else
+    for _, path in ipairs(listNames(string.format('ls -1 "%s"/*.lua 2>/dev/null', dir))) do
+      add(path:match("([^/]+%.lua)$") or path)
+    end
+    for _, subPath in ipairs(listNames(string.format('ls -1 -d "%s"/*/ 2>/dev/null', dir))) do
+      local sub = trim(subPath):gsub("/$", ""):match("([^/]+)$")
+      if sub then
+        for _, path in ipairs(listNames(
+            string.format('ls -1 "%s/%s"/*.lua 2>/dev/null', dir, sub))) do
+          local base = path:match("([^/]+%.lua)$")
+          if base then add(sub .. "/" .. base) end
+        end
+      end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+function ModIO.readModFile(modId, rel)
+  local dir = ModIO.modDir(modId)
+  if not dir or not rel or rel:find("%.%.") then return nil, "bad path" end
+  rel = rel:gsub("/", package.config:sub(1, 1))
+  return ModIO.readText(join(dir, rel))
+end
+
+function ModIO.writeModFile(modId, rel, body)
+  local dir = ModIO.modDir(modId)
+  if not dir or not rel or rel:find("%.%.") then return false, "bad path" end
+  rel = rel:gsub("/", package.config:sub(1, 1))
+  return ModIO.writeText(join(dir, rel), body)
+end
+
+return ModIO
