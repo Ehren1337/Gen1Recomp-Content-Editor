@@ -313,7 +313,10 @@ function App.save()
   if not S or not S.path or not S.project then
     return say("No mod open")
   end
+  -- Base ROM data so move/item patches emit diffs + prefer :patch over :register.
+  ModIO._emitBaseData = S.data
   local ok, err = ModIO.save(S.path, S.project)
+  ModIO._emitBaseData = nil
   if ok then
     S.dirty = false
     say("Saved " .. S.path .. " (editor_project.lua + main.lua)")

@@ -10,6 +10,7 @@ local State = require("State")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local FormPane = require("FormPane")
+local SpriteUtil = require("SpriteUtil")
 local MapLoader = require("src.world.MapLoader")
 local Map = require("src.world.Map")
 local SpriteRenderer = require("src.render.SpriteRenderer")
@@ -470,8 +471,14 @@ local function spriteDef(S, spriteId)
   return S.data and S.data.sprites and S.data.sprites[spriteId]
 end
 
-local function spriteIds(S)
+local function spriteIds(S, customOnly)
   local proj = S.project and S.project.sprites
+  if customOnly then
+    local ids = {}
+    for id in pairs(proj or {}) do ids[#ids + 1] = id end
+    table.sort(ids)
+    return ids
+  end
   local key = tostring(proj and next(proj)) .. ":" .. tostring(S.data and S.data.sprites and next(S.data.sprites))
   if S._spriteIdList and S._spriteIdListKey == key then return S._spriteIdList end
   local seen, ids = {}, {}
@@ -2431,13 +2438,81 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   return py
 end
 
+local function armPlaceSprite(S, id)
+  S.placeSprite = id
+  S.mapTool = "object"
+  S.status = "OBJECT tool: " .. tostring(id)
+end
+
+local function assignObjectSprite(S, map, mutate, App, objIndex, id)
+  if objIndex and map.objects and map.objects[objIndex] then
+    map = mutate()
+    map.objects[objIndex].sprite = id
+  end
+  armPlaceSprite(S, id)
+  spriteCache[id] = nil
+  SpriteUtil.invalidateIdCache(S)
+  App.markDirty()
+  return map
+end
+
+local function createCustomSprite(S, App, map, mutate, objIndex, withBrowse)
+  local nid = SpriteUtil.createNew(S)
+  if not nid then return map end
+  map = assignObjectSprite(S, map, mutate, App, objIndex, nid)
+  S.mapSpriteCustomOnly = true
+  S.mapSpriteOffset = 0
+  if withBrowse then
+    App.pickFile("Sprite PNG", "PNG (*.png)|*.png|All|*.*", function(picked)
+      local rec = S.project and S.project.sprites and S.project.sprites[nid]
+      if not rec then return end
+      App.importToMod(picked, nil, function(rel)
+        rec.image = rel
+        spriteCache[nid] = nil
+        SpriteUtil.invalidateIdCache(S)
+        Preview.invalidate()
+        App.markDirty()
+        S.status = "Custom sprite " .. nid .. " ← " .. rel
+      end)
+    end)
+  else
+    S.status = "Created " .. nid .. " — Browse PNG or place on map"
+  end
+  return map
+end
+
 local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   map.objects = map.objects or {}
   py, S.mapObjectIndex = drawListPicker(S, "mapObjectIndex", #map.objects,
     px, py, propW, fh, s, PAL.green)
   local i = S.mapObjectIndex
   local obj = i and map.objects[i]
-  if not obj then return py end
+
+  -- Always available: create custom sprites for place / assign
+  if py + fh + 8 * s <= listBottom then
+    local bw = math.floor((propW - 28 * s) / 2)
+    if Kit.button(px + 10 * s, py, bw, fh, "+ New sprite", {
+        kind = "good",
+        tooltip = "Register SPRITE_MOD_* and arm Object place tool",
+      }) then
+      map = createCustomSprite(S, App, map, mutate, i, false)
+      obj = i and map.objects[i]
+    end
+    if Kit.button(px + 16 * s + bw, py, bw, fh, "+ PNG sprite", {
+        kind = "accent",
+        tooltip = "Create custom sprite and import a PNG",
+      }) then
+      map = createCustomSprite(S, App, map, mutate, i, true)
+      obj = i and map.objects[i]
+    end
+    py = py + fh + 8 * s
+  end
+
+  if not obj then
+    Kit.text("micro", "Create a sprite above, then place with the Object tool.",
+      px + 10 * s, py, PAL.faint)
+    return py + 20 * s
+  end
 
   -- sprite preview + place-sprite arm
   local def = spriteDef(S, obj.sprite)
@@ -2452,11 +2527,55 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     Kit.text("micro", obj.sprite or "?", px + 66 * s, py + 8 * s, PAL.muted)
     if Kit.button(px + 66 * s, py + 24 * s, 120 * s, 22 * s, "Use to place",
         { kind = "ghost" }) then
-      S.placeSprite = obj.sprite
-      S.mapTool = "object"
-      S.status = "OBJECT tool: " .. tostring(obj.sprite)
+      armPlaceSprite(S, obj.sprite)
     end
     py = py + 56 * s
+  end
+
+  -- Inline edit for project-owned (custom) sprites
+  if SpriteUtil.isOwned(S, obj.sprite) and py + fh * 3 <= listBottom then
+    local rec = S.project.sprites[obj.sprite]
+    Kit.text("micro", "Custom sprite", px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    Kit.text("micro", Kit.ellipsize("micro", tostring(rec.image or ""), propW - 120 * s),
+      px + 10 * s, py + 8 * s, PAL.muted)
+    if Kit.button(px + propW - 106 * s, py, 96 * s, fh, "Browse", {
+        kind = "ghost", tooltip = "Import PNG for this sprite",
+      }) then
+      local sid = obj.sprite
+      App.pickFile("Sprite PNG", "PNG (*.png)|*.png|All|*.*", function(picked)
+        local e = S.project.sprites[sid]
+        if not e then return end
+        App.importToMod(picked, nil, function(rel)
+          e.image = rel
+          spriteCache[sid] = nil
+          Preview.invalidate()
+          App.markDirty()
+        end)
+      end)
+    end
+    py = py + fh + 6 * s
+    Kit.text("micro", "Frames", px + 10 * s, py + 6 * s, PAL.caption)
+    do
+      local cur = rec.frames or 1
+      local v = tonumber(field(App, "ob_spr_fr", px + 70 * s, py, 50 * s, fh,
+        tostring(cur), "1")) or cur
+      v = math.max(1, math.min(16, math.floor(v)))
+      if v ~= cur then
+        rec.frames = v
+        spriteCache[obj.sprite] = nil
+        App.markDirty()
+      end
+    end
+    local walkOn = rec.walker and true or false
+    if Kit.chip(px + 130 * s, py, 80 * s, fh, walkOn and "WALKER" or "STILL",
+        walkOn, PAL.green, nil, "6-frame walk cycle sheet") then
+      rec.walker = not walkOn
+      if not rec.walker then rec.walker = nil end
+      spriteCache[obj.sprite] = nil
+      App.markDirty()
+    end
+    py = py + fh + 8 * s
   end
 
   -- sprite picker grid
@@ -2465,7 +2584,21 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     py = py + 14 * s
   end
   do
-    local list = spriteIds(S)
+    local customOnly = S.mapSpriteCustomOnly and true or false
+    if Kit.chip(px + 10 * s, py, 70 * s, 22 * s, "Custom", customOnly, PAL.yellow,
+        nil, "Show only mod-registered sprites") then
+      S.mapSpriteCustomOnly = not customOnly
+      S.mapSpriteOffset = 0
+      customOnly = S.mapSpriteCustomOnly
+    end
+    if Kit.chip(px + 86 * s, py, 50 * s, 22 * s, "All", not customOnly, PAL.green) then
+      S.mapSpriteCustomOnly = false
+      S.mapSpriteOffset = 0
+      customOnly = false
+    end
+    py = py + 26 * s
+
+    local list = spriteIds(S, customOnly)
     local q = S.mapSpriteQuery or ""
     local nq = field(App, "ob_spr_q", px + 10 * s, py, propW - 20 * s, fh, q, "filter SPRITE_")
     if nq ~= q then S.mapSpriteQuery = nq; S.mapSpriteOffset = 0 end
@@ -2476,6 +2609,11 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       if ql == "" or id:lower():find(ql, 1, true) then
         filtered[#filtered + 1] = id
       end
+    end
+    if customOnly and #filtered == 0 then
+      Kit.text("micro", "(no custom sprites yet — use + New sprite)",
+        px + 10 * s, py, PAL.faint)
+      py = py + 20 * s
     end
     local thumb = 32 * s
     local gap = 4 * s
@@ -2506,12 +2644,14 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
           love.graphics.rectangle("line", bx - 1, py - 1, thumb + 2, thumb + 2)
           love.graphics.setColor(1, 1, 1, 1)
         end
+        if SpriteUtil.isOwned(S, id) then
+          love.graphics.setColor(1, 0.8, 0.2, 0.9)
+          love.graphics.rectangle("fill", bx + thumb - 6, py + 2, 4, 4)
+          love.graphics.setColor(1, 1, 1, 1)
+        end
         if Kit.press(bx, py, thumb, thumb) then
-          map = mutate()
-          map.objects[i].sprite = id
-          S.placeSprite = id
-          spriteCache[id] = nil
-          App.markDirty()
+          map = assignObjectSprite(S, map, mutate, App, i, id)
+          obj = map.objects[i]
         end
         idx = idx + 1
         shown = shown + 1

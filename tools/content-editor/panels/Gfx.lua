@@ -7,6 +7,7 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local ModIO = require("ModIO")
+local SpriteUtil = require("SpriteUtil")
 local MapLoader = require("src.world.MapLoader")
 local PAL = Theme.PAL
 
@@ -325,15 +326,11 @@ function Gfx.draw(S, x, y, w, h, App)
         isOwned = function(id) return proj[id] ~= nil end,
         footerLabel = "+ New sprite",
         onFooter = function()
-          local nid = "SPRITE_MOD"
-          local n = 1
-          while proj[nid] or data[nid] do n = n + 1; nid = "SPRITE_MOD_" .. n end
-          proj[nid] = {
-            id = nid, image = "assets/" .. nid:lower() .. ".png",
-            frames = 1, walker = false, _isNew = true,
-          }
-          S.spriteEditId = nid
-          App.markDirty()
+          local nid = SpriteUtil.createNew(S)
+          if nid then
+            S.spriteEditId = nid
+            App.markDirty()
+          end
         end,
       })
     if not S.spriteEditId then S.spriteEditId = shown[1] end

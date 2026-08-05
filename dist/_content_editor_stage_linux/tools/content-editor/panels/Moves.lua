@@ -255,9 +255,13 @@ function Moves.draw(S, x, y, w, h, App)
     if v ~= (move.power or 0) then move = mutate(); move.power = v end
   end)
   row("Accuracy", function(fx, fy_, fw, fh_)
-    local v = numField(App, "mv_acc", fx, fy_, 80 * s, fh_, move.accuracy or 100)
+    -- Prefer explicit accuracy (including 0). Do not coalesce with `or 100`
+    -- or a missing field looks like 100% and never writes on Save.
+    local curAcc = tonumber(move.accuracy)
+    if curAcc == nil then curAcc = 100 end
+    local v = numField(App, "mv_acc", fx, fy_, 80 * s, fh_, curAcc)
     v = math.max(0, math.min(100, v))
-    if v ~= (move.accuracy or 100) then move = mutate(); move.accuracy = v end
+    if v ~= curAcc then move = mutate(); move.accuracy = v end
   end)
   row("PP", function(fx, fy_, fw, fh_)
     local v = numField(App, "mv_pp", fx, fy_, 80 * s, fh_, move.pp or 20)

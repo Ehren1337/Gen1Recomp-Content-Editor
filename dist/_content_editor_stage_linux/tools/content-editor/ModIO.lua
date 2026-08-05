@@ -300,7 +300,7 @@ function ModIO.save(modDir, project)
   local ok, rerr = os.rename(tmp, path)
   if not ok then return false, tostring(rerr) end
 
-  local main = ModWriter.emitMain(project)
+  local main = ModWriter.emitMain(project, ModIO._emitBaseData)
   local mainPath = join(modDir, "main.lua")
   local mf, merr = io.open(mainPath, "wb")
   if not mf then return false, merr end
