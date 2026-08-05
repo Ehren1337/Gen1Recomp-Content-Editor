@@ -276,6 +276,7 @@ function Project.draw(S, x, y, w, h, App)
   local viewH = lowerH - 2 * scrollPad
   FormPane.track(S, "projectFormScroll", p.id or "project")
   local fy, view = FormPane.begin(S, "projectFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local fh = 28 * s
   local labelW = 120 * s

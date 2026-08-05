@@ -194,16 +194,18 @@ function Trainers.draw(S, x, y, w, h, App)
   local rowH = 28 * s
   local thumb = 22 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 2 * s)))
-  S.trainerListOffset = Kit.scroll(x + 6 * s, listY + 8 * s, listW - 12 * s,
-    listH - 16 * s, S.trainerListOffset or 0, #ids, perPage)
-  local ry = listY + 8 * s
+  local scrollX, scrollY = x + 6 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 12 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.trainerListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
+    S.trainerListOffset or 0, #ids, perPage)
+  local ry = scrollY
   for i = (S.trainerListOffset or 0) + 1,
       math.min(#ids, (S.trainerListOffset or 0) + perPage) do
     local id = ids[i]
     local rowTr = select(1, getTrainer(S, id))
     local owned = S.project.trainers[id] ~= nil
-    local rowW = listW - 12 * s
-    if Kit.row(x + 6 * s, ry, rowW, rowH, S.trainerId == id, PAL.red) then
+    if Kit.row(scrollX, ry, rowW, rowH, S.trainerId == id, PAL.red) then
       S.trainerId = id
       S.trainerPartyIndex = 1
     end
@@ -211,11 +213,12 @@ function Trainers.draw(S, x, y, w, h, App)
       x + 10 * s, ry + (rowH - thumb) / 2, thumb, thumb,
       Preview.trainerPaletteName(S, rowTr))
     local textX = x + 14 * s + thumb
-    Kit.text("micro", Kit.ellipsize("micro", id, rowW - (textX - (x + 6 * s)) - 6 * s),
+    Kit.text("micro",
+      Kit.ellipsize("micro", id, math.max(8, rowW - (textX - scrollX) - 6 * s)),
       textX, ry + 7 * s, owned and PAL.text or PAL.muted)
     ry = ry + rowH + 2 * s
   end
-  Kit.scrollbar(x + 6 * s, listY + 8 * s, listW - 12 * s, listH - 16 * s,
+  S.trainerListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.trainerListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New trainer",
@@ -274,6 +277,7 @@ function Trainers.draw(S, x, y, w, h, App)
   FormPane.track(S, "trainerFormScroll",
     tostring(S.trainerId) .. "|" .. tostring(S.trainerSection))
   local fy, view = FormPane.begin(S, "trainerFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local fh = 28 * s
   local labelW = 100 * s

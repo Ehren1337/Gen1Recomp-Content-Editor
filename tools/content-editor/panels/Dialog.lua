@@ -230,28 +230,30 @@ function Dialog.draw(S, x, y, w, h, App)
   if not S.dialogMapId then S.dialogMapId = S.mapId or maps[1] end
   local rowH = 26 * s
   local perMap = math.max(1, math.floor((listH - 16 * s) / (rowH + 2 * s)))
-  S.dialogMapOffset = Kit.scroll(x + 6 * s, listY + 8 * s, col1 - 12 * s,
-    listH - 16 * s, S.dialogMapOffset or 0, #maps, perMap)
+  local mapScrollX = x + 6 * s
+  local mapScrollW = col1 - 12 * s
+  local mapScrollH = listH - 16 * s
+  local mapRowW = Kit.scrollInnerWidth(mapScrollW)
+  S.dialogMapOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.dialogMapOffset or 0, #maps, perMap)
   local ry = listY + 8 * s
   for i = (S.dialogMapOffset or 0) + 1,
       math.min(#maps, (S.dialogMapOffset or 0) + perMap) do
     local id = maps[i]
-    local rowX = x + 6 * s
-    local rowW = col1 - 12 * s
-    if Kit.row(rowX, ry, rowW, rowH, S.dialogMapId == id, PAL.blue) then
+    if Kit.row(mapScrollX, ry, mapRowW, rowH, S.dialogMapId == id, PAL.blue) then
       S.dialogMapId = id
       S.dialogTextId = nil
       S.dialogPinOffset = 0
     end
-    local textMax = math.max(8, rowW - 12 * s)
-    Kit.pushClip(rowX, ry, rowW, rowH)
+    local textMax = math.max(8, mapRowW - 12 * s)
+    Kit.pushClip(mapScrollX, ry, mapRowW, rowH)
     Kit.text("micro", Kit.ellipsize("micro", id, textMax),
-      rowX + 6 * s, ry + 6 * s, PAL.text)
+      mapScrollX + 6 * s, ry + 6 * s, PAL.text)
     Kit.popClip()
     ry = ry + rowH + 2 * s
   end
-  Kit.scrollbar(x + 6 * s, listY + 8 * s, col1 - 12 * s, listH - 16 * s,
-    S.dialogMapOffset or 0, #maps, perMap)
+  S.dialogMapOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.dialogMapOffset or 0, #maps, perMap)
 
   -- pins / all TEXT_* for map
   local px = x + col1 + 12 * s
@@ -266,19 +268,21 @@ function Dialog.draw(S, x, y, w, h, App)
   end)
   local pinRowH = 34 * s
   local perPin = math.max(1, math.floor((listH - 16 * s) / (pinRowH + 4 * s)))
-  S.dialogPinOffset = Kit.scroll(px + 6 * s, listY + 8 * s, col2 - 12 * s,
-    listH - 16 * s, S.dialogPinOffset or 0, #pins, perPin)
+  local pinScrollX = px + 6 * s
+  local pinScrollW = col2 - 12 * s
+  local pinRowW = Kit.scrollInnerWidth(pinScrollW)
+  S.dialogPinOffset = Kit.scroll(pinScrollX, listY + 8 * s, pinScrollW,
+    mapScrollH, S.dialogPinOffset or 0, #pins, perPin)
   ry = listY + 8 * s
   for i = (S.dialogPinOffset or 0) + 1,
       math.min(#pins, (S.dialogPinOffset or 0) + perPin) do
     local pin = pins[i]
     local on = S.dialogTextId == pin.textId
-    local rowW = col2 - 12 * s
-    if Kit.row(px + 6 * s, ry, rowW, pinRowH, on, PAL.green) then
+    if Kit.row(pinScrollX, ry, pinRowW, pinRowH, on, PAL.green) then
       S.dialogTextId = pin.textId
       -- selection only -- do not clone / invent Hello!
     end
-    local tw = rowW - 12 * s
+    local tw = pinRowW - 12 * s
     Kit.text("micro", Kit.ellipsize("micro", tostring(pin.label or ""), tw),
       px + 12 * s, ry + 2 * s, PAL.text)
     local sub = pin.preview ~= "" and pin.preview or pin.textId
@@ -286,8 +290,8 @@ function Dialog.draw(S, x, y, w, h, App)
       px + 12 * s, ry + 16 * s, PAL.faint)
     ry = ry + pinRowH + 4 * s
   end
-  Kit.scrollbar(px + 6 * s, listY + 8 * s, col2 - 12 * s, listH - 16 * s,
-    S.dialogPinOffset or 0, #pins, perPin)
+  S.dialogPinOffset = Kit.scrollbar(pinScrollX, listY + 8 * s, pinScrollW,
+    mapScrollH, S.dialogPinOffset or 0, #pins, perPin)
   if #pins == 0 then
     Kit.text("micro", "No dialog on this map",
       px + 12 * s, listY + 16 * s, PAL.muted)

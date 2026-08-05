@@ -99,23 +99,25 @@ function Types.draw(S, x, y, w, h, App)
 
   local rowH = 28 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 3 * s)))
-  S.typeListOffset = Kit.scroll(x + 6 * s, listY + 8 * s, listW - 12 * s,
-    listH - 16 * s, S.typeListOffset or 0, #ids, perPage)
-  local ry = listY + 8 * s
+  local scrollX, scrollY = x + 6 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 12 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.typeListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
+    S.typeListOffset or 0, #ids, perPage)
+  local ry = scrollY
   for i = (S.typeListOffset or 0) + 1,
       math.min(#ids, (S.typeListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.types[id] ~= nil
-    local rowW = listW - 12 * s
-    if Kit.row(x + 6 * s, ry, rowW, rowH, S.typeId == id, PAL.yellow) then
+    if Kit.row(scrollX, ry, rowW, rowH, S.typeId == id, PAL.yellow) then
       S.typeId = id
       S.typeMatchOffset = 0
     end
-    Kit.text("mono", Kit.ellipsize("mono", id, rowW - 12 * s),
+    Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 12 * s)),
       x + 12 * s, ry + 6 * s, owned and PAL.text or PAL.muted)
     ry = ry + rowH + 3 * s
   end
-  Kit.scrollbar(x + 6 * s, listY + 8 * s, listW - 12 * s, listH - 16 * s,
+  S.typeListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.typeListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New type",
@@ -151,6 +153,7 @@ function Types.draw(S, x, y, w, h, App)
   local viewH = math.max(40 * s, listH - pad - footerH)
   FormPane.track(S, "typeFormScroll", tostring(id))
   local fy, view = FormPane.begin(S, "typeFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local fh = 28 * s
   local labelW = 110 * s

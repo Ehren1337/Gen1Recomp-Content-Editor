@@ -672,10 +672,11 @@ function Pokemon.draw(S, x, y, w, h, App)
   local thumb = 24 * s
   local listInnerX, listInnerY = x + 8 * s, listY + 8 * s
   local listInnerW, listInnerH = listW - 16 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(listInnerW)
   local perPage = math.max(1, math.floor(listInnerH / (rowH + 4 * s)))
   S.pokemonListOffset = Kit.scroll(listInnerX, listInnerY, listInnerW, listInnerH,
     S.pokemonListOffset or 0, #ids, perPage)
-  Kit.pushClip(listInnerX, listInnerY, listInnerW, listInnerH)
+  Kit.pushClip(listInnerX, listInnerY, rowW, listInnerH)
   local ry = listInnerY
   for i = (S.pokemonListOffset or 0) + 1,
       math.min(#ids, (S.pokemonListOffset or 0) + perPage) do
@@ -683,7 +684,6 @@ function Pokemon.draw(S, x, y, w, h, App)
     local rowMon = S.project.pokemon[id]
       or (S.data.pokemon and S.data.pokemon[id])
     local owned = S.project.pokemon[id] ~= nil
-    local rowW = listInnerW - 6 * s
     if Kit.row(listInnerX, ry, rowW, rowH, S.pokemonId == id, PAL.green) then
       S.pokemonId = id
     end
@@ -751,6 +751,7 @@ function Pokemon.draw(S, x, y, w, h, App)
   FormPane.track(S, "pokemonFormScroll",
     tostring(S.pokemonId) .. "|" .. tostring(S.pokemonSection))
   local fy, view = FormPane.begin(S, "pokemonFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local labelW = 110 * s
   local fh = 30 * s

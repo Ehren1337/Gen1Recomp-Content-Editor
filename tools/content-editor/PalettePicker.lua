@@ -41,7 +41,8 @@ function PalettePicker.keypressed(S, key)
     PalettePicker.close(S)
     return true
   end
-  return true
+  -- Let Kit/textfield handle typing (search). Only Esc is consumed here.
+  return false
 end
 
 -- Compact row control: "Choose" button + swatches. Returns nothing.
@@ -84,11 +85,13 @@ function PalettePicker.draw(S, x, y, w, h)
   local p = S and S.palettePicker
   if not p then return end
   local s = Kit.scale
+  -- Swallow only the click that opened the modal so it does not also hit a
+  -- row / Use button. Do NOT leave Kit.blockClicks on — that disabled search,
+  -- list picks, and Accept inside this same draw.
   if p.opened then
     p.opened = nil
-    Kit.blockClicks = true
+    Kit.mouseClicked = false
   end
-  Kit.blockClicks = true
 
   Theme.col(PAL.bgBot or PAL.card, 0.72)
   love.graphics.rectangle("fill", x, y, w, h)
@@ -142,6 +145,7 @@ function PalettePicker.draw(S, x, y, w, h)
   local listH = py + ph - pad - listY - footerH - 4 * s
   local rowH = 34 * s
   local perPage = math.max(1, math.floor(listH / (rowH + 3 * s)))
+  local innerW = Kit.scrollInnerWidth(listW)
   p.offset = Kit.scroll(cx, listY, listW, listH, p.offset or 0, #list, perPage)
 
   if #list == 0 then
@@ -154,21 +158,21 @@ function PalettePicker.draw(S, x, y, w, h)
     if not focusOk then
       p.focus = list[(p.offset or 0) + 1] or list[1]
     end
-    Kit.pushClip(cx, listY, listW, listH)
+    Kit.pushClip(cx, listY, innerW, listH)
     local ry = listY
     for i = (p.offset or 0) + 1, math.min(#list, (p.offset or 0) + perPage) do
       local id = list[i]
       local on = p.current == id
       local focused = p.focus == id
-      if Kit.hover(cx, ry, listW, rowH) then p.focus = id end
-      if Kit.row(cx, ry, listW, rowH, on or focused, PAL.yellow) then
+      if Kit.hover(cx, ry, innerW, rowH) then p.focus = id end
+      if Kit.row(cx, ry, innerW, rowH, on or focused, PAL.yellow) then
         pick(S, id)
         Kit.popClip()
         return
       end
       Preview.drawNamedSwatches(S, id, cx + 6 * s, ry + (rowH - 14 * s) / 2,
         56 * s, 14 * s)
-      local label = Kit.ellipsize("mono", id, listW - 72 * s)
+      local label = Kit.ellipsize("mono", id, math.max(8, innerW - 72 * s))
       local owned = S.project and S.project.palettes and S.project.palettes[id]
       Kit.text("mono", label, cx + 68 * s, ry + 9 * s,
         on and PAL.heading or (owned and PAL.text or PAL.muted))
@@ -176,7 +180,7 @@ function PalettePicker.draw(S, x, y, w, h)
     end
     Kit.popClip()
   end
-  Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage)
+  p.offset = Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage)
 
   if p.allowClear then
     local by = listY + listH + 4 * s

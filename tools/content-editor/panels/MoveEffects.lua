@@ -220,26 +220,29 @@ function MoveEffects.draw(S, x, y, w, h, App)
 
   local rowH = 34 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 4 * s)))
-  S.moveEffectListOffset = Kit.scroll(x + 8 * s, listY + 8 * s, listW - 16 * s,
-    listH - 16 * s, S.moveEffectListOffset or 0, #ids, perPage)
-  local ry = listY + 8 * s
+  local scrollX, scrollY = x + 8 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 16 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.moveEffectListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
+    S.moveEffectListOffset or 0, #ids, perPage)
+  local ry = scrollY
   for i = (S.moveEffectListOffset or 0) + 1,
       math.min(#ids, (S.moveEffectListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.moveEffects[id] ~= nil
     local rec = select(1, resolveEffect(S, id))
-    local rowW = listW - 16 * s
-    if Kit.row(x + 8 * s, ry, rowW, rowH, S.moveEffectId == id, PAL.yellow) then
+    if Kit.row(scrollX, ry, rowW, rowH, S.moveEffectId == id, PAL.yellow) then
       S.moveEffectId = id
     end
-    Kit.text("mono", Kit.ellipsize("mono", id, rowW - 16 * s),
+    Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 16 * s)),
       x + 16 * s, ry + 2 * s, owned and PAL.text or PAL.muted)
     Kit.text("micro",
-      Kit.ellipsize("micro", summarize(S, id, rec or {}, owned), rowW - 16 * s),
+      Kit.ellipsize("micro", summarize(S, id, rec or {}, owned),
+        math.max(8, rowW - 16 * s)),
       x + 16 * s, ry + 16 * s, PAL.faint)
     ry = ry + rowH + 4 * s
   end
-  Kit.scrollbar(x + 8 * s, listY + 8 * s, listW - 16 * s, listH - 16 * s,
+  S.moveEffectListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.moveEffectListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New effect",
@@ -292,6 +295,7 @@ function MoveEffects.draw(S, x, y, w, h, App)
   FormPane.track(S, "moveEffectFormScroll", tostring(S.moveEffectId))
   local fy, view = FormPane.begin(S, "moveEffectFormScroll",
     viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local labelW = 120 * s
   local fh = 28 * s

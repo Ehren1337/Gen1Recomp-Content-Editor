@@ -187,8 +187,8 @@ return
       dexEntry = {
         heightFt = 1,
         heightIn = 0,
-        kind = "???",
-        text = "",
+        kind = "Something New",
+        text = "_NEWMONDexEntry",
         weight = 10,
       },
       evolutions = {},
@@ -202,7 +202,7 @@ return
       },
       name = "NEWMON",
       spriteBack = "assets/abrab.png",
-      spriteFront = "assets/abrab.png",
+      spriteFront = "assets/new_mon_front.png",
       tmhm = {},
       types = {
         "NORMAL",
@@ -366,7 +366,7 @@ return
         {
                   kind = "show_text",
                   text = "That's PROF.OAK's\
-                                                                                                                        last Pokémon!",
+                                                                                                                                                last Pokémon!",
                 },
         {
                   kind = "jump",
@@ -376,15 +376,12 @@ return
                   kind = "label",
                   name = "_row_25",
                 },
-        {
-                  kind = "show_text",
-                  text = "_OaksLabThoseArePokeBallsText",
-                },
       },
       textId = "TEXT_OAKSLAB_CHARMANDER_POKE_BALL",
     },
   },
   text = {
+    _NEWMONDexEntry = "It's a new mon",
     _OaksLabYouWantCharmanderText = "So! You want the\
 bird POKéMON,\11NEWMON?",
   },

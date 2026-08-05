@@ -80,7 +80,11 @@ function RegList.drawList(S, App, x, y, w, h, title, ids, opts)
   Kit.card(x, listY, listW, listH, 12 * s)
   local rowH = opts.rowH or 30 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 4 * s)))
-  S[offKey] = Kit.scroll(x + 8 * s, listY + 8 * s, listW - 16 * s, listH - 16 * s,
+  local scrollX = x + 8 * s
+  local scrollW = listW - 16 * s
+  local scrollH = listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S[offKey] = Kit.scroll(scrollX, listY + 8 * s, scrollW, scrollH,
     S[offKey] or 0, #ids, perPage)
   local selKey = opts.selKey or "regId"
   local accent = opts.accent or PAL.blue
@@ -88,17 +92,16 @@ function RegList.drawList(S, App, x, y, w, h, title, ids, opts)
   for i = (S[offKey] or 0) + 1, math.min(#ids, (S[offKey] or 0) + perPage) do
     local id = ids[i]
     local owned = opts.isOwned and opts.isOwned(id)
-    local rowW = listW - 16 * s
-    if Kit.row(x + 8 * s, ry, rowW, rowH, S[selKey] == id, accent) then
+    if Kit.row(scrollX, ry, rowW, rowH, S[selKey] == id, accent) then
       S[selKey] = id
       if opts.onSelect then opts.onSelect(id) end
     end
-    Kit.text("mono", Kit.ellipsize("mono", id, rowW - 16 * s),
+    Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 16 * s)),
       x + 16 * s, ry + (rowH - Kit.textHeight("mono")) / 2,
       owned and PAL.text or PAL.muted)
     ry = ry + rowH + 4 * s
   end
-  Kit.scrollbar(x + 8 * s, listY + 8 * s, listW - 16 * s, listH - 16 * s,
+  S[offKey] = Kit.scrollbar(scrollX, listY + 8 * s, scrollW, scrollH,
     S[offKey] or 0, #ids, perPage)
   if opts.footerLabel and Kit.button(x, y + h - 36 * s, listW, 32 * s,
       opts.footerLabel, { kind = "good" }) then
@@ -118,7 +121,8 @@ function RegList.beginForm(S, formX, listY, formW, listH, scrollKey, identity, f
   local viewH = math.max(40 * s, listH - pad - footerH)
   FormPane.track(S, scrollKey, identity)
   local fy, view = FormPane.begin(S, scrollKey, viewX, viewY, viewW, viewH)
-  return fy, view, viewX, viewW
+  -- Return inset width so fields / X buttons sit left of the scrollbar.
+  return fy, view, viewX, view.contentW or viewW
 end
 
 function RegList.modeChips(S, key, modes, x, y, s)

@@ -344,29 +344,31 @@ function Items.draw(S, x, y, w, h, App)
   local rowH = 34 * s
   local thumb = 26 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 4 * s)))
-  S.itemListOffset = Kit.scroll(x + 8 * s, listY + 8 * s, listW - 16 * s,
-    listH - 16 * s, S.itemListOffset or 0, #ids, perPage)
-  local ry = listY + 8 * s
+  local scrollX, scrollY = x + 8 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 16 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.itemListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
+    S.itemListOffset or 0, #ids, perPage)
+  local ry = scrollY
   for i = (S.itemListOffset or 0) + 1,
       math.min(#ids, (S.itemListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.items[id] ~= nil
     local def = owned and S.project.items[id] or S.data.items[id]
-    local rowW = listW - 16 * s
-    if Kit.row(x + 8 * s, ry, rowW, rowH, S.itemId == id, PAL.blue) then
+    if Kit.row(scrollX, ry, rowW, rowH, S.itemId == id, PAL.blue) then
       S.itemId = id
     end
     Preview.drawItemIcon(S, def or { id = id },
       x + 12 * s, ry + (rowH - thumb) / 2, thumb, thumb)
     local textX = x + 16 * s + thumb
-    local tw = math.max(40 * s, rowW - (textX - (x + 8 * s)) - 8 * s)
+    local tw = math.max(40 * s, rowW - (textX - scrollX) - 8 * s)
     Kit.text("mono", Kit.ellipsize("mono", id, tw),
       textX, ry + 2 * s, owned and PAL.text or PAL.muted)
     Kit.text("micro", Kit.ellipsize("micro", effectSummary(S, def or { id = id }), tw),
       textX, ry + 16 * s, PAL.faint)
     ry = ry + rowH + 4 * s
   end
-  Kit.scrollbar(x + 8 * s, listY + 8 * s, listW - 16 * s, listH - 16 * s,
+  S.itemListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.itemListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New item",
@@ -411,6 +413,7 @@ function Items.draw(S, x, y, w, h, App)
   local viewH = math.max(40 * s, listH - pad - footerH)
   FormPane.track(S, "itemFormScroll", tostring(S.itemId))
   local fy, view = FormPane.begin(S, "itemFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local cardX, cardListY, cardListH = formX, listY, listH
   formX, formW = viewX, viewW  -- form body uses these as the clipped origin

@@ -148,22 +148,24 @@ function Moves.draw(S, x, y, w, h, App)
   end
   local rowH = 30 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 4 * s)))
-  S.moveListOffset = Kit.scroll(x + 8 * s, listY + 8 * s, listW - 16 * s,
-    listH - 16 * s, S.moveListOffset or 0, #ids, perPage)
-  local ry = listY + 8 * s
+  local scrollX, scrollY = x + 8 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 16 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.moveListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
+    S.moveListOffset or 0, #ids, perPage)
+  local ry = scrollY
   for i = (S.moveListOffset or 0) + 1,
       math.min(#ids, (S.moveListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.moves[id] ~= nil
-    local rowW = listW - 16 * s
-    if Kit.row(x + 8 * s, ry, rowW, rowH, S.moveId == id, PAL.yellow) then
+    if Kit.row(scrollX, ry, rowW, rowH, S.moveId == id, PAL.yellow) then
       S.moveId = id
     end
-    Kit.text("mono", Kit.ellipsize("mono", id, rowW - 16 * s),
+    Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 16 * s)),
       x + 16 * s, ry + 7 * s, owned and PAL.text or PAL.muted)
     ry = ry + rowH + 4 * s
   end
-  Kit.scrollbar(x + 8 * s, listY + 8 * s, listW - 16 * s, listH - 16 * s,
+  S.moveListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.moveListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New move",
@@ -206,6 +208,7 @@ function Moves.draw(S, x, y, w, h, App)
   local viewH = math.max(40 * s, listH - pad - footerH)
   FormPane.track(S, "moveFormScroll", tostring(S.moveId))
   local fy, view = FormPane.begin(S, "moveFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = fy
   local labelW = 120 * s
   local fh = 30 * s

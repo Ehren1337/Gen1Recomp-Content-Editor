@@ -1242,6 +1242,7 @@ local function drawTilesetPicker(S, map, mutate, App, x, y, w, h)
   local rowH = 32 * s
   local thumb = 24 * s
   local perPage = math.max(1, math.floor(listH / (rowH + 3 * s)))
+  local innerW = Kit.scrollInnerWidth(listW)
   p.offset = Kit.scroll(cx, listY, listW, listH, p.offset or 0, #list, perPage)
 
   if #list == 0 then
@@ -1254,15 +1255,15 @@ local function drawTilesetPicker(S, map, mutate, App, x, y, w, h)
     if not focusOk then
       p.focus = list[(p.offset or 0) + 1] or list[1]
     end
-    Kit.pushClip(cx, listY, listW, listH)
+    Kit.pushClip(cx, listY, innerW, listH)
     local ry = listY
     for i = (p.offset or 0) + 1, math.min(#list, (p.offset or 0) + perPage) do
       local id = list[i]
       local on = map.tileset == id
       local focused = p.focus == id
       local modded = S.project.tilesets and S.project.tilesets[id] ~= nil
-      if Kit.hover(cx, ry, listW, rowH) then p.focus = id end
-      if Kit.row(cx, ry, listW, rowH, on or focused, PAL.blue) then
+      if Kit.hover(cx, ry, innerW, rowH) then p.focus = id end
+      if Kit.row(cx, ry, innerW, rowH, on or focused, PAL.blue) then
         applyMapTileset(S, map, id, App, mutate)
         S.mapTilesetPicker = nil
         Kit.blur()
@@ -1270,14 +1271,14 @@ local function drawTilesetPicker(S, map, mutate, App, x, y, w, h)
         return
       end
       drawBlockThumb(S, id, 1, cx + 4 * s, ry + (rowH - thumb) / 2, thumb)
-      local label = Kit.ellipsize("mono", id, listW - thumb - 16 * s)
+      local label = Kit.ellipsize("mono", id, math.max(8, innerW - thumb - 16 * s))
       Kit.text("mono", label, cx + 4 * s + thumb + 6 * s, ry + 8 * s,
         on and PAL.heading or (modded and PAL.text or PAL.muted))
       ry = ry + rowH + 3 * s
     end
     Kit.popClip()
   end
-  Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage)
+  p.offset = Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage)
 
   local focusId = p.focus or map.tileset or list[1]
   local by = listY + listH + 6 * s
@@ -1624,9 +1625,10 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   local gridH = math.max(40 * s, dy + dh - pad - footerH - 6 * s - gridY)
   local gridX = dx + pad
   local gridW = dw - 2 * pad
+  local innerW = Kit.scrollInnerWidth(gridW)
   local thumb = 36 * s
   local gap = 3 * s
-  local cols = math.max(1, math.floor(gridW / (thumb + gap)))
+  local cols = math.max(1, math.floor(innerW / (thumb + gap)))
   local rows = math.max(1, math.floor(gridH / (thumb + gap)))
   local perPage = cols * rows
   local maxB = blockCount(S, active)
@@ -1636,7 +1638,7 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   S.mapBlockOffset = Kit.scroll(gridX, gridY, gridW, gridH,
     S.mapBlockOffset or 0, maxB, perPage, cols)
   local start = S.mapBlockOffset or 0
-  Kit.pushClip(gridX, gridY, gridW, gridH)
+  Kit.pushClip(gridX, gridY, innerW, gridH)
   for n = 0, perPage - 1 do
     local i = start + n
     if i >= maxB then break end
@@ -1658,7 +1660,8 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     end
   end
   Kit.popClip()
-  Kit.scrollbar(gridX, gridY, gridW, gridH, S.mapBlockOffset or 0, maxB, perPage)
+  S.mapBlockOffset = Kit.scrollbar(gridX, gridY, gridW, gridH,
+    S.mapBlockOffset or 0, maxB, perPage)
 
   local fy = dy + dh - pad - footerH + 2 * s
   local fw = math.floor((gridW - 12 * s) / 3)
@@ -2650,35 +2653,37 @@ function Maps.draw(S, x, y, w, h, App)
   end
   local rowH = 28 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 3 * s)))
-  S.mapListOffset = Kit.scroll(x + 6 * s, listY + 8 * s, listW - 12 * s,
-    listH - 16 * s, S.mapListOffset or 0, #ids, perPage)
+  local mapScrollX = x + 6 * s
+  local mapScrollW = listW - 12 * s
+  local mapScrollH = listH - 16 * s
+  local mapRowW = Kit.scrollInnerWidth(mapScrollW)
+  S.mapListOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.mapListOffset or 0, #ids, perPage)
   local ry = listY + 8 * s
   for i = (S.mapListOffset or 0) + 1, math.min(#ids, (S.mapListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.maps[id] ~= nil
-    local rowX = x + 6 * s
-    local rowW = listW - 12 * s
-    if Kit.row(rowX, ry, rowW, rowH, S.mapId == id, PAL.green) then
+    if Kit.row(mapScrollX, ry, mapRowW, rowH, S.mapId == id, PAL.green) then
       S.mapId = id
       S._mapCenteredFor = nil
       S._mapPaletteFor = nil
       S.mapObjectIndex, S.mapWarpIndex, S.mapSignIndex = 1, 1, 1
     end
-    local textX = rowX + 6 * s
-    local textMax = math.max(8, rowW - 12 * s)
+    local textX = mapScrollX + 6 * s
+    local textMax = math.max(8, mapRowW - 12 * s)
     local label = Kit.ellipsize("mono", id, textMax)
     if Kit.textWidth("mono", label) > textMax + 0.5 then
       local unit = math.max(1, Kit.textWidth("mono", "W"))
       local n = math.max(0, math.floor(textMax / unit) - 3)
       label = (n > 0 and id:sub(1, n) or "") .. "..."
     end
-    Kit.pushClip(rowX, ry, rowW, rowH)
+    Kit.pushClip(mapScrollX, ry, mapRowW, rowH)
     Kit.text("mono", label, textX, ry + 6 * s, owned and PAL.text or PAL.muted)
     Kit.popClip()
     ry = ry + rowH + 3 * s
   end
-  Kit.scrollbar(x + 6 * s, listY + 8 * s, listW - 12 * s, listH - 16 * s,
-    S.mapListOffset or 0, #ids, perPage)
+  S.mapListOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.mapListOffset or 0, #ids, perPage)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New map", { kind = "good" }) then
     local nid = "NEW_MAP"
@@ -2842,6 +2847,7 @@ function Maps.draw(S, x, y, w, h, App)
   FormPane.track(S, "mapFormScroll",
     tostring(S.mapId) .. "|" .. tostring(S.mapSection))
   local contentY, view = FormPane.begin(S, "mapFormScroll", viewX, viewY, viewW, viewH)
+  viewW = view.contentW or viewW
   local contentTop = contentY
   local listBottom = contentY + 4000 * s
   local fh = 26 * s

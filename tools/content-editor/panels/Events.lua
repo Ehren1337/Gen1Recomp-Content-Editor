@@ -524,27 +524,29 @@ local function drawScripts(S, x, y, w, h, App)
   end
   local mapRowH = 26 * s
   local perMap = math.max(1, math.floor((listH - 16 * s) / (mapRowH + 2 * s)))
-  S.eventMapOffset = Kit.scroll(x + 6 * s, listY + 8 * s, mapColW - 12 * s,
-    listH - 16 * s, S.eventMapOffset or 0, #maps, perMap)
+  local mapScrollX = x + 6 * s
+  local mapScrollW = mapColW - 12 * s
+  local mapScrollH = listH - 16 * s
+  local mapRowW = Kit.scrollInnerWidth(mapScrollW)
+  S.eventMapOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.eventMapOffset or 0, #maps, perMap)
   local ry = listY + 8 * s
   for i = (S.eventMapOffset or 0) + 1,
       math.min(#maps, (S.eventMapOffset or 0) + perMap) do
     local id = maps[i]
-    local rowX = x + 6 * s
-    local rowW = mapColW - 12 * s
-    if Kit.row(rowX, ry, rowW, mapRowH, S.eventMapId == id, PAL.blue) then
+    if Kit.row(mapScrollX, ry, mapRowW, mapRowH, S.eventMapId == id, PAL.blue) then
       S.eventMapId = id
       S.eventScriptKey = nil
       S.eventScriptOffset = 0
     end
-    Kit.pushClip(rowX, ry, rowW, mapRowH)
-    Kit.text("micro", fitIn("micro", id, math.max(8, rowW - 12 * s)),
-      rowX + 6 * s, ry + 6 * s, PAL.text)
+    Kit.pushClip(mapScrollX, ry, mapRowW, mapRowH)
+    Kit.text("micro", fitIn("micro", id, math.max(8, mapRowW - 12 * s)),
+      mapScrollX + 6 * s, ry + 6 * s, PAL.text)
     Kit.popClip()
     ry = ry + mapRowH + 2 * s
   end
-  Kit.scrollbar(x + 6 * s, listY + 8 * s, mapColW - 12 * s, listH - 16 * s,
-    S.eventMapOffset or 0, #maps, perMap)
+  S.eventMapOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.eventMapOffset or 0, #maps, perMap)
 
   -- Object / TEXT_* events for the map
   local pinX = x + mapColW + 10 * s
@@ -564,31 +566,35 @@ local function drawScripts(S, x, y, w, h, App)
   local rowH = 34 * s
   local footerBtns = 70 * s
   local perPage = math.max(1, math.floor((listH - footerBtns - 16 * s) / (rowH + 3 * s)))
-  S.eventScriptOffset = Kit.scroll(pinX + 6 * s, listY + 8 * s, listW - 12 * s,
-    listH - footerBtns - 16 * s, S.eventScriptOffset or 0, #entries, perPage)
+  local pinScrollX = pinX + 6 * s
+  local pinScrollW = listW - 12 * s
+  local pinScrollH = listH - footerBtns - 16 * s
+  local pinRowW = Kit.scrollInnerWidth(pinScrollW)
+  S.eventScriptOffset = Kit.scroll(pinScrollX, listY + 8 * s, pinScrollW,
+    pinScrollH, S.eventScriptOffset or 0, #entries, perPage)
   ry = listY + 8 * s
   for i = (S.eventScriptOffset or 0) + 1,
       math.min(#entries, (S.eventScriptOffset or 0) + perPage) do
     local e = entries[i]
-    local rowX = pinX + 6 * s
-    local rowW = listW - 12 * s
-    if Kit.row(rowX, ry, rowW, rowH, S.eventScriptKey == e.key, PAL.yellow) then
+    if Kit.row(pinScrollX, ry, pinRowW, rowH, S.eventScriptKey == e.key, PAL.yellow) then
       S.eventScriptKey = e.key
       -- Selection only — do not invent a Hello! stub.
     end
     local badge = TalkIndex.sourceLabel(e.source)
     local badgeW = Kit.textWidth("micro", badge) + 10 * s
-    Kit.pushClip(rowX, ry, rowW, rowH)
-    Kit.text("micro", fitIn("micro", e.textId, math.max(8, rowW - badgeW - 16 * s)),
-      rowX + 6 * s, ry + 4 * s, PAL.text)
-    Kit.text("micro", fitIn("micro", e.label, math.max(8, rowW - 12 * s)),
-      rowX + 6 * s, ry + 18 * s, PAL.faint)
-    Kit.text("micro", badge, rowX + rowW - badgeW, ry + 4 * s, sourceColor(e.source))
+    Kit.pushClip(pinScrollX, ry, pinRowW, rowH)
+    Kit.text("micro",
+      fitIn("micro", e.textId, math.max(8, pinRowW - badgeW - 16 * s)),
+      pinScrollX + 6 * s, ry + 4 * s, PAL.text)
+    Kit.text("micro", fitIn("micro", e.label, math.max(8, pinRowW - 12 * s)),
+      pinScrollX + 6 * s, ry + 18 * s, PAL.faint)
+    Kit.text("micro", badge, pinScrollX + pinRowW - badgeW, ry + 4 * s,
+      sourceColor(e.source))
     Kit.popClip()
     ry = ry + rowH + 3 * s
   end
-  Kit.scrollbar(pinX + 6 * s, listY + 8 * s, listW - 12 * s,
-    listH - footerBtns - 16 * s, S.eventScriptOffset or 0, #entries, perPage)
+  S.eventScriptOffset = Kit.scrollbar(pinScrollX, listY + 8 * s, pinScrollW,
+    pinScrollH, S.eventScriptOffset or 0, #entries, perPage)
 
   if Kit.button(pinX + 8 * s, listY + listH - 70 * s, listW - 16 * s, 28 * s,
       "From Dialog selection", { kind = "accent" }) then
@@ -654,6 +660,7 @@ local function drawScripts(S, x, y, w, h, App)
   local contentTop = fy
   local fh = 28 * s
   local kindW = 150 * s
+  local innerW = view.contentW or view.w
 
   if #steps == 0 then
     Kit.text("small", "No script rows for this object.", viewX, fy, PAL.muted)
@@ -665,23 +672,23 @@ local function drawScripts(S, x, y, w, h, App)
     if readOnly then
       Kit.text("micro", stepLabel(kind), viewX, fy + 8 * s, PAL.caption)
       if kind == "raw" then
-        Kit.text("micro", fitIn("micro", step.note or "", viewW - kindW - 8 * s),
+        Kit.text("micro", fitIn("micro", step.note or "", innerW - kindW - 8 * s),
           viewX + kindW + 8 * s, fy + 8 * s, PAL.muted)
       elseif kind == "show_image" then
         local line = tostring(step.path or step.image or "")
         if step.text and step.text ~= "" then
           line = line .. "  ·  " .. tostring(step.text)
         end
-        Kit.text("micro", fitIn("micro", line, viewW - kindW - 8 * s),
+        Kit.text("micro", fitIn("micro", line, innerW - kindW - 8 * s),
           viewX + kindW + 8 * s, fy + 8 * s, PAL.text)
       elseif kind == "show_text" or kind == "ask" then
         Kit.text("micro",
-          previewDialogText(S, step.text, viewW - kindW - 8 * s),
+          previewDialogText(S, step.text, innerW - kindW - 8 * s),
           viewX + kindW + 8 * s, fy + 8 * s, PAL.text)
       elseif kind == "label" or kind == "jump" or kind == "jump_if_yes"
           or kind == "jump_if_no" then
         Kit.text("micro", fitIn("micro", step.name or step.label or "",
-            viewW - kindW - 8 * s),
+            innerW - kindW - 8 * s),
           viewX + kindW + 8 * s, fy + 8 * s, PAL.text)
       elseif kind == "set_flag" or kind == "clear_flag"
           or kind == "check_flag_skip" or kind == "check_flag_missing" then
@@ -718,9 +725,9 @@ local function drawScripts(S, x, y, w, h, App)
         App.markDirty()
       end
       local rowsN = drawStepFields(S, App, step, i, step.kind or kind,
-        viewX + kindW + 8 * s, fy, viewW - kindW - 48 * s, fh, s)
+        viewX + kindW + 8 * s, fy, innerW - kindW - 48 * s, fh, s)
       local blockH = math.max(1, rowsN) * (fh + 4 * s)
-      if Kit.button(viewX + viewW - 32 * s, fy, 28 * s, fh, "X",
+      if Kit.button(viewX + innerW - 32 * s, fy, 28 * s, fh, "X",
           { kind = "danger", font = "small" }) then
         table.remove(script.steps, i)
         App.markDirty()

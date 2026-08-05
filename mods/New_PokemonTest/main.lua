@@ -9744,8 +9744,8 @@ return function(mod)
     dexEntry = {
       heightFt = 1,
       heightIn = 0,
-      kind = "???",
-      text = "",
+      kind = "Something New",
+      text = "_NEWMONDexEntry",
       weight = 10,
     },
     evolutions = {},
@@ -9759,7 +9759,7 @@ return function(mod)
     },
     name = "NEWMON",
     spriteBack = mod.path .. "/assets/abrab.png",
-    spriteFront = mod.path .. "/assets/abrab.png",
+    spriteFront = mod.path .. "/assets/new_mon_front.png",
     tmhm = {},
     types = {
       "NORMAL",
@@ -9910,6 +9910,7 @@ return function(mod)
     width = 5,
   })
 
+  mod.content.text:override("_NEWMONDexEntry", "It's a new mon")
   mod.content.text:override("_OaksLabYouWantCharmanderText", "So! You want the\
 bird POKéMON,\11NEWMON?")
 
@@ -10022,7 +10023,7 @@ bird POKéMON,\11NEWMON?")
         {
                   "show_text",
                   "That's PROF.OAK's\
-                                                                                                                                  last Pokémon!",
+                                                                                                                                                          last Pokémon!",
                 },
         {
                   "jump",
@@ -10031,10 +10032,6 @@ bird POKéMON,\11NEWMON?")
         {
                   "label",
                   "_row_25",
-                },
-        {
-                  "show_text",
-                  "_OaksLabThoseArePokeBallsText",
                 },
         {
                   "label",

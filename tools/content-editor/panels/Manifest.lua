@@ -190,16 +190,18 @@ function Manifest.draw(S, x, y, w, h, App)
 
   local rowH = 30 * s
   local perPage = math.max(1, math.floor((listH - 16 * s) / rowH))
-  S.manifestListOffset = Kit.scroll(x + 4 * s, listY + 8 * s,
-    listW - 8 * s, listH - 16 * s,
+  local scrollX, scrollY = x + 4 * s, listY + 8 * s
+  local scrollW, scrollH = listW - 8 * s, listH - 16 * s
+  local rowW = Kit.scrollInnerWidth(scrollW)
+  S.manifestListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.manifestListOffset or 0, #mods, perPage)
   for i = 1, perPage do
     local idx = (S.manifestListOffset or 0) + i
     local mid = mods[idx]
     if not mid then break end
-    local ry = listY + 8 * s + (i - 1) * rowH
+    local ry = scrollY + (i - 1) * rowH
     local on = S.browseModId == mid
-    if Kit.row(x + 6 * s, ry, listW - 12 * s, rowH - 4 * s, on, PAL.blue) then
+    if Kit.row(x + 6 * s, ry, rowW - 2 * s, rowH - 4 * s, on, PAL.blue) then
       if S.manifestDirty and S._manifestFor == S.browseModId then
         S.status = "Unsaved manifest — Write or Reload before switching"
       else
@@ -207,9 +209,11 @@ function Manifest.draw(S, x, y, w, h, App)
         S._manifestFor = nil
       end
     end
-    Kit.text("small", Kit.ellipsize("small", mid, listW - 28 * s),
+    Kit.text("small", Kit.ellipsize("small", mid, math.max(8, rowW - 20 * s)),
       x + 14 * s, ry + 6 * s, on and PAL.heading or PAL.text)
   end
+  S.manifestListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
+    S.manifestListOffset or 0, #mods, perPage)
 
   if not S.browseModId or not S.manifestDraft then
     Kit.emptyBox(mainX, listY, mainW, listH, "Select a mod under mods/")
@@ -250,7 +254,7 @@ function Manifest.draw(S, x, y, w, h, App)
   local py, view = FormPane.begin(S, "manifestScroll",
     mainX + 10 * s, formY + 10 * s, mainW - 20 * s, formH - 20 * s)
   local px = mainX + 10 * s
-  local propW = mainW - 20 * s
+  local propW = view.contentW or (mainW - 20 * s)
   local fh = 28 * s
   local labelW = 120 * s
 

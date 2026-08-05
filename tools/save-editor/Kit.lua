@@ -82,7 +82,10 @@ function Kit.beginFrame(mx, my, clicked, wheel)
     down = love.mouse.isDown(1) and true or false
   end
   Kit.mouseDown = down
-  if not down then Kit._drag = nil end
+  if not down then
+    Kit._drag = nil
+    Kit._sbDrag = nil
+  end
   Kit.resetClip()
   if love and love.timer and love.timer.getTime then
     Kit.time = love.timer.getTime()
@@ -822,27 +825,94 @@ end
 --   * the notch is consumed, so two stacked lists cannot both eat it,
 --   * Kit.blockClicks shields it exactly as it shields Kit.press, or the
 --     panel under an open species picker would scroll through the modal.
-local SCROLL_ROWS = 3
+local SCROLL_ROWS = 5
+local SB_WIDTH = 12
+-- Hit target matches the painted bar so list rows/drag still work beside it.
+local SB_HIT = 12
 
--- `step` is optional and exists for grids: a 4-column dex page must move in
--- multiples of 4 or the columns shear.  Lists leave it nil and keep the old
--- behaviour bit for bit (wheel notch = 3 rows, drag = 1 row per row height).
+local function sbKey(x, y, w, h)
+  return string.format("sb:%.0f:%.0f:%.0f:%.0f", x, y, w, h)
+end
+
+-- Pixel width of the scrollbar gutter. Callers should lay out rows/buttons
+-- in (w - Kit.scrollbarSize()) so the bar does not cover UI.
+function Kit.scrollbarSize()
+  return math.max(8, SB_WIDTH * (Kit.scale or 1))
+end
+
+function Kit.scrollInnerWidth(w)
+  return math.max(0, (w or 0) - Kit.scrollbarSize())
+end
+
+-- kind: "rows" (integer offset) or "pixels". visible/content size the thumb.
+-- Returns offset, consumedClick (true when this frame handled bar input).
+local function applyScrollbarDrag(x, y, w, h, offset, maxOffset, visible, content, kind)
+  if maxOffset <= 0 or h <= 0 or visible <= 0 or content <= 0 then
+    return offset, false
+  end
+  local s = Kit.scale
+  local hitW = math.max(SB_WIDTH, SB_HIT) * s
+  local hitX = x + w - hitW
+  local th = math.max(28 * s, h * visible / content)
+  local travel = math.max(1, h - th)
+  local ty = y + travel * (offset / math.max(1, maxOffset))
+  local key = sbKey(x, y, w, h)
+  local d = Kit._sbDrag
+
+  if not Kit.mouseDown then
+    if d and d.key == key then Kit._sbDrag = nil end
+    return offset, false
+  end
+
+  if d and d.key == key and d.mode == "thumb" then
+    local rel = Theme.clamp(Kit.mouseY - d.grab, 0, travel)
+    offset = Theme.clamp(rel / travel * maxOffset, 0, maxOffset)
+    if kind == "rows" then
+      offset = Theme.clamp(math.floor(offset + 0.5), 0, maxOffset)
+    end
+    d.offset = offset
+    d.kind = kind
+    return offset, true
+  end
+
+  if Kit.blockClicks then return offset, false end
+  if Kit.mouseClicked and Kit.hit(hitX, y, hitW, h) then
+    if Kit.hit(hitX, ty, hitW, th) then
+      Kit._sbDrag = {
+        key = key, mode = "thumb", grab = Kit.mouseY - ty, kind = kind,
+      }
+      return offset, true
+    end
+    -- Track click: page toward the pointer (nudge up/down), not jump-to.
+    -- Jump-to made it easy to overshoot when trying to scroll back up.
+    local page = kind == "rows" and math.max(1, visible) or math.max(1, h)
+    if Kit.mouseY < ty then
+      offset = Theme.clamp(offset - page, 0, maxOffset)
+    else
+      offset = Theme.clamp(offset + page, 0, maxOffset)
+    end
+    return offset, true
+  end
+  return offset, false
+end
+
 function Kit.scroll(x, y, w, h, offset, total, perPage, step)
   local maxOffset = math.max(0, (total or 0) - (perPage or 0))
   offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local onBar
+  offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
+    perPage or 0, total or 0, "rows")
   if Kit.blockClicks then return offset end
 
-  -- Touch drag (#715): a phone has no wheel and the pagers are small
-  -- targets, so a held pointer dragging vertically over the list body
-  -- scrolls it.  The drag is keyed to the rect it started in and follows the
-  -- pointer even once it leaves, like every native scroll view; the press
-  -- frame itself still dispatches as a click, which is the pre-existing
-  -- press-on-down contract, so a tap keeps selecting rows.
+  -- Touch / click-drag on the list body (not while dragging the thumb).
   local dragStep = math.max(1, step or 1)
-  if Kit.mouseDown and maxOffset > 0 and h > 0 and (perPage or 0) > 0 then
+  if not onBar and Kit.mouseDown and maxOffset > 0 and h > 0
+      and (perPage or 0) > 0 then
+    local hitW = math.max(SB_WIDTH, SB_HIT) * Kit.scale
+    local barHit = Kit.hit(x + w - hitW, y, hitW, h)
     local key = math.floor(x) .. ":" .. math.floor(y)
     local d = Kit._drag
-    if not d and Kit.hit(x, y, w, h) then
+    if not d and Kit.hit(x, y, w, h) and not barHit then
       Kit._drag = { key = key, startY = Kit.mouseY, base = offset }
     elseif d and d.key == key then
       local visRows = math.max(1, math.floor(perPage / dragStep))
@@ -852,10 +922,9 @@ function Kit.scroll(x, y, w, h, offset, total, perPage, step)
     end
   end
 
+  -- Wheel still works even if the pointer is over the scrollbar.
   if (Kit.wheelY or 0) == 0 then return offset end
   if not Kit.hit(x, y, w, h) then return offset end
-  -- LOVE reports wheel-up as positive y; up moves the window toward the top
-  -- of the list, which is a smaller offset.
   local rows = step or math.max(1, math.min(SCROLL_ROWS, perPage or SCROLL_ROWS))
   local notch = (Kit.wheelY > 0) and -rows or rows
   Kit.wheelY = 0
@@ -872,12 +941,17 @@ end
 function Kit.scrollPixels(x, y, w, h, offset, contentH)
   local maxOffset = math.max(0, (contentH or 0) - math.max(0, h))
   offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local onBar
+  offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
+    h, contentH or 0, "pixels")
   if Kit.blockClicks then return offset end
 
-  if Kit.mouseDown and maxOffset > 0 and h > 0 then
+  if not onBar and Kit.mouseDown and maxOffset > 0 and h > 0 then
+    local hitW = math.max(SB_WIDTH, SB_HIT) * Kit.scale
+    local barHit = Kit.hit(x + w - hitW, y, hitW, h)
     local key = "px:" .. math.floor(x) .. ":" .. math.floor(y)
     local d = Kit._drag
-    if not d and Kit.hit(x, y, w, h) then
+    if not d and Kit.hit(x, y, w, h) and not barHit then
       Kit._drag = { key = key, startY = Kit.mouseY, base = offset }
     elseif d and d.key == key then
       offset = Theme.clamp(d.base + (d.startY - Kit.mouseY), 0, maxOffset)
@@ -886,29 +960,73 @@ function Kit.scrollPixels(x, y, w, h, offset, contentH)
 
   if (Kit.wheelY or 0) == 0 then return offset end
   if not Kit.hit(x, y, w, h) then return offset end
-  local notch = 48 * Kit.scale
+  local notch = 64 * Kit.scale
   local delta = (Kit.wheelY > 0) and -notch or notch
   Kit.wheelY = 0
   return Theme.clamp(offset + delta, 0, maxOffset)
 end
 
--- Thin overlay scrollbar along the right edge of a list body, drawn after
--- the rows so it stays visible.  Pure indicator (the drag above and the
--- pager are the controls): on a phone the old layout looked "stuck" because
--- nothing said the list continued past the fold (#715).
+-- Paint a thicker scrollbar for a row-offset list. Interaction is handled in
+-- Kit.scroll (same rect); this keeps the thumb visible and easy to grab.
+-- Returns offset unchanged (or from an active drag) for optional assignment.
 function Kit.scrollbar(x, y, w, h, offset, total, perPage)
-  if not G then return end
   total, perPage = total or 0, perPage or 0
-  if total <= perPage or h <= 0 or perPage <= 0 then return end
-  local bw = 3 * Kit.scale
+  local maxOffset = math.max(0, total - perPage)
+  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  if total <= perPage or h <= 0 or perPage <= 0 then
+    return offset
+  end
+  local sb = Kit._sbDrag
+  if sb and sb.key == sbKey(x, y, w, h) and type(sb.offset) == "number" then
+    offset = Theme.clamp(sb.offset, 0, maxOffset)
+  end
+
+  local s = Kit.scale
+  local bw = math.max(8, SB_WIDTH * s)
+  local hitW = math.max(bw, SB_HIT * s)
   local bx = x + w - bw
-  Theme.col(PAL.cardBorder, 0.22)
-  G.rectangle("fill", bx, y, bw, h, bw / 2, bw / 2)
-  local maxOffset = total - perPage
-  local th = math.max(18 * Kit.scale, h * perPage / total)
-  local ty = y + (h - th) * (Theme.clamp(offset or 0, 0, maxOffset) / maxOffset)
-  Theme.col(PAL.blue, 0.55)
-  G.rectangle("fill", bx, ty, bw, th, bw / 2, bw / 2)
+  local hitX = x + w - hitW
+  local th = math.max(28 * s, h * perPage / total)
+  local travel = math.max(1, h - th)
+  local ty = y + travel * (offset / math.max(1, maxOffset))
+  if G then
+    Theme.col(PAL.cardBorder, 0.35)
+    G.rectangle("fill", bx, y, bw, h, bw / 2, bw / 2)
+    local hot = Kit.hover(hitX, ty, hitW, th)
+      or (sb and sb.key == sbKey(x, y, w, h))
+    Theme.col(PAL.blue, hot and 0.9 or 0.7)
+    G.rectangle("fill", bx, ty, bw, th, bw / 2, bw / 2)
+  end
+  return offset
+end
+
+function Kit.scrollbarPixels(x, y, w, h, offset, contentH)
+  contentH = contentH or 0
+  local maxOffset = math.max(0, contentH - math.max(0, h))
+  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  if contentH <= h + 1 or h <= 0 then return offset end
+  local sb = Kit._sbDrag
+  if sb and sb.key == sbKey(x, y, w, h) and type(sb.offset) == "number" then
+    offset = Theme.clamp(sb.offset, 0, maxOffset)
+  end
+
+  local s = Kit.scale
+  local bw = math.max(8, SB_WIDTH * s)
+  local hitW = math.max(bw, SB_HIT * s)
+  local bx = x + w - bw
+  local hitX = x + w - hitW
+  local th = math.max(28 * s, h * h / contentH)
+  local travel = math.max(1, h - th)
+  local ty = y + travel * (offset / math.max(1, maxOffset))
+  if G then
+    Theme.col(PAL.cardBorder, 0.35)
+    G.rectangle("fill", bx, y, bw, h, bw / 2, bw / 2)
+    local hot = Kit.hover(hitX, ty, hitW, th)
+      or (sb and sb.key == sbKey(x, y, w, h))
+    Theme.col(PAL.blue, hot and 0.9 or 0.7)
+    G.rectangle("fill", bx, ty, bw, th, bw / 2, bw / 2)
+  end
+  return offset
 end
 
 -- Clip drawing to a rect (list bodies, scrolled cards).  A stack since #715:
