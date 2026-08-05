@@ -623,8 +623,7 @@ local function tabHScrollbar(x, y, w, h, offset, contentW, viewW, hitY, hitH)
     step = math.max(40 * s, 64 * s),
     page = math.max(40 * s, (viewW or w) * 0.6),
   }
-  offset = Kit.rememberScroll("tabBarH", x, hitY or y, w, hitH or h,
-    offset, maxOff, keyOpts)
+  offset = Kit.getScrollOffset("tabBarH", offset, maxOff)
   if maxOff <= 0 or w <= 0 or h <= 0 then return 0 end
   local thumbW = math.max(28 * s, w * viewW / math.max(1, contentW))
   local travel = math.max(1, w - thumbW)
@@ -651,7 +650,6 @@ local function tabHScrollbar(x, y, w, h, offset, contentW, viewW, hitY, hitH)
     end
   end
 
-  keyOpts.updateOnly = true
   offset = Kit.rememberScroll("tabBarH", x, hitY or y, w, hitH or h,
     offset, maxOff, keyOpts)
   tx = x + travel * (offset / math.max(1, maxOff))

@@ -87,13 +87,25 @@ local function isLegacyAppDataLuaJit(path)
     and lower:find("/tools/luajit/", 1, true)
 end
 
+-- Source-tree builds (e.g. C:\luajit\src\luajit.exe) trip Defender
+-- Behavior:Win32/SuspLua.A. Prefer winget / Program Files installs.
+local function isSourceTreeLuaJit(path)
+  local lower = tostring(path or ""):lower():gsub("\\", "/")
+  return lower:find("/src/luajit%.exe", 1, false) ~= nil
+    or lower:find("/src/luajit$", 1, false) ~= nil
+end
+
+local function isBadLuaJitPath(path)
+  return isLegacyAppDataLuaJit(path) or isSourceTreeLuaJit(path)
+end
+
 local function whichOnPath()
   local cmd = isWindows() and "where luajit 2>nul" or "command -v luajit 2>/dev/null"
   local ok, out = runShell(cmd)
   if not ok then return nil end
   for line in (out or ""):gmatch("[^\r\n]+") do
     line = line:match("^%s*(.-)%s*$")
-    if line and line ~= "" and fileExists(line) and not isLegacyAppDataLuaJit(line) then
+    if line and line ~= "" and fileExists(line) and not isBadLuaJitPath(line) then
       return line
     end
   end
@@ -113,12 +125,13 @@ end
 
 local function works(exe, libDir)
   if not exe or not fileExists(exe) then return false end
+  -- -joff: Defender Behavior:Win32/SuspLua.A flags LuaJIT's JIT; the
+  -- interpreter probe is enough to prove the binary runs.
   local cmd
   if isWindows() then
-    local dir = exe:match("^(.*)[/\\][^/\\]+$") or "."
-    cmd = string.format('cmd /C "cd /D "%s" && luajit.exe -e print(1)"', dir)
+    cmd = string.format('cmd /C ""%s" -joff -e print(1)"', exe)
   else
-    cmd = string.format('%s"%s" -e "print(1)"',
+    cmd = string.format('%s"%s" -joff -e "print(1)"',
       linuxLuaJitEnvPrefix(libDir), exe)
   end
   local ok, out = runShell(cmd)
@@ -171,19 +184,23 @@ function LuaJitTool.find()
   scrubLegacyAppDataLuaJit()
 
   local env = os.getenv("MODKIT_LUAJIT")
-  if env and env ~= "" and fileExists(env) and not isLegacyAppDataLuaJit(env)
+  if env and env ~= "" and fileExists(env) and not isBadLuaJitPath(env)
       and works(env, nil) then
     return env, nil
   end
 
-  local onPath = whichOnPath()
-  if onPath and works(onPath, nil) then return onPath, nil end
-
+  -- On Windows prefer winget / Program Files before PATH: a source checkout
+  -- on PATH (C:\luajit\src) is what Defender usually quarantines.
   if isWindows() then
     for _, p in ipairs(windowsCandidates()) do
-      if fileExists(p) and works(p, nil) then return p, nil end
+      if fileExists(p) and not isBadLuaJitPath(p) and works(p, nil) then
+        return p, nil
+      end
     end
   end
+
+  local onPath = whichOnPath()
+  if onPath and works(onPath, nil) then return onPath, nil end
 
   return nil, nil
 end

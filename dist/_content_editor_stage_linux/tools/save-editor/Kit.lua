@@ -938,18 +938,23 @@ local function findScrollReg(key)
   return nil
 end
 
--- Track a scroll region for arrow-key control. Returns offset, possibly
--- updated by a prior keypress. axis: "y" (default) or "x".
--- Clicking a region focuses it; arrow keys only move the focused region.
+-- Read keyboard-updated offset (call at the start of a scroll pass).
+function Kit.getScrollOffset(key, offset, maxOffset)
+  maxOffset = math.max(0, tonumber(maxOffset) or 0)
+  offset = Theme.clamp(tonumber(offset) or 0, 0, maxOffset)
+  local st = Kit._scrollState and Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    return Theme.clamp(st.offset, 0, maxOffset)
+  end
+  return offset
+end
+
+-- Commit scroll offset + register hit target for arrow keys.
+-- Does NOT re-apply stored state (that would clobber mouse drag/wheel).
 function Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, opts)
   opts = opts or {}
   maxOffset = math.max(0, tonumber(maxOffset) or 0)
   offset = Theme.clamp(tonumber(offset) or 0, 0, maxOffset)
-  Kit._scrollState = Kit._scrollState or {}
-  local st = Kit._scrollState[key]
-  if st and type(st.offset) == "number" then
-    offset = Theme.clamp(st.offset, 0, maxOffset)
-  end
   local step = opts.step
   local page = opts.page
   local axis = opts.axis or "y"
@@ -961,11 +966,12 @@ function Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, opts)
     page = (kind == "rows") and math.max(1, opts.perPage or 1)
       or math.max(1, (axis == "x" and w or h) * 0.85)
   end
+  Kit._scrollState = Kit._scrollState or {}
   Kit._scrollState[key] = {
     offset = offset, maxOffset = maxOffset,
     step = step, page = page, axis = axis, kind = kind,
   }
-  -- Click (or press) inside this region to make it the arrow-key target.
+  -- Click inside this region to make it the arrow-key target.
   if not Kit.blockClicks and maxOffset > 0 and Kit.mouseClicked
       and rawHit(x, y, w, h) then
     Kit._scrollFocus = key
@@ -1158,12 +1164,7 @@ end
 function Kit.scroll(x, y, w, h, offset, total, perPage, step, id)
   local maxOffset = math.max(0, (total or 0) - (perPage or 0))
   local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
-  local st = Kit._scrollState and Kit._scrollState[key]
-  if st and type(st.offset) == "number" then
-    offset = Theme.clamp(st.offset, 0, maxOffset)
-  else
-    offset = Theme.clamp(offset or 0, 0, maxOffset)
-  end
+  offset = Kit.getScrollOffset(key, offset, maxOffset)
   local onBar
   offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
     perPage or 0, total or 0, "rows")
@@ -1216,12 +1217,7 @@ end
 function Kit.scrollPixels(x, y, w, h, offset, contentH, id)
   local maxOffset = math.max(0, (contentH or 0) - math.max(0, h))
   local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
-  local st = Kit._scrollState and Kit._scrollState[key]
-  if st and type(st.offset) == "number" then
-    offset = Theme.clamp(st.offset, 0, maxOffset)
-  else
-    offset = Theme.clamp(offset or 0, 0, maxOffset)
-  end
+  offset = Kit.getScrollOffset(key, offset, maxOffset)
   local onBar
   offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
     h, contentH or 0, "pixels")
@@ -1265,17 +1261,16 @@ function Kit.scrollbar(x, y, w, h, offset, total, perPage, id)
   total, perPage = total or 0, perPage or 0
   local maxOffset = math.max(0, total - perPage)
   local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
-  local st = Kit._scrollState and Kit._scrollState[key]
-  if st and type(st.offset) == "number" then
-    offset = Theme.clamp(st.offset, 0, maxOffset)
-  else
-    offset = Theme.clamp(offset or 0, 0, maxOffset)
-  end
+  -- Prefer the offset just produced by Kit.scroll (same frame); fall back
+  -- to keyboard state only when scroll() was not called with this id.
+  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local geoKey = sbKey(x, y, w, h)
   if total <= perPage or h <= 0 or perPage <= 0 then
     return offset
   end
   local sb = Kit._sbDrag
-  if sb and sb.key == key and type(sb.offset) == "number" then
+  -- Drag tracking still uses geometric keys from applyScrollbarDrag.
+  if sb and sb.key == geoKey and type(sb.offset) == "number" then
     offset = Theme.clamp(sb.offset, 0, maxOffset)
   end
   if Kit._scrollState and Kit._scrollState[key] then
@@ -1306,15 +1301,11 @@ function Kit.scrollbarPixels(x, y, w, h, offset, contentH, id)
   contentH = contentH or 0
   local maxOffset = math.max(0, contentH - math.max(0, h))
   local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
-  local st = Kit._scrollState and Kit._scrollState[key]
-  if st and type(st.offset) == "number" then
-    offset = Theme.clamp(st.offset, 0, maxOffset)
-  else
-    offset = Theme.clamp(offset or 0, 0, maxOffset)
-  end
+  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local geoKey = sbKey(x, y, w, h)
   if contentH <= h + 1 or h <= 0 then return offset end
   local sb = Kit._sbDrag
-  if sb and sb.key == key and type(sb.offset) == "number" then
+  if sb and sb.key == geoKey and type(sb.offset) == "number" then
     offset = Theme.clamp(sb.offset, 0, maxOffset)
   end
   if Kit._scrollState and Kit._scrollState[key] then

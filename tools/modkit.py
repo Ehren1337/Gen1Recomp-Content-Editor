@@ -46,6 +46,19 @@ from datetime import datetime, timezone
 
 MODKIT_VERSION = "1.0.0"
 
+def luajit_exe():
+    """Path/name of the LuaJIT binary (read at call time so MODKIT_LUAJIT works)."""
+    return os.environ.get("MODKIT_LUAJIT") or os.environ.get("LUA") or "luajit"
+
+
+def luajit_cmd(*args):
+    """Build a luajit argv. Always pass -joff: Windows Defender's
+    Behavior:Win32/SuspLua.A flags LuaJIT's JIT; the interpreter is enough
+    for validate/dump drivers."""
+    return [luajit_exe(), "-joff", *args]
+
+
+# Back-compat for anything that still reads the module-level name.
 LUAJIT = os.environ.get("MODKIT_LUAJIT", "luajit")
 
 
@@ -726,12 +739,12 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None):
         handle.write(driver)
         driver_path = handle.name
     try:
-        proc = subprocess.run([LUAJIT, driver_path], cwd=repo,
+        proc = subprocess.run(luajit_cmd(driver_path), cwd=repo,
                               capture_output=True, text=True, timeout=120,
                               env=luajit_env())
     except FileNotFoundError:
         findings.append(Finding("MK100", "error",
-                                f"cannot run {LUAJIT} (install luajit or "
+                                f"cannot run {luajit_exe()} (install luajit or "
                                 "set MODKIT_LUAJIT)"))
         return
     finally:
@@ -1067,14 +1080,14 @@ def check_data_dump(repo, path, base, rel):
                        "to diff against", rel)
     driver = DUMP_DRIVER % (lua_quote(path), lua_quote(vanilla))
     try:
-        proc = subprocess.run([LUAJIT, "-e", driver], cwd=repo,
+        proc = subprocess.run(luajit_cmd("-e", driver), cwd=repo,
                               capture_output=True, text=True, timeout=60,
                               env=luajit_env())
     except FileNotFoundError:
         # the gate must fail closed: a missing interpreter is a broken
         # environment, not a clean mod
         return Finding("MK100", "error",
-                       f"cannot run {LUAJIT} for the dump check (install "
+                       f"cannot run {luajit_exe()} for the dump check (install "
                        "luajit or set MODKIT_LUAJIT)", rel)
     if proc.stdout.strip() == "DUMP":
         return Finding("MK305", "error",
@@ -1279,7 +1292,7 @@ def cmd_bounce(args, repo):
         handle.write(driver)
         driver_path = handle.name
     try:
-        proc = subprocess.run([LUAJIT, driver_path], cwd=repo, env=luajit_env())
+        proc = subprocess.run(luajit_cmd(driver_path), cwd=repo, env=luajit_env())
     finally:
         os.unlink(driver_path)
     return 0 if proc.returncode == 0 else 1
@@ -1411,7 +1424,7 @@ def dump_dataset(repo, base):
     handle.write(body)
     handle.close()
     try:
-        proc = subprocess.run([os.environ.get("LUA", "luajit"), handle.name],
+        proc = subprocess.run(luajit_cmd(handle.name),
                               cwd=repo, capture_output=True, text=True,
                               env=luajit_env())
     finally:
@@ -1940,7 +1953,7 @@ def cmd_docs(args, repo):
     """Regenerates the registry reference by driving the Schemas-backed
     generator, so the docs cannot drift from the engine."""
     proc = subprocess.run(
-        [LUAJIT, os.path.join("tools", "gen_registry_docs.lua")], cwd=repo)
+        luajit_cmd(os.path.join("tools", "gen_registry_docs.lua")), cwd=repo)
     if proc.returncode != 0:
         return 1
     generated = os.path.join(repo, "docs", "modding", "reference",
