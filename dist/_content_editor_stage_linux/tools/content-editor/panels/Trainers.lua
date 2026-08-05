@@ -8,6 +8,7 @@ local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
+local RegList = require("RegList")
 local Pokemon = require("src.pokemon.Pokemon")
 local PAL = Theme.PAL
 
@@ -339,6 +340,13 @@ function Trainers.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.trainerListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.trainerListOffset or 0, #ids, perPage)
+  local trNav = RegList.bindNav(S, ids, {
+    selKey = "trainerId", offsetKey = "trainerListOffset", perPage = perPage,
+    onSelect = function()
+      Kit.blur()
+      S.trainerPartyIndex = 1
+    end,
+  })
   local ry = scrollY
   for i = (S.trainerListOffset or 0) + 1,
       math.min(#ids, (S.trainerListOffset or 0) + perPage) do
@@ -346,6 +354,8 @@ function Trainers.draw(S, x, y, w, h, App)
     local rowTr = select(1, getTrainer(S, id))
     local owned = S.project.trainers[id] ~= nil
     if Kit.row(scrollX, ry, rowW, rowH, S.trainerId == id, PAL.red) then
+      trNav.activate()
+      if S.trainerId ~= id then Kit.blur() end
       S.trainerId = id
       S.trainerPartyIndex = 1
     end
@@ -910,112 +920,223 @@ function Trainers.draw(S, x, y, w, h, App)
 
   else -- place
     Kit.text("micro",
-      "Use the Maps TRAINER tool to stamp an object with this class.",
+      "Beat flags are per map object. Prefer Maps → Objects → Beat flag.",
       viewX, fy, PAL.muted)
-    fy = fy + 24 * s
+    fy = fy + 18 * s
     if Kit.button(viewX, fy, 180 * s, 30 * s, "Use on Maps tab",
         { kind = "primary" }) then
       S.tab = "maps"
       S.mapTool = "trainer"
-      S.status = "Trainer tool active â€” click a cell to place " .. tostring(S.trainerId)
+      S.status = "Trainer tool active — click a cell to place "
+        .. tostring(S.trainerId)
     end
-    fy = fy + 44 * s
+    fy = fy + 40 * s
 
     local mapId = S.mapId or S.dialogMapId
-    if mapId then
+    if not mapId then
+      Kit.text("micro", "Select a map on the Maps tab to edit placements.",
+        viewX, fy, PAL.faint)
+    else
       local label = State.mapLabel(S, mapId)
-      Kit.text("small", "Header on " .. label, viewX, fy, PAL.caption)
-      fy = fy + 22 * s
-      S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-      local objIndex = tonumber(S.trainerHeaderIndex) or 1
-      S.trainerHeaderIndex = objIndex
-      Kit.text("micro", "Object index", viewX, fy, PAL.muted)
-      local idxStr = field(App, "tr_hdr_idx", viewX + 100 * s, fy, 50 * s, fh,
-        tostring(objIndex), "1")
-      local newIdx = tonumber(idxStr) or 1
-      if newIdx ~= objIndex then
-        -- Avoid one focused textfield writing the previous trainer's flag
-        -- into the next object index.
-        Kit.blur()
-        S.trainerHeaderIndex = newIdx
-        objIndex = newIdx
-      end
-      fy = fy + fh + 6 * s
-      local idx = S.trainerHeaderIndex
-      local fid = "_" .. idx
-      local uniq = (mapId or "MAP") .. "_" .. idx
-      local hdr = S.project.trainer_headers[label][idx]
-      -- Defaults are per map+object so trainers never share a beat flag.
-      local draft = hdr or {
-        range = 2,
-        battle = "_" .. uniq .. "Battle",
-        won = "_" .. uniq .. "Won",
-        after = "_" .. uniq .. "After",
-        event = State.modFlag(S.project, "BEAT_" .. uniq),
-        opponent = S.trainerId,
-        party = 1,
-      }
-      local function touchHdr()
-        S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-        if not S.project.trainer_headers[label][idx] then
-          S.project.trainer_headers[label][idx] = {
-            range = draft.range, battle = draft.battle, won = draft.won,
-            after = draft.after, event = draft.event,
-            opponent = S.trainerId, party = draft.party,
+      local mapDef = (S.project.maps and S.project.maps[mapId])
+        or (S.data and S.data.maps and S.data.maps[mapId])
+      local placements = {}
+      for i, obj in ipairs((mapDef and mapDef.objects) or {}) do
+        if obj.trainerClass and obj.trainerClass ~= "" then
+          placements[#placements + 1] = {
+            listI = i,
+            idx = obj.index or i,
+            class = obj.trainerClass,
+            party = obj.trainerParty or 1,
           }
         end
-        hdr = S.project.trainer_headers[label][idx]
-        hdr.opponent = S.trainerId
-        App.markDirty()
-        return hdr
       end
-      local range = tonumber(field(App, "tr_hdr_range" .. fid, viewX, fy, 50 * s, fh,
-        tostring(draft.range or 2), "2")) or 2
-      if range ~= (draft.range or 2) then draft = touchHdr(); draft.range = range end
-      Kit.text("micro", "sight range", viewX + 58 * s, fy + 6 * s, PAL.faint)
-      fy = fy + fh + 4 * s
-      local partyN = tonumber(field(App, "tr_hdr_party" .. fid, viewX, fy, 50 * s, fh,
-        tostring(draft.party or 1), "1")) or 1
-      if partyN ~= (draft.party or 1) then draft = touchHdr(); draft.party = partyN end
-      Kit.text("micro", "party #", viewX + 58 * s, fy + 6 * s, PAL.faint)
-      fy = fy + fh + 4 * s
-      local battle = field(App, "tr_hdr_b" .. fid, viewX, fy, viewW, fh,
-        draft.battle or "", "_Battle")
-      if battle ~= (draft.battle or "") then draft = touchHdr(); draft.battle = battle end
-      fy = fy + fh + 4 * s
-      local won = field(App, "tr_hdr_w" .. fid, viewX, fy, viewW, fh,
-        draft.won or "", "_Won")
-      if won ~= (draft.won or "") then draft = touchHdr(); draft.won = won end
-      fy = fy + fh + 4 * s
-      local after = field(App, "tr_hdr_a" .. fid, viewX, fy, viewW, fh,
-        draft.after or "", "_After")
-      if after ~= (draft.after or "") then draft = touchHdr(); draft.after = after end
-      fy = fy + fh + 4 * s
-      local event = field(App, "tr_hdr_e" .. fid, viewX, fy, viewW, fh,
-        draft.event or "", "MOD_BEAT_")
-      if event ~= (draft.event or "") then
-        draft = touchHdr()
-        local full = State.modFlag(S.project,
-          (event ~= "" and event) or ("BEAT_" .. uniq))
-        draft.event = full
-        S.project.eventFlags = S.project.eventFlags or {}
-        S.project.eventFlags[full] = true
+      -- Prefer placements of the selected class; fall back to all on this map.
+      local shown = {}
+      for _, p in ipairs(placements) do
+        if p.class == S.trainerId then shown[#shown + 1] = p end
       end
-      fy = fy + fh + 8 * s
-      if S.project.trainer_headers[label]
-          and S.project.trainer_headers[label][idx] then
-        for _, key in ipairs({ "battle", "won", "after" }) do
-          local tid = draft[key]
-          if type(tid) == "string" and tid:sub(1, 1) == "_" and not S.project.text[tid] then
-            S.project.text[tid] = (key == "battle" and "Let's fight!")
-              or (key == "won" and "I lost...")
-              or "You're strong."
+      if #shown == 0 then shown = placements end
+
+      Kit.text("small", "Placements on " .. tostring(label), viewX, fy, PAL.caption)
+      fy = fy + 20 * s
+      if #shown == 0 then
+        Kit.text("micro", "No trainer objects on this map yet.",
+          viewX, fy, PAL.faint)
+        fy = fy + 18 * s
+      else
+        local rowH = 26 * s
+        local selIdx = tonumber(S.trainerHeaderIndex)
+        local found = false
+        for _, p in ipairs(shown) do
+          if p.idx == selIdx then found = true; break end
+        end
+        if not found then
+          S.trainerHeaderIndex = shown[1].idx
+          selIdx = shown[1].idx
+        end
+        for _, p in ipairs(shown) do
+          local on = selIdx == p.idx
+          local lab = string.format("#%d  %s  party %d",
+            p.idx, p.class or "?", p.party or 1)
+          if Kit.row(viewX, fy, viewW, rowH, on, PAL.red) then
+            if selIdx ~= p.idx then Kit.blur() end
+            S.trainerHeaderIndex = p.idx
+            S.mapObjectIndex = p.listI
+            selIdx = p.idx
+          end
+          Kit.text("micro", Kit.ellipsize("micro", lab, viewW - 12 * s),
+            viewX + 8 * s, fy + 6 * s, on and PAL.text or PAL.muted)
+          fy = fy + rowH + 3 * s
+        end
+        fy = fy + 8 * s
+
+        local idx = tonumber(S.trainerHeaderIndex) or shown[1].idx
+        local picked = nil
+        for _, p in ipairs(shown) do
+          if p.idx == idx then picked = p; break end
+        end
+        picked = picked or shown[1]
+        idx = picked.idx
+        -- Field ids include map + object index so typing never bleeds.
+        local fid = "_" .. tostring(mapId) .. "_" .. tostring(idx)
+        local uniq = (mapId or "MAP") .. "_" .. idx
+        State.ensureProjectFields(S.project)
+        S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
+        local bucket = S.project.trainer_headers[label]
+
+        local function cloneHdr(src)
+          local c = {}
+          if type(src) == "table" then
+            for k, v in pairs(src) do c[k] = v end
+          end
+          return c
+        end
+
+        -- Break accidental shared table refs across object indices.
+        local function isolate(i)
+          local h = bucket[i]
+          if type(h) ~= "table" then return h end
+          for other, oh in pairs(bucket) do
+            if other ~= i and oh == h then
+              bucket[other] = cloneHdr(oh)
+            end
+          end
+          return bucket[i]
+        end
+
+        local function ensureHdr()
+          local h = bucket[idx]
+          if not h then
+            h = {
+              range = 2,
+              battle = "_" .. uniq .. "Battle",
+              won = "_" .. uniq .. "Won",
+              after = "_" .. uniq .. "After",
+              event = State.modFlag(S.project, "BEAT_" .. uniq),
+              opponent = picked.class or S.trainerId,
+              party = picked.party or 1,
+            }
+            bucket[idx] = h
+            S.project.eventFlags = S.project.eventFlags or {}
+            S.project.eventFlags[h.event] = true
+          else
+            h = isolate(idx)
+            bucket[idx] = h
+          end
+          App.markDirty()
+          return h
+        end
+
+        local hdr = bucket[idx]
+        local draft = hdr or {
+          range = 2,
+          battle = "_" .. uniq .. "Battle",
+          won = "_" .. uniq .. "Won",
+          after = "_" .. uniq .. "After",
+          event = State.modFlag(S.project, "BEAT_" .. uniq),
+          opponent = picked.class or S.trainerId,
+          party = picked.party or 1,
+        }
+
+        Kit.text("micro",
+          "Editing object #" .. tostring(idx) .. " only",
+          viewX, fy, PAL.faint)
+        fy = fy + 16 * s
+
+        local range = tonumber(field(App, "tr_hdr_range" .. fid, viewX, fy, 50 * s, fh,
+          tostring(draft.range or 2), "2")) or 2
+        if range ~= (draft.range or 2) then
+          draft = ensureHdr(); draft.range = range
+        end
+        Kit.text("micro", "sight range", viewX + 58 * s, fy + 6 * s, PAL.faint)
+        fy = fy + fh + 4 * s
+
+        local partyN = tonumber(field(App, "tr_hdr_party" .. fid, viewX, fy, 50 * s, fh,
+          tostring(draft.party or 1), "1")) or 1
+        if partyN ~= (draft.party or 1) then
+          draft = ensureHdr(); draft.party = partyN
+          if mapDef and mapDef.objects and mapDef.objects[picked.listI] then
+            mapDef.objects[picked.listI].trainerParty = partyN
           end
         end
+        Kit.text("micro", "party #", viewX + 58 * s, fy + 6 * s, PAL.faint)
+        fy = fy + fh + 4 * s
+
+        local battle = field(App, "tr_hdr_b" .. fid, viewX, fy, viewW, fh,
+          draft.battle or "", "_Battle")
+        if battle ~= (draft.battle or "") then
+          draft = ensureHdr(); draft.battle = battle
+        end
+        fy = fy + fh + 4 * s
+        local won = field(App, "tr_hdr_w" .. fid, viewX, fy, viewW, fh,
+          draft.won or "", "_Won")
+        if won ~= (draft.won or "") then
+          draft = ensureHdr(); draft.won = won
+        end
+        fy = fy + fh + 4 * s
+        local after = field(App, "tr_hdr_a" .. fid, viewX, fy, viewW, fh,
+          draft.after or "", "_After")
+        if after ~= (draft.after or "") then
+          draft = ensureHdr(); draft.after = after
+        end
+        fy = fy + fh + 4 * s
+
+        local event = field(App, "tr_hdr_e" .. fid, viewX, fy, viewW, fh,
+          draft.event or "", "MOD_BEAT_")
+        if event ~= (draft.event or "") then
+          draft = ensureHdr()
+          local full = State.modFlag(S.project,
+            (event ~= "" and event) or ("BEAT_" .. uniq))
+          -- Write only this object index (never broadcast to other trainers).
+          draft.event = full
+          bucket[idx] = draft
+          S.project.eventFlags = S.project.eventFlags or {}
+          S.project.eventFlags[full] = true
+        end
+        fy = fy + fh + 8 * s
+
+        if bucket[idx] then
+          for _, key in ipairs({ "battle", "won", "after" }) do
+            local tid = draft[key]
+            if type(tid) == "string" and tid:sub(1, 1) == "_"
+                and not S.project.text[tid] then
+              S.project.text[tid] = (key == "battle" and "Let's fight!")
+                or (key == "won" and "I lost...")
+                or "You're strong."
+            end
+          end
+        end
+
+        if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
+            { kind = "ghost" }) then
+          S.tab = "maps"
+          S.mapId = mapId
+          S.mapSection = "objects"
+          S.mapObjectIndex = picked.listI
+        end
+        fy = fy + 36 * s
       end
-    else
-      Kit.text("micro", "Select a map on the Maps tab to edit trainer headers.",
-        viewX, fy, PAL.faint)
     end
   end
 

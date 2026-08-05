@@ -8,6 +8,7 @@ local FormPane = require("FormPane")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local ModIO = require("ModIO")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Items = {}
@@ -350,6 +351,9 @@ function Items.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.itemListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.itemListOffset or 0, #ids, perPage)
+  local itemNav = RegList.bindNav(S, ids, {
+    selKey = "itemId", offsetKey = "itemListOffset", perPage = perPage,
+  })
   local ry = scrollY
   for i = (S.itemListOffset or 0) + 1,
       math.min(#ids, (S.itemListOffset or 0) + perPage) do
@@ -357,6 +361,7 @@ function Items.draw(S, x, y, w, h, App)
     local owned = S.project.items[id] ~= nil
     local def = owned and S.project.items[id] or S.data.items[id]
     if Kit.row(scrollX, ry, rowW, rowH, S.itemId == id, PAL.blue) then
+      itemNav.activate()
       S.itemId = id
     end
     Preview.drawItemIcon(S, def or { id = id },

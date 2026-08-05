@@ -6,6 +6,7 @@ local Theme = require("Theme")
 local State = require("State")
 local Search = require("Search")
 local FormPane = require("FormPane")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local MoveEffects = {}
@@ -225,6 +226,9 @@ function MoveEffects.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.moveEffectListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.moveEffectListOffset or 0, #ids, perPage)
+  local fxNav = RegList.bindNav(S, ids, {
+    selKey = "moveEffectId", offsetKey = "moveEffectListOffset", perPage = perPage,
+  })
   local ry = scrollY
   for i = (S.moveEffectListOffset or 0) + 1,
       math.min(#ids, (S.moveEffectListOffset or 0) + perPage) do
@@ -232,6 +236,7 @@ function MoveEffects.draw(S, x, y, w, h, App)
     local owned = S.project.moveEffects[id] ~= nil
     local rec = select(1, resolveEffect(S, id))
     if Kit.row(scrollX, ry, rowW, rowH, S.moveEffectId == id, PAL.yellow) then
+      fxNav.activate()
       S.moveEffectId = id
     end
     Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 16 * s)),

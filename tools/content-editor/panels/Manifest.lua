@@ -4,6 +4,7 @@ local Kit = require("Kit")
 local Theme = require("Theme")
 local ModIO = require("ModIO")
 local FormPane = require("FormPane")
+local RegList = require("RegList")
 local ManifestSchema = require("src.mods.Manifest")
 local PAL = Theme.PAL
 
@@ -195,6 +196,18 @@ function Manifest.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.manifestListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.manifestListOffset or 0, #mods, perPage)
+  local dirtyGuard = (S.manifestDirty and S._manifestFor) or nil
+  local manNav = RegList.bindNav(S, mods, {
+    selKey = "browseModId", offsetKey = "manifestListOffset", perPage = perPage,
+    onSelect = function(id)
+      if dirtyGuard and id ~= dirtyGuard then
+        S.browseModId = dirtyGuard
+        S.status = "Unsaved manifest — Write or Reload before switching"
+        return
+      end
+      S._manifestFor = nil
+    end,
+  })
   for i = 1, perPage do
     local idx = (S.manifestListOffset or 0) + i
     local mid = mods[idx]
@@ -202,7 +215,8 @@ function Manifest.draw(S, x, y, w, h, App)
     local ry = scrollY + (i - 1) * rowH
     local on = S.browseModId == mid
     if Kit.row(x + 6 * s, ry, rowW - 2 * s, rowH - 4 * s, on, PAL.blue) then
-      if S.manifestDirty and S._manifestFor == S.browseModId then
+      manNav.activate()
+      if dirtyGuard and mid ~= dirtyGuard then
         S.status = "Unsaved manifest — Write or Reload before switching"
       else
         S.browseModId = mid

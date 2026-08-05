@@ -9,6 +9,7 @@ local FormPane = require("FormPane")
 local State = require("State")
 local BattleAnims = require("BattleAnims")
 local BattleAnimPreview = require("BattleAnimPreview")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Moves = {}
@@ -156,12 +157,16 @@ function Moves.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.moveListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.moveListOffset or 0, #ids, perPage)
+  local moveNav = RegList.bindNav(S, ids, {
+    selKey = "moveId", offsetKey = "moveListOffset", perPage = perPage,
+  })
   local ry = scrollY
   for i = (S.moveListOffset or 0) + 1,
       math.min(#ids, (S.moveListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.moves[id] ~= nil
     if Kit.row(scrollX, ry, rowW, rowH, S.moveId == id, PAL.yellow) then
+      moveNav.activate()
       S.moveId = id
     end
     Kit.text("mono", Kit.ellipsize("mono", id, math.max(8, rowW - 16 * s)),

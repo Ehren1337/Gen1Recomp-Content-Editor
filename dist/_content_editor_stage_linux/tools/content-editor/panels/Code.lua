@@ -3,6 +3,7 @@
 local Kit = require("Kit")
 local Theme = require("Theme")
 local ModIO = require("ModIO")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Code = {}
@@ -167,12 +168,28 @@ function Code.draw(S, x, y, w, h, App)
   local perMod = math.max(1, math.floor((listH - 16 * s) / rowH))
   S.codeModOffset = Kit.scroll(x + 4 * s, listY + 8 * s, col1 - 8 * s, listH - 16 * s,
     S.codeModOffset or 0, #mods, perMod)
+  local codeDirty = S.codeDirty
+  local modGuard = codeDirty and S.browseModId or nil
+  local modNav = RegList.bindNav(S, mods, {
+    selKey = "browseModId", offsetKey = "codeModOffset", perPage = perMod,
+    onSelect = function(id)
+      if modGuard and id ~= modGuard then
+        S.browseModId = modGuard
+        S.status = "Unsaved file — Write or Reload before switching"
+        return
+      end
+      S.codeFile = nil
+      S._codeFor = nil
+      S._codeFiles = nil
+    end,
+  })
   for i = 1, perMod do
     local mid = mods[(S.codeModOffset or 0) + i]
     if not mid then break end
     local ry = listY + 8 * s + (i - 1) * rowH
     local on = S.browseModId == mid
     if Kit.row(x + 6 * s, ry, col1 - 12 * s, rowH - 4 * s, on, PAL.blue) then
+      modNav.activate()
       if S.codeDirty then
         S.status = "Unsaved file — Write or Reload before switching"
       else
@@ -192,12 +209,25 @@ function Code.draw(S, x, y, w, h, App)
   local perFile = math.max(1, math.floor((listH - 50 * s) / rowH))
   S.codeFileOffset = Kit.scroll(fileX + 4 * s, listY + 8 * s, col2 - 8 * s,
     listH - 50 * s, S.codeFileOffset or 0, #files, perFile)
+  local fileGuard = codeDirty and S.codeFile or nil
+  local fileNav = RegList.bindNav(S, files, {
+    selKey = "codeFile", offsetKey = "codeFileOffset", perPage = perFile,
+    onSelect = function(rel)
+      if fileGuard and rel ~= fileGuard then
+        S.codeFile = fileGuard
+        S.status = "Unsaved file — Write or Reload before switching"
+        return
+      end
+      S._codeFor = nil
+    end,
+  })
   for i = 1, perFile do
     local rel = files[(S.codeFileOffset or 0) + i]
     if not rel then break end
     local ry = listY + 8 * s + (i - 1) * rowH
     local on = S.codeFile == rel
     if Kit.row(fileX + 6 * s, ry, col2 - 12 * s, rowH - 4 * s, on, PAL.green) then
+      fileNav.activate()
       if S.codeDirty and S.codeFile ~= rel then
         S.status = "Unsaved file — Write or Reload before switching"
       else

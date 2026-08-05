@@ -90,6 +90,8 @@ function State.blankProject(id, name)
     townMap = {},       -- field.townMap
     -- Oak's Lab ball remap: vanillaSpecies -> { species, level }
     starterRemap = {},
+    -- Special gifts/battles with DVs + moves (Encounters tab)
+    specialEncounters = {},
     nextMapIndex = 1000,
   }
 end
@@ -130,6 +132,7 @@ function State.ensureProjectFields(project)
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
   project.starterRemap = project.starterRemap or {}
+  project.specialEncounters = project.specialEncounters or {}
   project.nextMapIndex = project.nextMapIndex or 1000
   return project
 end

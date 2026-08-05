@@ -981,6 +981,9 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
+  -- Special encounters (Encounters tab): synthetic trainers + gift command
+  ModWriter.emitSpecialEncounters(project, out)
+
   -- trainer_headers keyed by map label.
   -- Deep registries treat a contiguous { [1]=…, [2]=… } payload as an array
   -- and CONCAT it — so a beat-flag edit appended duplicate headers and every
@@ -1019,6 +1022,7 @@ function ModWriter.emitMain(project, baseData)
 
   -- Compile talkScripts (editor steps) into map_scripts.talk rows, then emit.
   local scripts = ModWriter.compileTalkScripts(project)
+  ModWriter.applySpecialEncounterBinds(project, scripts)
   local msIds = {}
   for mid in pairs(scripts) do msIds[#msIds + 1] = mid end
   -- also include any hand-authored project.map_scripts
@@ -1284,6 +1288,241 @@ function ModWriter.emitMain(project, baseData)
   out[#out + 1] = "end"
   out[#out + 1] = ""
   return table.concat(out, "\n")
+end
+
+local function specialTrainerId(specId)
+  return "OPP_SPEC_" .. tostring(specId)
+end
+
+local function specialMonSlot(spec)
+  local slot = {
+    species = spec.species or "MAGIKARP",
+    level = tonumber(spec.level) or 5,
+  }
+  if type(spec.moves) == "table" and #spec.moves > 0 then
+    local moves = {}
+    for i = 1, math.min(4, #spec.moves) do
+      local mid = spec.moves[i]
+      if type(mid) == "string" and mid ~= "" then
+        moves[#moves + 1] = mid
+      end
+    end
+    if #moves > 0 then slot.moves = moves end
+  end
+  if type(spec.dvs) == "table" then
+    local dvs, any = {}, false
+    for _, k in ipairs({ "attack", "defense", "speed", "special", "hp" }) do
+      local n = tonumber(spec.dvs[k])
+      if n ~= nil then
+        dvs[k] = math.max(0, math.min(15, math.floor(n)))
+        any = true
+      end
+    end
+    if any then slot.dvs = dvs end
+  end
+  return slot
+end
+
+-- Emit OPP_SPEC_* trainers and mod:give_special for Encounters-tab specials.
+function ModWriter.emitSpecialEncounters(project, out)
+  local specs = project.specialEncounters
+  if type(specs) ~= "table" or not next(specs) then return end
+
+  local ids = {}
+  for sid in pairs(specs) do ids[#ids + 1] = sid end
+  table.sort(ids)
+
+  local gifts = {}
+  for _, sid in ipairs(ids) do
+    local spec = specs[sid]
+    if type(spec) == "table" then
+      if (spec.kind or "gift") == "battle" then
+        local tid = specialTrainerId(sid)
+        local mon = specialMonSlot(spec)
+        local rec = {
+          id = tid,
+          name = (spec.name and spec.name ~= "" and spec.name)
+            or (spec.species or sid),
+          baseMoney = 0,
+          parties = { { mon } },
+        }
+        out[#out + 1] = string.format(
+          "  mod.content.trainers:register(%q, %s)",
+          tid, emitTableLiteral(rec, 1))
+        out[#out + 1] = ""
+      else
+        gifts[#gifts + 1] = sid
+      end
+    end
+  end
+
+  if #gifts == 0 then return end
+
+  out[#out + 1] = "  -- Special gift encounters (Encounters tab)"
+  out[#out + 1] = "  local SPECIALS = {"
+  for _, sid in ipairs(gifts) do
+    local spec = specs[sid]
+    local entry = {
+      species = spec.species or "MAGIKARP",
+      level = tonumber(spec.level) or 5,
+    }
+    if type(spec.moves) == "table" and #spec.moves > 0 then
+      entry.moves = {}
+      for i = 1, math.min(4, #spec.moves) do
+        local mid = spec.moves[i]
+        if type(mid) == "string" and mid ~= "" then
+          entry.moves[#entry.moves + 1] = mid
+        end
+      end
+    end
+    if type(spec.dvs) == "table" then
+      entry.dvs = {}
+      for _, k in ipairs({ "attack", "defense", "speed", "special", "hp" }) do
+        if spec.dvs[k] ~= nil then
+          entry.dvs[k] = tonumber(spec.dvs[k]) or 0
+        end
+      end
+    end
+    out[#out + 1] = string.format("    [%q] = %s,",
+      sid, emitTableLiteral(entry, 2))
+  end
+  out[#out + 1] = "  }"
+
+  local cmd = (project.id or "content_mod") .. ":give_special"
+  out[#out + 1] = string.format(
+    "  mod.content.commands:register(%q, {", cmd)
+  out[#out + 1] = "    foreground = true,"
+  out[#out + 1] = "    fn = function(ctx, specialId)"
+  out[#out + 1] = "      local spec = SPECIALS[specialId]"
+  out[#out + 1] = "      if not spec then return end"
+  out[#out + 1] = "      local Pokemon = require(\"src.pokemon.Pokemon\")"
+  out[#out + 1] = "      local Stats = require(\"src.pokemon.Stats\")"
+  out[#out + 1] = "      local Party = require(\"src.pokemon.Party\")"
+  out[#out + 1] = "      local Boxes = require(\"src.pokemon.Boxes\")"
+  out[#out + 1] = "      local BattleState = require(\"src.battle.BattleState\")"
+  out[#out + 1] = "      local mon = Pokemon.new(ctx.game.data, spec.species, spec.level)"
+  out[#out + 1] = "      if type(spec.dvs) == \"table\" then"
+  out[#out + 1] = "        local dvs = {"
+  out[#out + 1] = "          attack = tonumber(spec.dvs.attack) or 0,"
+  out[#out + 1] = "          defense = tonumber(spec.dvs.defense) or 0,"
+  out[#out + 1] = "          speed = tonumber(spec.dvs.speed) or 0,"
+  out[#out + 1] = "          special = tonumber(spec.dvs.special) or 0,"
+  out[#out + 1] = "        }"
+  out[#out + 1] = "        if spec.dvs.hp ~= nil then"
+  out[#out + 1] = "          dvs.hp = tonumber(spec.dvs.hp) or 0"
+  out[#out + 1] = "        else"
+  out[#out + 1] = "          dvs.hp = (dvs.attack % 2) * 8 + (dvs.defense % 2) * 4"
+  out[#out + 1] = "            + (dvs.speed % 2) * 2 + (dvs.special % 2)"
+  out[#out + 1] = "        end"
+  out[#out + 1] = "        mon.dvs = dvs"
+  out[#out + 1] = "        mon.stats = Stats.calc(ctx.game.data.pokemon[spec.species],"
+  out[#out + 1] = "          spec.level, dvs, mon.statExp)"
+  out[#out + 1] = "        mon.hp = mon.stats.hp"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      if type(spec.moves) == \"table\" then"
+  out[#out + 1] = "        mon.moves = {}"
+  out[#out + 1] = "        for _, moveId in ipairs(spec.moves) do"
+  out[#out + 1] = "          local mdef = ctx.game.data.moves[moveId]"
+  out[#out + 1] = "          mon.moves[#mon.moves + 1] = {"
+  out[#out + 1] = "            id = moveId, pp = mdef and mdef.pp or 0,"
+  out[#out + 1] = "          }"
+  out[#out + 1] = "        end"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      local def = ctx.game.data.pokemon[spec.species]"
+  out[#out + 1] = "      ctx.game.stringBuffer = (def and def.name) or spec.species"
+  out[#out + 1] = "      ctx.pendingPokemonName = spec.species"
+  out[#out + 1] = "      BattleState.stampOT(ctx.save, mon)"
+  out[#out + 1] = "      local addedToParty = Party.add(ctx.save.party, mon)"
+  out[#out + 1] = "      local boxNum = nil"
+  out[#out + 1] = "      if not addedToParty then"
+  out[#out + 1] = "        boxNum = Boxes.deposit(ctx.save, mon)"
+  out[#out + 1] = "        if not boxNum then ctx.lastCheck = false; return end"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      local dex = ctx.save.pokedex"
+  out[#out + 1] = "      if dex then"
+  out[#out + 1] = "        dex.seen[spec.species] = true"
+  out[#out + 1] = "        dex.owned[spec.species] = true"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      ctx.lastCheck = true"
+  out[#out + 1] = "      ctx.addedToParty = addedToParty"
+  out[#out + 1] = "      ctx.boxNum = boxNum"
+  out[#out + 1] = "      if boxNum and ctx.runner then"
+  out[#out + 1] = "        local name = mon.nickname"
+  out[#out + 1] = "          or (def and def.name) or spec.species"
+  out[#out + 1] = "        ctx.game.boxMonNicks = name"
+  out[#out + 1] = "        ctx.game.stringBuffer = tostring(boxNum)"
+  out[#out + 1] = "        local Commands = require(\"src.script.Commands\")"
+  out[#out + 1] = "        Commands.show_text(ctx, \"_SentToBoxText\")"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "    end,"
+  out[#out + 1] = "  })"
+  out[#out + 1] = ""
+end
+
+-- Wire bindTextId specials into compiled map talk scripts (oneshot gift/battle).
+function ModWriter.applySpecialEncounterBinds(project, scripts)
+  local specs = project.specialEncounters
+  if type(specs) ~= "table" or not next(specs) then return end
+  local State = require("State")
+  local cmd = (project.id or "content_mod") .. ":give_special"
+  local ids = {}
+  for sid in pairs(specs) do ids[#ids + 1] = sid end
+  table.sort(ids)
+  for _, sid in ipairs(ids) do
+    local spec = specs[sid]
+    local mapId = type(spec) == "table" and spec.mapId
+    local textId = type(spec) == "table" and spec.bindTextId
+    if type(spec) == "table"
+        and type(mapId) == "string" and mapId ~= ""
+        and type(textId) == "string" and textId ~= "" then
+      local unique = spec.unique ~= false
+      local done = State.modFlag(project, (spec.flag and spec.flag ~= "" and spec.flag)
+        or ((spec.kind == "battle") and ("BEAT_" .. sid) or ("GOT_" .. sid)))
+      local rows = {}
+      if (spec.kind or "gift") == "battle" then
+        local cls = specialTrainerId(sid)
+        local before = spec.text or "Let's fight!"
+        local won = spec.won or "I lost..."
+        local after = spec.after or "You're strong."
+        rows[#rows + 1] = { "face_player" }
+        if unique then
+          rows[#rows + 1] = { "check_flag", done }
+          rows[#rows + 1] = { "jump_if_true", "after_fight" }
+        end
+        rows[#rows + 1] = { "show_text", before }
+        rows[#rows + 1] = { "start_battle", "trainer", cls, 1 }
+        rows[#rows + 1] = { "jump_if_false", "end" }
+        rows[#rows + 1] = { "show_text", won }
+        if unique then
+          rows[#rows + 1] = { "set_flag", done }
+        end
+        rows[#rows + 1] = { "jump", "end" }
+        if unique then
+          rows[#rows + 1] = { "label", "after_fight" }
+          rows[#rows + 1] = { "show_text", after }
+        end
+      else
+        local intro = spec.text or "Here! Take this POKeMON!"
+        local after = spec.after or "I already gave you one."
+        if unique then
+          rows[#rows + 1] = { "check_flag", done }
+          rows[#rows + 1] = { "jump_if_true", "after_mon" }
+        end
+        rows[#rows + 1] = { "show_text", intro }
+        rows[#rows + 1] = { cmd, sid }
+        if unique then
+          rows[#rows + 1] = { "set_flag", done }
+          rows[#rows + 1] = { "jump", "end" }
+          rows[#rows + 1] = { "label", "after_mon" }
+          rows[#rows + 1] = { "show_text", after }
+        end
+      end
+      rows[#rows + 1] = { "label", "end" }
+      rows = ModWriter.relabelNumericJumps(rows)
+      scripts[mapId] = scripts[mapId] or { talk = {} }
+      scripts[mapId].talk[textId] = rows
+    end
+  end
 end
 
 -- Convert editor step lists into ScriptRunner command rows.

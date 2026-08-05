@@ -9,6 +9,7 @@ local Search = require("Search")
 local FormPane = require("FormPane")
 local TalkIndex = require("TalkIndex")
 local ModWriter = require("ModWriter")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Events = {}
@@ -530,11 +531,19 @@ local function drawScripts(S, x, y, w, h, App)
   local mapRowW = Kit.scrollInnerWidth(mapScrollW)
   S.eventMapOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
     mapScrollH, S.eventMapOffset or 0, #maps, perMap)
+  local mapNav = RegList.bindNav(S, maps, {
+    selKey = "eventMapId", offsetKey = "eventMapOffset", perPage = perMap,
+    onSelect = function()
+      S.eventScriptKey = nil
+      S.eventScriptOffset = 0
+    end,
+  })
   local ry = listY + 8 * s
   for i = (S.eventMapOffset or 0) + 1,
       math.min(#maps, (S.eventMapOffset or 0) + perMap) do
     local id = maps[i]
     if Kit.row(mapScrollX, ry, mapRowW, mapRowH, S.eventMapId == id, PAL.blue) then
+      mapNav.activate()
       S.eventMapId = id
       S.eventScriptKey = nil
       S.eventScriptOffset = 0
@@ -572,11 +581,17 @@ local function drawScripts(S, x, y, w, h, App)
   local pinRowW = Kit.scrollInnerWidth(pinScrollW)
   S.eventScriptOffset = Kit.scroll(pinScrollX, listY + 8 * s, pinScrollW,
     pinScrollH, S.eventScriptOffset or 0, #entries, perPage)
+  local entryKeys = {}
+  for i, e in ipairs(entries) do entryKeys[i] = e.key end
+  local eventNav = RegList.bindNav(S, entryKeys, {
+    selKey = "eventScriptKey", offsetKey = "eventScriptOffset", perPage = perPage,
+  })
   ry = listY + 8 * s
   for i = (S.eventScriptOffset or 0) + 1,
       math.min(#entries, (S.eventScriptOffset or 0) + perPage) do
     local e = entries[i]
     if Kit.row(pinScrollX, ry, pinRowW, rowH, S.eventScriptKey == e.key, PAL.yellow) then
+      eventNav.activate()
       S.eventScriptKey = e.key
       -- Selection only — do not invent a Hello! stub.
     end

@@ -5,6 +5,7 @@ local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
 local Search = require("Search")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Dialog = {}
@@ -236,11 +237,19 @@ function Dialog.draw(S, x, y, w, h, App)
   local mapRowW = Kit.scrollInnerWidth(mapScrollW)
   S.dialogMapOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
     mapScrollH, S.dialogMapOffset or 0, #maps, perMap)
+  local mapNav = RegList.bindNav(S, maps, {
+    selKey = "dialogMapId", offsetKey = "dialogMapOffset", perPage = perMap,
+    onSelect = function()
+      S.dialogTextId = nil
+      S.dialogPinOffset = 0
+    end,
+  })
   local ry = listY + 8 * s
   for i = (S.dialogMapOffset or 0) + 1,
       math.min(#maps, (S.dialogMapOffset or 0) + perMap) do
     local id = maps[i]
     if Kit.row(mapScrollX, ry, mapRowW, rowH, S.dialogMapId == id, PAL.blue) then
+      mapNav.activate()
       S.dialogMapId = id
       S.dialogTextId = nil
       S.dialogPinOffset = 0
@@ -273,12 +282,18 @@ function Dialog.draw(S, x, y, w, h, App)
   local pinRowW = Kit.scrollInnerWidth(pinScrollW)
   S.dialogPinOffset = Kit.scroll(pinScrollX, listY + 8 * s, pinScrollW,
     mapScrollH, S.dialogPinOffset or 0, #pins, perPin)
+  local pinIds = {}
+  for i, pin in ipairs(pins) do pinIds[i] = pin.textId end
+  local pinNav = RegList.bindNav(S, pinIds, {
+    selKey = "dialogTextId", offsetKey = "dialogPinOffset", perPage = perPin,
+  })
   ry = listY + 8 * s
   for i = (S.dialogPinOffset or 0) + 1,
       math.min(#pins, (S.dialogPinOffset or 0) + perPin) do
     local pin = pins[i]
     local on = S.dialogTextId == pin.textId
     if Kit.row(pinScrollX, ry, pinRowW, pinRowH, on, PAL.green) then
+      pinNav.activate()
       S.dialogTextId = pin.textId
       -- selection only -- do not clone / invent Hello!
     end

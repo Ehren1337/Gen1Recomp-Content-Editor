@@ -100,6 +100,17 @@ local function whichOnPath()
   return nil
 end
 
+-- LÖVE AppImages / wrappers set LD_LIBRARY_PATH to their bundled libs.
+-- Spawning system /usr/bin/luajit with that path loads the wrong
+-- libluajit (undefined symbol luaJIT_version_2_1_…). Clear it unless we
+-- intentionally point at a private libDir.
+local function linuxLuaJitEnvPrefix(libDir)
+  if libDir and libDir ~= "" then
+    return string.format('LD_LIBRARY_PATH="%s" ', libDir)
+  end
+  return 'env -u LD_LIBRARY_PATH '
+end
+
 local function works(exe, libDir)
   if not exe or not fileExists(exe) then return false end
   local cmd
@@ -107,15 +118,12 @@ local function works(exe, libDir)
     local dir = exe:match("^(.*)[/\\][^/\\]+$") or "."
     cmd = string.format('cmd /C "cd /D "%s" && luajit.exe -e print(1)"', dir)
   else
-    local env = ""
-    if libDir and libDir ~= "" then
-      env = string.format('LD_LIBRARY_PATH="%s:${LD_LIBRARY_PATH:-}" ', libDir)
-    end
-    cmd = string.format('%s"%s" -e "print(1)"', env, exe)
+    cmd = string.format('%s"%s" -e "print(1)"',
+      linuxLuaJitEnvPrefix(libDir), exe)
   end
   local ok, out = runShell(cmd)
   if (out or ""):find("1", 1, true) then return true end
-  return ok
+  return false
 end
 
 local function windowsCandidates()
@@ -163,16 +171,17 @@ function LuaJitTool.find()
   scrubLegacyAppDataLuaJit()
 
   local env = os.getenv("MODKIT_LUAJIT")
-  if env and env ~= "" and fileExists(env) and not isLegacyAppDataLuaJit(env) then
+  if env and env ~= "" and fileExists(env) and not isLegacyAppDataLuaJit(env)
+      and works(env, nil) then
     return env, nil
   end
 
   local onPath = whichOnPath()
-  if onPath then return onPath, nil end
+  if onPath and works(onPath, nil) then return onPath, nil end
 
   if isWindows() then
     for _, p in ipairs(windowsCandidates()) do
-      if fileExists(p) then return p, nil end
+      if fileExists(p) and works(p, nil) then return p, nil end
     end
   end
 
@@ -232,7 +241,7 @@ function LuaJitTool.ensure()
 
   if isWindows() then
     local exe, err = installWindowsWinget()
-    if exe then return exe, nil, nil, true end
+    if exe and works(exe, nil) then return exe, nil, nil, true end
     return nil, nil,
       (err or "LuaJIT missing")
         .. " — run: winget install DEVCOM.LuaJIT   (or set MODKIT_LUAJIT)",
@@ -241,8 +250,12 @@ function LuaJitTool.ensure()
 
   if isLinux() then
     local exe, err = installLinuxApt()
-    if exe then return exe, nil, nil, true end
-    return nil, nil, err or "LuaJIT missing", false
+    if exe and works(exe, nil) then return exe, nil, nil, true end
+    return nil, nil,
+      (err or "LuaJIT missing")
+        .. " — system luajit failed to run (install/reinstall luajit, "
+        .. "or set MODKIT_LUAJIT to a working binary)",
+      false
   end
 
   return nil, nil,
@@ -279,8 +292,9 @@ function LuaJitTool.wrapCommand(innerCmd, luajitPath, libDir, extraEnv)
   if not f then
     local exports = string.format('MODKIT_LUAJIT="%s"', luajitPath)
     if libDir and libDir ~= "" then
-      exports = exports .. string.format(
-        ' LD_LIBRARY_PATH="%s:${LD_LIBRARY_PATH:-}"', libDir)
+      exports = exports .. string.format(' LD_LIBRARY_PATH="%s"', libDir)
+    else
+      exports = "env -u LD_LIBRARY_PATH " .. exports
     end
     for k, v in pairs(extraEnv) do
       if k and v and v ~= "" then
@@ -291,9 +305,11 @@ function LuaJitTool.wrapCommand(innerCmd, luajitPath, libDir, extraEnv)
   end
   f:write("#!/bin/sh\n")
   f:write(string.format('export MODKIT_LUAJIT="%s"\n', luajitPath))
+  -- Drop LÖVE AppImage library path so system luajit loads its own .so.
   if libDir and libDir ~= "" then
-    f:write(string.format(
-      'export LD_LIBRARY_PATH="%s:${LD_LIBRARY_PATH:-}"\n', libDir))
+    f:write(string.format('export LD_LIBRARY_PATH="%s"\n', libDir))
+  else
+    f:write("unset LD_LIBRARY_PATH\n")
   end
   for k, v in pairs(extraEnv) do
     if k and v and v ~= "" then

@@ -20,6 +20,7 @@ local Moves = require("Moves")
 local MoveEffects = require("MoveEffects")
 local Types = require("Types")
 local Maps = require("Maps")
+local Encounters = require("Encounters")
 local Dialog = require("Dialog")
 local Trainers = require("Trainers")
 local Events = require("Events")
@@ -32,6 +33,7 @@ local Player = require("Player")
 local Ui = require("Ui")
 local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
+local RegList = require("RegList")
 
 local App = {}
 local S
@@ -50,6 +52,8 @@ local TABS = {
     tip = "Browse and edit Lua files under mods/" },
   { id = "maps",     label = "MAPS",
     tip = "Paint blocks, warps, objects, encounters, hidden items" },
+  { id = "encounters", label = "ENCOUNTERS",
+    tip = "Wild tables and Special gifts/battles (DVs, moves)" },
   { id = "dialog",   label = "DIALOG",
     tip = "NPC / sign TEXT_* strings and bindings" },
   { id = "trainers", label = "TRAINERS",
@@ -91,6 +95,7 @@ local PANELS = {
   effects = MoveEffects,
   types = Types,
   maps = Maps,
+  encounters = Encounters,
   dialog = Dialog,
   trainers = Trainers,
   ai = AiClasses,
@@ -568,6 +573,88 @@ function App.close()
   love.event.quit()
 end
 
+local TAB_GAP = 6
+
+local function measureTabs(s)
+  local widths, total = {}, 0
+  local gap = TAB_GAP * s
+  for i, t in ipairs(TABS) do
+    local tw = math.max(72 * s, Kit.textWidth("micro", t.label) + 18 * s)
+    widths[i] = tw
+    total = total + tw + (i > 1 and gap or 0)
+  end
+  return widths, total, gap
+end
+
+local function tabOffsetOf(widths, gap, index)
+  local x = 0
+  for i = 1, index - 1 do
+    x = x + (widths[i] or 0) + gap
+  end
+  return x
+end
+
+local function ensureTabVisible(s, viewW)
+  if not S or viewW <= 0 then return end
+  local widths, contentW, gap = measureTabs(s)
+  local maxOff = math.max(0, contentW - viewW)
+  local idx = 1
+  for i, t in ipairs(TABS) do
+    if t.id == S.tab then idx = i; break end
+  end
+  local left = tabOffsetOf(widths, gap, idx)
+  local right = left + (widths[idx] or 0)
+  local scroll = Theme.clamp(S.tabBarScroll or 0, 0, maxOff)
+  if left < scroll then
+    scroll = left
+  elseif right > scroll + viewW then
+    scroll = right - viewW
+  end
+  S.tabBarScroll = Theme.clamp(scroll, 0, maxOff)
+end
+
+-- Horizontal scrollbar under the tab strip. Returns updated pixel offset.
+local function tabHScrollbar(x, y, w, h, offset, contentW, viewW)
+  local maxOff = math.max(0, (contentW or 0) - math.max(0, viewW or 0))
+  offset = Theme.clamp(offset or 0, 0, maxOff)
+  if maxOff <= 0 or w <= 0 or h <= 0 then return 0 end
+  local s = Kit.scale
+  local thumbW = math.max(28 * s, w * viewW / math.max(1, contentW))
+  local travel = math.max(1, w - thumbW)
+  local tx = x + travel * (offset / maxOff)
+  local drag = S and S._tabBarDrag
+
+  if not Kit.mouseDown then
+    if S then S._tabBarDrag = nil end
+  elseif drag and drag.mode == "thumb" then
+    local rel = Theme.clamp(Kit.mouseX - drag.grab, 0, travel)
+    offset = Theme.clamp(rel / travel * maxOff, 0, maxOff)
+  elseif Kit.mouseClicked and not Kit.blockClicks and Kit.hit(x, y, w, h) then
+    if Kit.hit(tx, y, thumbW, h) then
+      if S then
+        S._tabBarDrag = { mode = "thumb", grab = Kit.mouseX - tx }
+      end
+    else
+      local page = math.max(40 * s, viewW * 0.6)
+      if Kit.mouseX < tx then
+        offset = Theme.clamp(offset - page, 0, maxOff)
+      else
+        offset = Theme.clamp(offset + page, 0, maxOff)
+      end
+    end
+  end
+
+  if love and love.graphics then
+    Theme.col(PAL.cardBorder, 0.35)
+    love.graphics.rectangle("fill", x, y, w, h, h / 2, h / 2)
+    local hot = Kit.hover(tx, y, thumbW, h)
+      or (drag and drag.mode == "thumb")
+    Theme.col(PAL.green, hot and 0.9 or 0.65)
+    love.graphics.rectangle("fill", tx, y, thumbW, h, h / 2, h / 2)
+  end
+  return offset
+end
+
 local function cycleTab(delta)
   local idx = 1
   for i, t in ipairs(TABS) do
@@ -586,6 +673,7 @@ local function cycleTab(delta)
   if prev == "ui" and S.tab ~= "ui" then
     pcall(function() UiPreview.stop(S) end)
   end
+  S._tabBarNeedsReveal = true
   say("Tab: " .. TABS[idx].label)
 end
 
@@ -670,6 +758,8 @@ function App.update(dt)
   if S.tab == "maps" and Maps.update then
     pcall(function() Maps.update(S, dt or 0) end)
   end
+  -- Arrow-key list nav (hold-to-repeat) for every panel that bindNav'd.
+  pcall(function() RegList.update(S, dt or 0) end)
   if S._romImporter then
     local imp = S._romImporter
     pcall(function() imp:update(dt or 0) end)
@@ -826,9 +916,52 @@ function App.draw()
 
   local tabY = railH + 70 * s
   local tabH = 36 * s
-  local tx = 20 * s
-  for _, t in ipairs(TABS) do
-    local tw = math.max(72 * s, Kit.textWidth("micro", t.label) + 18 * s)
+  local tabPadX = 20 * s
+  local tabViewX = tabPadX
+  local tabViewW = math.max(40 * s, W - tabPadX * 2)
+  local widths, contentW, gap = measureTabs(s)
+  local maxOff = math.max(0, contentW - tabViewW)
+  local showBar = maxOff > 0
+  local barH = showBar and math.max(6 * s, 8 * s) or 0
+  local barGap = showBar and 4 * s or 0
+
+  if S._tabBarNeedsReveal then
+    S._tabBarNeedsReveal = nil
+    ensureTabVisible(s, tabViewW)
+  end
+  S.tabBarScroll = Theme.clamp(S.tabBarScroll or 0, 0, maxOff)
+
+  -- Wheel / drag-scroll over the tab strip (and its scrollbar).
+  local hitH = tabH + (showBar and (barGap + barH) or 0)
+  if showBar and Kit.hit(tabViewX, tabY, tabViewW, hitH) and not Kit.blockClicks then
+    if (Kit.wheelY or 0) ~= 0 then
+      local notch = 80 * s
+      local delta = (Kit.wheelY > 0) and -notch or notch
+      S.tabBarScroll = Theme.clamp((S.tabBarScroll or 0) + delta, 0, maxOff)
+      Kit.wheelY = 0
+    end
+    if Kit.mouseDown then
+      if not S._tabBarStripDrag and Kit.hit(tabViewX, tabY, tabViewW, tabH)
+          and not (S._tabBarDrag and S._tabBarDrag.mode == "thumb") then
+        S._tabBarStripDrag = {
+          x = Kit.mouseX, off = S.tabBarScroll or 0,
+        }
+      elseif S._tabBarStripDrag then
+        S.tabBarScroll = Theme.clamp(
+          S._tabBarStripDrag.off + (S._tabBarStripDrag.x - Kit.mouseX),
+          0, maxOff)
+      end
+    else
+      S._tabBarStripDrag = nil
+    end
+  else
+    S._tabBarStripDrag = nil
+  end
+
+  Kit.pushClip(tabViewX, tabY, tabViewW, tabH)
+  local tx = tabViewX - (S.tabBarScroll or 0)
+  for i, t in ipairs(TABS) do
+    local tw = widths[i]
     local on = S.tab == t.id
     if Kit.chip(tx, tabY, tw, tabH, t.label, on, PAL.green, PAL.steel, t.tip) then
       if S.tab == "audio" and t.id ~= "audio" then
@@ -842,11 +975,21 @@ function App.draw()
         pcall(function() UiPreview.stop(S) end)
       end
       S.tab = t.id
+      S._tabBarNeedsReveal = true
     end
-    tx = tx + tw + 6 * s
+    tx = tx + tw + gap
+  end
+  Kit.popClip()
+
+  if showBar then
+    S.tabBarScroll = tabHScrollbar(
+      tabViewX, tabY + tabH + barGap, tabViewW, barH,
+      S.tabBarScroll or 0, contentW, tabViewW)
+  else
+    S.tabBarScroll = 0
   end
 
-  local contentY = tabY + tabH + 16 * s
+  local contentY = tabY + tabH + barGap + barH + 16 * s
   local contentH = H - contentY - 44 * s
   History.beginFrame(S)
   -- Block underlying panel hits while a modal is up.
@@ -854,6 +997,7 @@ function App.draw()
       or S._pathPrompt or S.mapTilesetPicker then
     Kit.blockClicks = true
   end
+  RegList.clearNav(S)
   local panel = PANELS[S.tab]
   if panel and panel.draw then
     panel.draw(S, 20 * s, contentY, W - 40 * s, contentH, App)
@@ -924,6 +1068,11 @@ function App.keypressed(key)
       Kit.blur()
       return
     end
+    if S.warpDestPick then
+      S.warpDestPick = nil
+      S.status = "Set destination cancelled"
+      return
+    end
     return App.close()
   end
   if key == "s" and ctrl then
@@ -936,6 +1085,7 @@ function App.keypressed(key)
       or S.mapTilesetPicker or S._pathPrompt then
     return
   end
+  if RegList.keypressed(S, key) then return end
   if S.tab == "maps" and Maps.keypressed then
     Maps.keypressed(S, key)
   elseif S.tab == "code" and Code.keypressed then

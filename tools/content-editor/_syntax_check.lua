@@ -28,8 +28,14 @@ local ok, err = pcall(function()
   local Ui = require("Ui")
   local UiPreview = require("UiPreview")
   local SpriteUtil = require("SpriteUtil")
+  local EncounterEdit = require("EncounterEdit")
+  local Encounters = require("Encounters")
   local ModWriter = require("ModWriter")
   assert(SpriteUtil.createNew)
+  assert(EncounterEdit.drawWild)
+  assert(Encounters.draw)
+  assert(ModWriter.emitSpecialEncounters)
+  assert(ModWriter.applySpecialEncounterBinds)
   do
     local stubS = { project = { sprites = {} }, data = { sprites = {} } }
     local id, rec = SpriteUtil.createNew(stubS)
@@ -82,6 +88,24 @@ local ok, err = pcall(function()
     moveEffects = {
       FX_RECOIL = { id = "FX_RECOIL", template = "recoil", recoilDiv = 4 },
     },
+    specialEncounters = {
+      MAGIKARP_LEGEND = {
+        kind = "gift", mapId = "PALLET_TOWN", species = "MAGIKARP",
+        level = 100, moves = { "HYDRO_PUMP" },
+        dvs = { attack = 15, defense = 15, speed = 15, special = 15, hp = 15 },
+        unique = true, flag = "GOT_MAGIKARP_LEGEND",
+        text = "A legendary fish!", after = "Already gifted.",
+        bindTextId = "TEXT_PALLETTOWN_SIGN",
+      },
+      SPEC_BATTLE = {
+        kind = "battle", mapId = "VIRIDIAN_CITY", species = "MAGIKARP",
+        level = 100, moves = { "HYDRO_PUMP", "TACKLE" },
+        dvs = { attack = 15, defense = 15, speed = 15, special = 15 },
+        unique = true, flag = "BEAT_SPEC_BATTLE",
+        text = "Fight!", won = "Wow!", after = "Strong.",
+        bindTextId = "TEXT_VIRIDIANCITY_SIGN",
+      },
+    },
   }, {
     moves = {
       ROCK_SLIDE = {
@@ -106,6 +130,14 @@ local ok, err = pcall(function()
   assert(sample:find("mod.content.strings:override"), sample)
   assert(sample:find("assets/badges/boulder.png") or sample:find("boulder"), sample)
   assert(sample:find("move_effects:register"), sample)
+  assert(sample:find('trainers:register%("OPP_SPEC_SPEC_BATTLE"'), sample)
+  assert(sample:find("give_special"), sample)
+  assert(sample:find("SPECIALS"), sample)
+  assert(sample:find("HYDRO_PUMP"), sample)
+  assert(sample:find("TEXT_PALLETTOWN_SIGN"), sample)
+  assert(sample:find('"start_battle"'), sample)
+  assert(sample:find('"OPP_SPEC_SPEC_BATTLE"'), sample)
+  assert(sample:find('"t:give_special"'), sample)
   print("OK modules load")
 end)
 if not ok then print("FAIL", err); os.exit(1) end

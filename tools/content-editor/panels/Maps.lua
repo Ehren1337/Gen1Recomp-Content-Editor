@@ -11,6 +11,8 @@ local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local FormPane = require("FormPane")
 local SpriteUtil = require("SpriteUtil")
+local EncounterEdit = require("EncounterEdit")
+local RegList = require("RegList")
 local MapLoader = require("src.world.MapLoader")
 local Map = require("src.world.Map")
 local SpriteRenderer = require("src.render.SpriteRenderer")
@@ -158,23 +160,11 @@ local function cloneArrayOfTables(arr)
 end
 
 local function cloneSlots(slots)
-  local out = {}
-  for i, slot in ipairs(slots or {}) do
-    out[i] = { level = slot.level, species = slot.species }
-  end
-  return out
+  return EncounterEdit.cloneSlots(slots)
 end
 
 local function cloneEncounters(enc)
-  if type(enc) ~= "table" then return nil end
-  local out = {}
-  for _, kind in ipairs({ "grass", "water" }) do
-    local band = enc[kind]
-    if type(band) == "table" then
-      out[kind] = { rate = band.rate or 0, slots = cloneSlots(band.slots) }
-    end
-  end
-  return out
+  return EncounterEdit.cloneEncounters(enc)
 end
 
 local function deepCloneMap(def)
@@ -356,23 +346,6 @@ local function drawSelectionOverlay(S, mapDef)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
-local function resolveEncounters(S, mapId, mapDef)
-  if mapDef and mapDef.encounters then return mapDef.encounters, true end
-  if S.data and S.data.encounters and S.data.encounters[mapId] then
-    return S.data.encounters[mapId], false
-  end
-  return nil, false
-end
-
-local function resolveSuperRod(S, mapId, mapDef)
-  if mapDef and mapDef.superRod then return mapDef.superRod, true end
-  if S.data and S.data.field and S.data.field.superRod
-      and S.data.field.superRod[mapId] then
-    return S.data.field.superRod[mapId], false
-  end
-  return nil, false
-end
-
 local function cloneHiddenList(list)
   local out = {}
   for i, h in ipairs(list or {}) do
@@ -460,30 +433,6 @@ local function removeBadgeGate(S, mapId)
   -- deep-merge patches do not come back on Save).
   S.project.badgeGates[mapId] = false
   syncLiveBadgeGate(S, mapId, nil)
-end
-
-local function defaultFishing(S)
-  local FieldDefaults = require("src.world.FieldDefaults")
-  local fish = FieldDefaults.field(S.data, "fishing") or {}
-  return fish
-end
-
-local function resolveOldRod(S)
-  State.ensureProjectFields(S.project)
-  if S.project.fishing and S.project.fishing.OLD_ROD then
-    return S.project.fishing.OLD_ROD, true
-  end
-  local fish = defaultFishing(S)
-  return fish.OLD_ROD, false
-end
-
-local function resolveGoodRod(S)
-  State.ensureProjectFields(S.project)
-  if S.project.fishing and S.project.fishing.GOOD_ROD then
-    return S.project.fishing.GOOD_ROD, true
-  end
-  local fish = defaultFishing(S)
-  return fish.GOOD_ROD, false
 end
 
 local function defaultMap(id, index, tileset)
@@ -1487,8 +1436,78 @@ local function getSpriteRenderer(S, spriteId)
   return ok and sr or nil
 end
 
+local function clearWarpDestPick(S, status)
+  if not S.warpDestPick then return end
+  S.warpDestPick = nil
+  if status then S.status = status end
+end
+
+local function armWarpDestPick(S, mapId, warpIndex)
+  if not mapId or not warpIndex then return end
+  S.warpDestPick = { sourceMapId = mapId, sourceWarpIndex = warpIndex }
+  S.status = string.format(
+    "Set dest for %s#%d — switch maps, click cell (Esc cancel)",
+    tostring(mapId), warpIndex)
+end
+
+-- Nearest warp within manhattan threshold; nil if none.
+local function nearestWarpIndex(warps, cx, cy, maxD)
+  maxD = maxD or 1
+  local best, bestD = nil, maxD + 0.01
+  for i, w in ipairs(warps or {}) do
+    local d = math.abs((w.x or 0) - cx) + math.abs((w.y or 0) - cy)
+    if d < bestD then best, bestD = i, d end
+  end
+  return best
+end
+
+local function applyWarpDestPick(S, mapDef, cx, cy, App)
+  local pick = S.warpDestPick
+  if not pick then return false end
+  local srcId = pick.sourceMapId
+  local srcIdx = pick.sourceWarpIndex
+  local destId = mapDef.id or S.mapId
+  local destMap = ensureOwned(S, destId)
+  if not destMap then
+    clearWarpDestPick(S, "Set destination failed: no destination map")
+    return true
+  end
+  local srcMap = ensureOwned(S, srcId)
+  if not srcMap or not srcMap.warps or not srcMap.warps[srcIdx] then
+    clearWarpDestPick(S, "Set destination cancelled: source warp missing")
+    return true
+  end
+
+  destMap.warps = destMap.warps or {}
+  local destIdx = nearestWarpIndex(destMap.warps, cx, cy, 1)
+  if not destIdx then
+    destIdx = #destMap.warps + 1
+    destMap.warps[destIdx] = {
+      x = cx, y = cy, destMap = "LAST_MAP", destWarp = 1,
+    }
+  end
+
+  srcMap.warps[srcIdx].destMap = destId
+  srcMap.warps[srcIdx].destWarp = destIdx
+  S.data.maps[srcId] = srcMap
+  S.data.maps[destId] = destMap
+  MapLoader.invalidate(srcId)
+  MapLoader.invalidate(destId)
+
+  S.mapSection = "warps"
+  S.mapWarpIndex = destIdx
+  clearWarpDestPick(S, string.format("Linked %s#%d → %s#%d",
+    tostring(srcId), srcIdx, tostring(destId), destIdx))
+  App.markDirty()
+  return true
+end
+
 local function applyToolAtCell(S, mapDef, cx, cy, App)
   if cx < 0 or cy < 0 or cx >= mapDef.width * 2 or cy >= mapDef.height * 2 then
+    return
+  end
+  if S.warpDestPick then
+    applyWarpDestPick(S, mapDef, cx, cy, App)
     return
   end
   local owned = ensureOwned(S, mapDef.id or S.mapId)
@@ -1521,9 +1540,10 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       return
     end
   elseif tool == "warp" then
+    clearWarpDestPick(S)
     mapDef.warps = mapDef.warps or {}
     mapDef.warps[#mapDef.warps + 1] = {
-      x = cx, y = cy, destMap = "PALLET_TOWN", destWarp = 0,
+      x = cx, y = cy, destMap = "PALLET_TOWN", destWarp = 1,
     }
     S.mapSection = "warps"
     S.mapWarpIndex = #mapDef.warps
@@ -1778,8 +1798,10 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   end
 
   local tool = S.mapTool or "paint"
+  -- Dest pick is a single click; do not brush-drag while armed.
   local brush = (tool == "paint" or tool == "erase" or tool == "pick")
-  local selecting = (tool == "select")
+    and not S.warpDestPick
+  local selecting = (tool == "select") and not S.warpDestPick
   local over = Kit.hit(vx, vy, vw, vh)
   -- Middle / right button always pans (Kit.mouseDown is left-only).
   local auxPan = false
@@ -1915,7 +1937,11 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   end
   local hint
   local ts = tostring(mapDef.tileset or "?")
-  if brush then
+  if S.warpDestPick then
+    hint = string.format(
+      "%.1fx  %s  click=set warp dest  Esc=cancel  MMB/RMB/Space=pan",
+      S.mapZoom, ts)
+  elseif brush then
     hint = string.format(
       "%.1fx  %s  blk=%s  drag=paint  MMB/RMB/Space=pan  hold WASD",
       S.mapZoom, ts, tostring(S.paintBlock or 1))
@@ -1930,17 +1956,18 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   Kit.text("micro", hint, vx + 6 * s, vy + vh - 16 * s, PAL.faint)
 end
 
--- Hold WASD / arrows to pan continuously (Shift = faster).
+-- Hold WASD to pan continuously (Shift = faster).
+-- Arrow keys navigate the map list (RegList), not the camera.
 function Maps.update(S, dt)
   if not S or S.mapTilesetPicker then return end
   if Kit.focus then return end
   if Kit.blockClicks then return end
   if not (love and love.keyboard and love.keyboard.isDown) then return end
   local dx, dy = 0, 0
-  if love.keyboard.isDown("left") or love.keyboard.isDown("a") then dx = dx - 1 end
-  if love.keyboard.isDown("right") or love.keyboard.isDown("d") then dx = dx + 1 end
-  if love.keyboard.isDown("up") or love.keyboard.isDown("w") then dy = dy - 1 end
-  if love.keyboard.isDown("down") or love.keyboard.isDown("s") then dy = dy + 1 end
+  if love.keyboard.isDown("a") then dx = dx - 1 end
+  if love.keyboard.isDown("d") then dx = dx + 1 end
+  if love.keyboard.isDown("w") then dy = dy - 1 end
+  if love.keyboard.isDown("s") then dy = dy + 1 end
   if dx == 0 and dy == 0 then return end
   local len = math.sqrt(dx * dx + dy * dy)
   dx, dy = dx / len, dy / len
@@ -1982,9 +2009,12 @@ end
 function Maps.keypressed(S, key)
   -- Escape / typing handled at App while the tileset modal is up.
   if S.mapTilesetPicker then return true end
-  -- WASD / arrows pan continuously in Maps.update (hold to move).
-  if key == "up" or key == "down" or key == "left" or key == "right"
-      or key == "w" or key == "a" or key == "s" or key == "d" then
+  if key == "escape" and S.warpDestPick then
+    clearWarpDestPick(S, "Set destination cancelled")
+    return true
+  end
+  -- WASD pans in Maps.update; arrows are reserved for the map list.
+  if key == "w" or key == "a" or key == "s" or key == "d" then
     return true
   end
   if S.mapViewMode == "world" then
@@ -2601,6 +2631,17 @@ end
 
 local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   map.warps = map.warps or {}
+  local pick = S.warpDestPick
+  if pick and py + 16 * s <= listBottom then
+    Kit.text("micro", string.format(
+      "Picking dest for %s#%d — click map (Esc cancel)",
+      tostring(pick.sourceMapId), pick.sourceWarpIndex or 0),
+      px + 10 * s, py, PAL.green or PAL.caption)
+    py = py + 18 * s
+    S.status = string.format(
+      "Set dest for %s#%d — switch maps, click cell (Esc cancel)",
+      tostring(pick.sourceMapId), pick.sourceWarpIndex or 0)
+  end
   py, S.mapWarpIndex = drawListPicker(S, "mapWarpIndex", #map.warps, px, py, propW, fh, s, PAL.blue)
   local i = S.mapWarpIndex
   local w = i and map.warps[i]
@@ -2628,17 +2669,38 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   end)
   row("Dest warp #", function(fx, fy, fw, fh_)
     local v = tonumber(field(App, "wp_dw", fx, fy, 60 * s, fh_,
-      tostring(w.destWarp or 0), "0")) or 0
-    if v ~= (w.destWarp or 0) then map = mutate(); map.warps[i].destWarp = v end
+      tostring(w.destWarp or 1), "1")) or 1
+    if v ~= (w.destWarp or 1) then map = mutate(); map.warps[i].destWarp = v end
   end)
-  if py + 32 * s <= listBottom
-      and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete warp",
+
+  local armedHere = pick and pick.sourceMapId == (map.id or S.mapId)
+    and pick.sourceWarpIndex == i
+  if not armedHere and py + 32 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Set destination",
+        { kind = "primary" }) then
+      armWarpDestPick(S, map.id or S.mapId, i)
+    end
+    py = py + 34 * s
+  end
+
+  -- Advance py even when the button is drawn so FormPane scroll height
+  -- includes it (otherwise the clip hides Delete warp under the footer).
+  if py + 32 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete warp",
         { kind = "danger" }) then
-    map = mutate()
-    table.remove(map.warps, i)
-    S.mapWarpIndex = math.min(i, #map.warps)
-    MapLoader.invalidate(map.id)
-    App.markDirty()
+      local mid = map.id or S.mapId
+      if pick and pick.sourceMapId == mid and pick.sourceWarpIndex == i then
+        clearWarpDestPick(S, "Set destination cancelled")
+      elseif pick and pick.sourceMapId == mid and pick.sourceWarpIndex > i then
+        pick.sourceWarpIndex = pick.sourceWarpIndex - 1
+      end
+      map = mutate()
+      table.remove(map.warps, i)
+      S.mapWarpIndex = math.min(i, #map.warps)
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+    end
+    py = py + 34 * s
   end
   return py
 end
@@ -3196,12 +3258,24 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     editLine("After (defeated)", "after", "You're strong.")
 
     row("Beat flag", function(fx, fy, fw, fh_)
-      -- Field id includes object index so typing never bleeds across trainers.
+      -- Field id includes map + object index so typing never bleeds.
       local cur = (hdr and hdr.event) or ""
-      local v = field(App, "ob_ev_" .. i, fx, fy, fw, fh_, cur, "MOD_BEAT_…")
+      local v = field(App, "ob_ev_" .. tostring(map.id) .. "_" .. idx,
+        fx, fy, fw, fh_, cur, "MOD_BEAT_…")
       v = (v ~= "" and v) or nil
       if v ~= (cur ~= "" and cur or nil) then
         local h = ensureHdr()
+        -- If other object indices share this table ref, clone them first.
+        local bucket = S.project.trainer_headers[label]
+        if type(bucket) == "table" then
+          for other, oh in pairs(bucket) do
+            if other ~= idx and oh == h then
+              local copy = {}
+              for k, val in pairs(oh) do copy[k] = val end
+              bucket[other] = copy
+            end
+          end
+        end
         if not v then
           v = State.modFlag(S.project,
             "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
@@ -3318,18 +3392,20 @@ local function drawHiddenItems(S, map, mutate, App, px, py, propW, listBottom, f
     py = py + fh + 4 * s
   end
 
-  if py + 30 * s <= listBottom
-      and Kit.button(px + 10 * s, py, 100 * s, 28 * s, "+ Add", { kind = "good" }) then
-    local list = ensureHiddenItems(S, mapId)
-    list[#list + 1] = { x = 0, y = 0, item = "POTION" }
-    App.markDirty()
+  if py + 30 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, 100 * s, 28 * s, "+ Add", { kind = "good" }) then
+      local list = ensureHiddenItems(S, mapId)
+      list[#list + 1] = { x = 0, y = 0, item = "POTION" }
+      App.markDirty()
+    end
     py = py + 32 * s
   end
-  if owned and #items > 0 and py + 36 * s <= listBottom
-      and Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Clear all",
+  if owned and #items > 0 and py + 36 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Clear all",
         { kind = "ghost" }) then
-    S.project.hiddenItems[mapId] = {}
-    App.markDirty()
+      S.project.hiddenItems[mapId] = {}
+      App.markDirty()
+    end
     py = py + 36 * s
   end
   return py
@@ -3459,233 +3535,19 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
   return py
 end
 
-local ENC_KINDS = {
-  { id = "grass", label = "GRASS" },
-  { id = "water", label = "WATER" },
-  { id = "super", label = "SUPER" },
-  { id = "old", label = "OLD" },
-  { id = "good", label = "GOOD" },
-}
-
-local function ensureEncounterBand(map, kind)
-  map.encounters = map.encounters or {}
-  if not map.encounters[kind] then
-    map.encounters[kind] = { rate = 0, slots = {} }
-  end
-  map.encounters[kind].slots = map.encounters[kind].slots or {}
-  return map.encounters[kind]
-end
-
-local function drawSlotRows(S, App, px, py, propW, listBottom, fh, s,
-    kindKey, slots, onChange, onDelete, maxSlots)
-  Kit.text("micro", "Slots (level, species)", px + 10 * s, py, PAL.caption)
+local function drawEncountersStub(S, App, px, py, propW, fh, s)
+  Kit.text("micro", "Wild tables and Special mons (DVs / moves) live on the",
+    px + 10 * s, py, PAL.muted)
   py = py + 16 * s
-  for si = 1, #(slots or {}) do
-    if py + fh > listBottom - 36 * s then break end
-    local slot = slots[si]
-    local speciesDef = (S.project.pokemon and S.project.pokemon[slot.species])
-      or (S.data.pokemon and S.data.pokemon[slot.species])
-    if speciesDef and speciesDef.spriteFront then
-      Preview.draw(S, speciesDef.spriteFront, px + 10 * s, py, 24 * s, 24 * s,
-        Preview.monPaletteName(S, speciesDef, slot.species))
-    end
-    local lx = px + 40 * s
-    local lvl = tonumber(field(App, "enc_lv_" .. kindKey .. si, lx, py, 40 * s, fh,
-      tostring(slot.level or 1), "1")) or 1
-    local sp = field(App, "enc_sp_" .. kindKey .. si, lx + 48 * s, py, 110 * s, fh,
-      slot.species or "PIDGEY", "PIDGEY"):upper():gsub("%s+", "_")
-    if lvl ~= (slot.level or 1) or sp ~= (slot.species or "") then
-      onChange(si, { level = math.max(1, lvl), species = sp })
-    end
-    if Kit.button(px + propW - 42 * s, py, 28 * s, fh, "X", { kind = "danger" }) then
-      onDelete(si)
-      break
-    end
-    py = py + math.max(fh, 26 * s) + 4 * s
+  Kit.text("micro", "Encounters tab.", px + 10 * s, py, PAL.muted)
+  py = py + 22 * s
+  if Kit.button(px + 10 * s, py, propW - 20 * s, 30 * s, "Open Encounters tab",
+      { kind = "accent" }) then
+    S.tab = "encounters"
+    S.encountersMode = "wild"
+    if S.mapId then S.encountersMapId = S.mapId end
   end
-  if #(slots or {}) < (maxSlots or 10) and py + 30 * s <= listBottom
-      and Kit.button(px + 10 * s, py, 100 * s, 28 * s, "+ Slot", { kind = "accent" }) then
-    onChange(#(slots or {}) + 1, { level = 5, species = "MAGIKARP" }, true)
-    py = py + 32 * s
-  end
-  return py
-end
-
-local function drawEncounters(S, map, mutate, App, px, py, propW, listBottom, fh, s)
-  State.ensureProjectFields(S.project)
-  local enc = resolveEncounters(S, S.mapId, map)
-  local superSlots = resolveSuperRod(S, S.mapId, map)
-
-  S.mapEncKind = S.mapEncKind or "grass"
-  local sx, sy = px + 10 * s, py
-  for _, kind in ipairs(ENC_KINDS) do
-    local on = S.mapEncKind == kind.id
-    local bw = Kit.textWidth("micro", kind.label) + 14 * s
-    if sx + bw > px + propW - 10 * s then
-      sx = px + 10 * s
-      sy = sy + fh + 4 * s
-    end
-    if Kit.chip(sx, sy, bw, fh, kind.label, on, PAL.green) then
-      S.mapEncKind = kind.id
-    end
-    sx = sx + bw + 4 * s
-  end
-  py = sy + fh + 10 * s
-
-  local kind = S.mapEncKind
-
-  if kind == "grass" or kind == "water" then
-    local band = enc and enc[kind]
-    if not band then
-      Kit.text("micro", "No " .. kind .. " encounters on this map.",
-        px + 10 * s, py, PAL.faint)
-      py = py + 18 * s
-      if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "+ Add " .. kind,
-          { kind = "good" }) then
-        map = mutate()
-        local b = ensureEncounterBand(map, kind)
-        b.rate = kind == "grass" and 25 or 5
-        b.slots = {
-          { level = kind == "grass" and 3 or 5,
-            species = kind == "grass" and "PIDGEY" or "TENTACOOL" },
-        }
-        App.markDirty()
-      end
-      return py + 36 * s
-    end
-
-    Kit.text("micro", "Rate (0-255)", px + 10 * s, py, PAL.caption)
-    py = py + 14 * s
-    local rate = tonumber(field(App, "enc_rate_" .. kind, px + 10 * s, py, 70 * s, fh,
-      tostring(band.rate or 0), "0")) or 0
-    if rate ~= (band.rate or 0) then
-      map = mutate()
-      ensureEncounterBand(map, kind).rate = math.max(0, math.min(255, rate))
-    end
-    py = py + fh + 8 * s
-
-    py = drawSlotRows(S, App, px, py, propW, listBottom, fh, s, kind, band.slots,
-      function(si, slot, isAdd)
-        map = mutate()
-        local b = ensureEncounterBand(map, kind)
-        if isAdd then b.slots[#b.slots + 1] = slot
-        else b.slots[si] = slot end
-        App.markDirty()
-      end,
-      function(si)
-        map = mutate()
-        table.remove(ensureEncounterBand(map, kind).slots, si)
-        App.markDirty()
-      end, 10)
-
-    if py + 36 * s <= listBottom
-        and Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Clear " .. kind,
-          { kind = "ghost" }) then
-      map = mutate()
-      if map.encounters then map.encounters[kind] = nil end
-      App.markDirty()
-    end
-    return py + 36 * s
-
-  elseif kind == "super" then
-    Kit.text("micro", "Super Rod group for this map (field.superRod).",
-      px + 10 * s, py, PAL.muted)
-    py = py + 18 * s
-    if not superSlots then
-      Kit.text("micro", "No Super Rod table here.", px + 10 * s, py, PAL.faint)
-      py = py + 18 * s
-      if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "+ Add Super Rod",
-          { kind = "good" }) then
-        map = mutate()
-        map.superRod = { { level = 15, species = "POLIWAG" } }
-        App.markDirty()
-      end
-      return py + 36 * s
-    end
-    py = drawSlotRows(S, App, px, py, propW, listBottom, fh, s, "super", superSlots,
-      function(si, slot, isAdd)
-        map = mutate()
-        map.superRod = map.superRod or cloneSlots(superSlots)
-        if isAdd then map.superRod[#map.superRod + 1] = slot
-        else map.superRod[si] = slot end
-        App.markDirty()
-      end,
-      function(si)
-        map = mutate()
-        map.superRod = map.superRod or cloneSlots(superSlots)
-        table.remove(map.superRod, si)
-        App.markDirty()
-      end, 10)
-    if py + 36 * s <= listBottom
-        and Kit.button(px + 10 * s, py, 110 * s, 28 * s, "Clear Super",
-          { kind = "ghost" }) then
-      map = mutate()
-      map.superRod = {}
-      App.markDirty()
-    end
-    return py + 36 * s
-
-  elseif kind == "old" then
-    Kit.text("micro", "Old Rod (global -- always hooks this mon).",
-      px + 10 * s, py, PAL.muted)
-    py = py + 18 * s
-    local def = select(1, resolveOldRod(S)) or { always = { species = "MAGIKARP", level = 5 } }
-    local always = def.always or { species = "MAGIKARP", level = 5 }
-    Kit.text("micro", "Level", px + 10 * s, py, PAL.caption)
-    py = py + 14 * s
-    local lvl = tonumber(field(App, "enc_old_lv", px + 10 * s, py, 50 * s, fh,
-      tostring(always.level or 5), "5")) or 5
-    local sp = field(App, "enc_old_sp", px + 70 * s, py, 140 * s, fh,
-      always.species or "MAGIKARP", "MAGIKARP"):upper():gsub("%s+", "_")
-    if lvl ~= (always.level or 5) or sp ~= (always.species or "") then
-      S.project.fishing.OLD_ROD = {
-        always = { level = math.max(1, lvl), species = sp },
-      }
-      App.markDirty()
-    end
-    py = py + fh + 10 * s
-    if S.project.fishing.OLD_ROD
-        and Kit.button(px + 10 * s, py, 120 * s, 28 * s, "Revert Old",
-          { kind = "danger" }) then
-      S.project.fishing.OLD_ROD = nil
-      App.markDirty()
-    end
-    return py + 36 * s
-
-  else -- good
-    Kit.text("micro", "Good Rod (global pool -- ~1/3 bite).",
-      px + 10 * s, py, PAL.muted)
-    py = py + 18 * s
-    local def = select(1, resolveGoodRod(S)) or {
-      pool = {
-        { species = "GOLDEEN", level = 10 },
-        { species = "POLIWAG", level = 10 },
-      },
-    }
-    local pool = def.pool or {}
-    py = drawSlotRows(S, App, px, py, propW, listBottom, fh, s, "good", pool,
-      function(si, slot, isAdd)
-        local cur = resolveGoodRod(S)
-        local base = (cur and cur.pool) and cloneSlots(cur.pool) or cloneSlots(pool)
-        if isAdd then base[#base + 1] = slot else base[si] = slot end
-        S.project.fishing.GOOD_ROD = { pool = base }
-        App.markDirty()
-      end,
-      function(si)
-        local cur = resolveGoodRod(S)
-        local base = (cur and cur.pool) and cloneSlots(cur.pool) or cloneSlots(pool)
-        table.remove(base, si)
-        S.project.fishing.GOOD_ROD = { pool = base }
-        App.markDirty()
-      end, 8)
-    if S.project.fishing.GOOD_ROD and py + 36 * s <= listBottom
-        and Kit.button(px + 10 * s, py, 120 * s, 28 * s, "Revert Good",
-          { kind = "danger" }) then
-      S.project.fishing.GOOD_ROD = nil
-      App.markDirty()
-    end
-    return py + 36 * s
-  end
+  return py + 36 * s
 end
 
 function Maps.draw(S, x, y, w, h, App)
@@ -3747,11 +3609,26 @@ function Maps.draw(S, x, y, w, h, App)
   local mapRowW = Kit.scrollInnerWidth(mapScrollW)
   S.mapListOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
     mapScrollH, S.mapListOffset or 0, #ids, perPage)
+  local mapNav = RegList.bindNav(S, ids, {
+    selKey = "mapId",
+    offsetKey = "mapListOffset",
+    perPage = perPage,
+    onSelect = function(id)
+      S._mapIdDraft = nil
+      S._mapCenteredFor = nil
+      S._mapPaletteFor = nil
+      S.mapSel, S._mapSelDraft, S._mapShiftDraft = nil, nil, nil
+      S._mapSelFor = id
+      S.mapObjectIndex, S.mapWarpIndex, S.mapSignIndex = 1, 1, 1
+      if S.mapViewMode == "world" then S._worldFitKey = nil end
+    end,
+  })
   local ry = listY + 8 * s
   for i = (S.mapListOffset or 0) + 1, math.min(#ids, (S.mapListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.maps[id] ~= nil
     if Kit.row(mapScrollX, ry, mapRowW, rowH, S.mapId == id, PAL.green) then
+      mapNav.activate()
       S.mapId = id
       S._mapIdDraft = nil
       S._mapCenteredFor = nil
@@ -4037,31 +3914,34 @@ function Maps.draw(S, x, y, w, h, App)
   FormPane.track(S, "mapFormScroll",
     tostring(S.mapId) .. "|" .. tostring(S.mapSection))
   local contentY, view = FormPane.begin(S, "mapFormScroll", viewX, viewY, viewW, viewH)
-  viewW = view.contentW or viewW
+  -- Lay out against the clipped content width so right-edge controls (X /
+  -- Clear) sit left of the scrollbar gutter instead of under it.
+  local formX = view.x or viewX
+  local formW = view.contentW or viewW
   local contentTop = contentY
   local listBottom = contentY + 4000 * s
   local fh = 26 * s
 
   if S.mapSection == "basics" then
-    contentY = drawBasics(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawBasics(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "warps" then
-    contentY = drawWarps(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawWarps(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "objects" then
-    contentY = drawObjects(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawObjects(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "signs" then
-    contentY = drawSigns(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawSigns(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "encounters" then
-    contentY = drawEncounters(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawEncountersStub(S, App, formX, contentY, formW, fh, s)
       or contentY
   elseif S.mapSection == "hidden" then
-    contentY = drawHiddenItems(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawHiddenItems(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "gates" then
-    contentY = drawBadgeGates(S, map, mutate, App, px, contentY, propW, listBottom, fh, s)
+    contentY = drawBadgeGates(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   end
   FormPane.finish(S, "mapFormScroll", contentTop, contentY, view)
@@ -4069,6 +3949,10 @@ function Maps.draw(S, x, y, w, h, App)
   local fy = py + canvasH - footerH + 4 * s
   if Kit.button(px + 10 * s, fy, propW - 20 * s, 26 * s, "Clear markers",
       { kind = "ghost" }) then
+    local mid = map.id or S.mapId
+    if S.warpDestPick and S.warpDestPick.sourceMapId == mid then
+      clearWarpDestPick(S, "Set destination cancelled")
+    end
     map = mutate()
     map.warps, map.objects, map.signs = {}, {}, {}
     MapLoader.invalidate(map.id)
@@ -4098,5 +3982,9 @@ function Maps.draw(S, x, y, w, h, App)
     Kit.text("micro", brief, mainX, dockY - 14 * s, PAL.faint)
   end
 end
+
+Maps.allMapIds = allMapIds
+Maps.ensureOwned = ensureOwned
+Maps.resolveMapDef = resolveMapDef
 
 return Maps

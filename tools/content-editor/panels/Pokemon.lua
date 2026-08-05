@@ -8,6 +8,7 @@ local TypeIds = require("TypeIds")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local FormPane = require("FormPane")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Pokemon = {}
@@ -685,6 +686,9 @@ function Pokemon.draw(S, x, y, w, h, App)
   local perPage = math.max(1, math.floor(listInnerH / (rowH + 4 * s)))
   S.pokemonListOffset = Kit.scroll(listInnerX, listInnerY, listInnerW, listInnerH,
     S.pokemonListOffset or 0, #ids, perPage)
+  local pokeNav = RegList.bindNav(S, ids, {
+    selKey = "pokemonId", offsetKey = "pokemonListOffset", perPage = perPage,
+  })
   Kit.pushClip(listInnerX, listInnerY, rowW, listInnerH)
   local ry = listInnerY
   for i = (S.pokemonListOffset or 0) + 1,
@@ -694,6 +698,7 @@ function Pokemon.draw(S, x, y, w, h, App)
       or (S.data.pokemon and S.data.pokemon[id])
     local owned = S.project.pokemon[id] ~= nil
     if Kit.row(listInnerX, ry, rowW, rowH, S.pokemonId == id, PAL.green) then
+      pokeNav.activate()
       S.pokemonId = id
     end
     Preview.drawPokemonIcon(S, rowMon, listInnerX + 4 * s,

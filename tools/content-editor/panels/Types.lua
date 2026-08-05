@@ -6,6 +6,7 @@ local Search = require("Search")
 local TypeIds = require("TypeIds")
 local State = require("State")
 local FormPane = require("FormPane")
+local RegList = require("RegList")
 local PAL = Theme.PAL
 
 local Types = {}
@@ -104,12 +105,17 @@ function Types.draw(S, x, y, w, h, App)
   local rowW = Kit.scrollInnerWidth(scrollW)
   S.typeListOffset = Kit.scroll(scrollX, scrollY, scrollW, scrollH,
     S.typeListOffset or 0, #ids, perPage)
+  local typeNav = RegList.bindNav(S, ids, {
+    selKey = "typeId", offsetKey = "typeListOffset", perPage = perPage,
+    onSelect = function() S.typeMatchOffset = 0 end,
+  })
   local ry = scrollY
   for i = (S.typeListOffset or 0) + 1,
       math.min(#ids, (S.typeListOffset or 0) + perPage) do
     local id = ids[i]
     local owned = S.project.types[id] ~= nil
     if Kit.row(scrollX, ry, rowW, rowH, S.typeId == id, PAL.yellow) then
+      typeNav.activate()
       S.typeId = id
       S.typeMatchOffset = 0
     end
