@@ -68,6 +68,10 @@ end
 -- Hover tip delay (seconds) before a tooltip appears.
 local TOOLTIP_DELAY = 0.45
 
+-- Arrow-key scroll: regions register while drawn; keys target the hovered one.
+local SCROLL_HOLD_DELAY = 0.32
+local SCROLL_HOLD_RATE = 0.055
+
 function Kit.beginFrame(mx, my, clicked, wheel)
   Kit.mouseX, Kit.mouseY = mx, my
   Kit.mouseClicked = clicked
@@ -92,6 +96,7 @@ function Kit.beginFrame(mx, my, clicked, wheel)
   end
   -- Last widget to call offerTooltip while hovered wins (draw order ≈ z).
   Kit._tipOffer = nil
+  Kit._scrollHits = {}
 end
 
 -- Register a hover tip for the current frame.  Drawn in endFrame after a short
@@ -110,6 +115,21 @@ end
 function Kit.endFrame()
   for i = #edits, 1, -1 do edits[i] = nil end
   Kit.wheelY = 0
+
+  -- Keep last frame's scroll hit list for keypressed (keys fire between draws).
+  Kit._lastScrollHits = Kit._scrollHits or {}
+  do
+    local live = {}
+    for _, r in ipairs(Kit._lastScrollHits) do
+      if r.key then live[r.key] = true end
+    end
+    if Kit._scrollState then
+      for key in pairs(Kit._scrollState) do
+        if not live[key] then Kit._scrollState[key] = nil end
+      end
+    end
+  end
+  Kit._scrollHits = nil
 
   local tip = Kit._tipOffer
   local now = Kit.time or 0
@@ -904,6 +924,184 @@ function Kit.scrollInnerWidth(w)
   return math.max(0, (w or 0) - Kit.scrollbarSize())
 end
 
+-- Point-in-rect without clip fencing (keys run between frames).
+local function rawHit(x, y, w, h)
+  return Kit.mouseX >= x and Kit.mouseX <= x + w
+     and Kit.mouseY >= y and Kit.mouseY <= y + h
+end
+
+local function findScrollReg(key)
+  if not key then return nil end
+  for _, r in ipairs(Kit._lastScrollHits or Kit._scrollHits or {}) do
+    if r.key == key then return r end
+  end
+  return nil
+end
+
+-- Track a scroll region for arrow-key control. Returns offset, possibly
+-- updated by a prior keypress. axis: "y" (default) or "x".
+-- Clicking a region focuses it; arrow keys only move the focused region.
+function Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, opts)
+  opts = opts or {}
+  maxOffset = math.max(0, tonumber(maxOffset) or 0)
+  offset = Theme.clamp(tonumber(offset) or 0, 0, maxOffset)
+  Kit._scrollState = Kit._scrollState or {}
+  local st = Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    offset = Theme.clamp(st.offset, 0, maxOffset)
+  end
+  local step = opts.step
+  local page = opts.page
+  local axis = opts.axis or "y"
+  local kind = opts.kind or "pixels"
+  if not step then
+    step = (kind == "rows") and 1 or math.max(24, 40 * (Kit.scale or 1))
+  end
+  if not page then
+    page = (kind == "rows") and math.max(1, opts.perPage or 1)
+      or math.max(1, (axis == "x" and w or h) * 0.85)
+  end
+  Kit._scrollState[key] = {
+    offset = offset, maxOffset = maxOffset,
+    step = step, page = page, axis = axis, kind = kind,
+  }
+  -- Click (or press) inside this region to make it the arrow-key target.
+  if not Kit.blockClicks and maxOffset > 0 and Kit.mouseClicked
+      and rawHit(x, y, w, h) then
+    Kit._scrollFocus = key
+  end
+  if not opts.updateOnly then
+    Kit._scrollHits = Kit._scrollHits or {}
+    Kit._scrollHits[#Kit._scrollHits + 1] = {
+      key = key, x = x, y = y, w = w, h = h,
+      maxOffset = maxOffset, step = step, page = page,
+      axis = axis, kind = kind,
+    }
+  end
+  return offset
+end
+
+local function scrollDeltaForKey(key, reg)
+  if not reg then return 0 end
+  local page = key == "pageup" or key == "pagedown"
+  local amount = page and (reg.page or 1) or (reg.step or 1)
+  if reg.kind == "rows" then amount = math.max(1, math.floor(amount)) end
+  if key == "up" or key == "left" or key == "pageup" then
+    return -amount
+  end
+  if key == "down" or key == "right" or key == "pagedown" then
+    return amount
+  end
+  return 0
+end
+
+local function axisForKey(key)
+  if key == "up" or key == "down" or key == "pageup" or key == "pagedown" then
+    return "y"
+  end
+  if key == "left" or key == "right" then return "x" end
+  return nil
+end
+
+-- Prefer the click-focused region; otherwise the smallest region under the mouse.
+local function targetScrollReg(axis)
+  local focus = Kit._scrollFocus
+  if focus then
+    local reg = findScrollReg(focus)
+    if reg and reg.maxOffset and reg.maxOffset > 0
+        and (reg.axis or "y") == axis then
+      return reg
+    end
+  end
+  local hits = Kit._lastScrollHits or Kit._scrollHits or {}
+  local best
+  for _, r in ipairs(hits) do
+    if r.maxOffset and r.maxOffset > 0 and (r.axis or "y") == axis
+        and rawHit(r.x, r.y, r.w, r.h) then
+      local area = (r.w or 0) * (r.h or 0)
+      if not best or area < best._area then
+        best = r
+        best._area = area
+      end
+    end
+  end
+  if best then Kit._scrollFocus = best.key end
+  return best
+end
+
+local function applyScrollDelta(reg, delta)
+  if not reg or not reg.key or delta == 0 then return false end
+  Kit._scrollState = Kit._scrollState or {}
+  local st = Kit._scrollState[reg.key]
+  if not st then
+    st = {
+      offset = 0, maxOffset = reg.maxOffset or 0,
+      step = reg.step, page = reg.page, axis = reg.axis, kind = reg.kind,
+    }
+    Kit._scrollState[reg.key] = st
+  end
+  local maxOff = math.max(0, reg.maxOffset or st.maxOffset or 0)
+  local next = Theme.clamp((st.offset or 0) + delta, 0, maxOff)
+  if next == (st.offset or 0) then return true end
+  st.offset = next
+  st.maxOffset = maxOff
+  return true
+end
+
+-- True while arrows are actively repeating on a scrollbar (suppress RegList).
+function Kit.scrollNavActive()
+  return Kit._scrollHold ~= nil
+end
+
+-- Arrow / Page keys scroll only the focused / hovered scrollbar region.
+function Kit.scrollKeypressed(key)
+  if Kit.focus or Kit.blockClicks then return false end
+  local axis = axisForKey(key)
+  if not axis then return false end
+  local reg = targetScrollReg(axis)
+  if not reg then return false end
+  local delta = scrollDeltaForKey(key, reg)
+  if delta == 0 then return false end
+  if not applyScrollDelta(reg, delta) then return false end
+  Kit._scrollFocus = reg.key
+  Kit._scrollHold = {
+    key = reg.key, axis = axis, code = key, t = 0, delay = true,
+  }
+  return true
+end
+
+-- Hold-to-repeat for arrow scrolling (call from App.update).
+function Kit.scrollUpdate(dt)
+  if Kit.focus or Kit.blockClicks then
+    Kit._scrollHold = nil
+    return
+  end
+  if not (love and love.keyboard and love.keyboard.isDown) then
+    Kit._scrollHold = nil
+    return
+  end
+  local hold = Kit._scrollHold
+  if not hold then return end
+  if not love.keyboard.isDown(hold.code) then
+    Kit._scrollHold = nil
+    return
+  end
+  local reg = findScrollReg(hold.key)
+  if not reg or not reg.maxOffset or reg.maxOffset <= 0 then
+    Kit._scrollHold = nil
+    return
+  end
+  hold.t = (hold.t or 0) + (tonumber(dt) or 0)
+  local need = hold.delay and SCROLL_HOLD_DELAY or SCROLL_HOLD_RATE
+  while hold.t >= need do
+    hold.t = hold.t - need
+    hold.delay = false
+    need = SCROLL_HOLD_RATE
+    local delta = scrollDeltaForKey(hold.code, reg)
+    if delta == 0 or not applyScrollDelta(reg, delta) then break end
+  end
+end
+
 -- kind: "rows" (integer offset) or "pixels". visible/content size the thumb.
 -- Returns offset, consumedClick (true when this frame handled bar input).
 local function applyScrollbarDrag(x, y, w, h, offset, maxOffset, visible, content, kind)
@@ -956,13 +1154,25 @@ local function applyScrollbarDrag(x, y, w, h, offset, maxOffset, visible, conten
   return offset, false
 end
 
-function Kit.scroll(x, y, w, h, offset, total, perPage, step)
+-- Optional `id` (string) uniquely identifies this scrollbar across frames.
+function Kit.scroll(x, y, w, h, offset, total, perPage, step, id)
   local maxOffset = math.max(0, (total or 0) - (perPage or 0))
-  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
+  local st = Kit._scrollState and Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    offset = Theme.clamp(st.offset, 0, maxOffset)
+  else
+    offset = Theme.clamp(offset or 0, 0, maxOffset)
+  end
   local onBar
   offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
     perPage or 0, total or 0, "rows")
-  if Kit.blockClicks then return offset end
+  if Kit.blockClicks then
+    return Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, {
+      axis = "y", kind = "rows", step = math.max(1, step or 1),
+      perPage = perPage, page = math.max(1, perPage or 1),
+    })
+  end
 
   -- Touch / click-drag on the list body (not while dragging the thumb).
   local dragStep = math.max(1, step or 1)
@@ -970,11 +1180,11 @@ function Kit.scroll(x, y, w, h, offset, total, perPage, step)
       and (perPage or 0) > 0 then
     local hitW = math.max(SB_WIDTH, SB_HIT) * Kit.scale
     local barHit = Kit.hit(x + w - hitW, y, hitW, h)
-    local key = math.floor(x) .. ":" .. math.floor(y)
+    local dkey = math.floor(x) .. ":" .. math.floor(y)
     local d = Kit._drag
     if not d and Kit.hit(x, y, w, h) and not barHit then
-      Kit._drag = { key = key, startY = Kit.mouseY, base = offset }
-    elseif d and d.key == key then
+      Kit._drag = { key = dkey, startY = Kit.mouseY, base = offset }
+    elseif d and d.key == dkey then
       local visRows = math.max(1, math.floor(perPage / dragStep))
       local rowPx = math.max(1, h / visRows)
       local moved = math.floor((d.startY - Kit.mouseY) / rowPx + 0.5) * dragStep
@@ -983,12 +1193,16 @@ function Kit.scroll(x, y, w, h, offset, total, perPage, step)
   end
 
   -- Wheel still works even if the pointer is over the scrollbar.
-  if (Kit.wheelY or 0) == 0 then return offset end
-  if not Kit.hit(x, y, w, h) then return offset end
-  local rows = step or math.max(1, math.min(SCROLL_ROWS, perPage or SCROLL_ROWS))
-  local notch = (Kit.wheelY > 0) and -rows or rows
-  Kit.wheelY = 0
-  return Theme.clamp(offset + notch, 0, maxOffset)
+  if (Kit.wheelY or 0) ~= 0 and Kit.hit(x, y, w, h) then
+    local rows = step or math.max(1, math.min(SCROLL_ROWS, perPage or SCROLL_ROWS))
+    local notch = (Kit.wheelY > 0) and -rows or rows
+    Kit.wheelY = 0
+    offset = Theme.clamp(offset + notch, 0, maxOffset)
+  end
+  return Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, {
+    axis = "y", kind = "rows", step = math.max(1, step or 1),
+    perPage = perPage, page = math.max(1, perPage or 1),
+  })
 end
 
 -- Pixel-unit sibling of Kit.scroll for a whole stacked card column (#715
@@ -998,47 +1212,75 @@ end
 -- Kit.blockClicks), same drag contract (a tap still dispatches as a click).
 -- Call it AFTER the content so any inner Kit.scroll list gets first claim on
 -- a wheel notch or drag that lands over it.
-function Kit.scrollPixels(x, y, w, h, offset, contentH)
+-- Optional `id` (string) uniquely identifies this scrollbar across frames.
+function Kit.scrollPixels(x, y, w, h, offset, contentH, id)
   local maxOffset = math.max(0, (contentH or 0) - math.max(0, h))
-  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
+  local st = Kit._scrollState and Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    offset = Theme.clamp(st.offset, 0, maxOffset)
+  else
+    offset = Theme.clamp(offset or 0, 0, maxOffset)
+  end
   local onBar
   offset, onBar = applyScrollbarDrag(x, y, w, h, offset, maxOffset,
     h, contentH or 0, "pixels")
-  if Kit.blockClicks then return offset end
+  if Kit.blockClicks then
+    return Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, {
+      axis = "y", kind = "pixels",
+      step = math.max(24, 40 * (Kit.scale or 1)),
+      page = math.max(1, h * 0.85),
+    })
+  end
 
   if not onBar and Kit.mouseDown and maxOffset > 0 and h > 0 then
     local hitW = math.max(SB_WIDTH, SB_HIT) * Kit.scale
     local barHit = Kit.hit(x + w - hitW, y, hitW, h)
-    local key = "px:" .. math.floor(x) .. ":" .. math.floor(y)
+    local dkey = "px:" .. math.floor(x) .. ":" .. math.floor(y)
     local d = Kit._drag
     if not d and Kit.hit(x, y, w, h) and not barHit then
-      Kit._drag = { key = key, startY = Kit.mouseY, base = offset }
-    elseif d and d.key == key then
+      Kit._drag = { key = dkey, startY = Kit.mouseY, base = offset }
+    elseif d and d.key == dkey then
       offset = Theme.clamp(d.base + (d.startY - Kit.mouseY), 0, maxOffset)
     end
   end
 
-  if (Kit.wheelY or 0) == 0 then return offset end
-  if not Kit.hit(x, y, w, h) then return offset end
-  local notch = 64 * Kit.scale
-  local delta = (Kit.wheelY > 0) and -notch or notch
-  Kit.wheelY = 0
-  return Theme.clamp(offset + delta, 0, maxOffset)
+  if (Kit.wheelY or 0) ~= 0 and Kit.hit(x, y, w, h) then
+    local notch = 64 * Kit.scale
+    local delta = (Kit.wheelY > 0) and -notch or notch
+    Kit.wheelY = 0
+    offset = Theme.clamp(offset + delta, 0, maxOffset)
+  end
+  return Kit.rememberScroll(key, x, y, w, h, offset, maxOffset, {
+    axis = "y", kind = "pixels",
+    step = math.max(24, 40 * (Kit.scale or 1)),
+    page = math.max(1, h * 0.85),
+  })
 end
 
 -- Paint a thicker scrollbar for a row-offset list. Interaction is handled in
 -- Kit.scroll (same rect); this keeps the thumb visible and easy to grab.
 -- Returns offset unchanged (or from an active drag) for optional assignment.
-function Kit.scrollbar(x, y, w, h, offset, total, perPage)
+function Kit.scrollbar(x, y, w, h, offset, total, perPage, id)
   total, perPage = total or 0, perPage or 0
   local maxOffset = math.max(0, total - perPage)
-  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
+  local st = Kit._scrollState and Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    offset = Theme.clamp(st.offset, 0, maxOffset)
+  else
+    offset = Theme.clamp(offset or 0, 0, maxOffset)
+  end
   if total <= perPage or h <= 0 or perPage <= 0 then
     return offset
   end
   local sb = Kit._sbDrag
-  if sb and sb.key == sbKey(x, y, w, h) and type(sb.offset) == "number" then
+  if sb and sb.key == key and type(sb.offset) == "number" then
     offset = Theme.clamp(sb.offset, 0, maxOffset)
+  end
+  if Kit._scrollState and Kit._scrollState[key] then
+    Kit._scrollState[key].offset = offset
+    Kit._scrollState[key].maxOffset = maxOffset
   end
 
   local s = Kit.scale
@@ -1053,21 +1295,31 @@ function Kit.scrollbar(x, y, w, h, offset, total, perPage)
     Theme.col(PAL.cardBorder, 0.35)
     G.rectangle("fill", bx, y, bw, h, bw / 2, bw / 2)
     local hot = Kit.hover(hitX, ty, hitW, th)
-      or (sb and sb.key == sbKey(x, y, w, h))
+      or (sb and sb.key == key)
     Theme.col(PAL.blue, hot and 0.9 or 0.7)
     G.rectangle("fill", bx, ty, bw, th, bw / 2, bw / 2)
   end
   return offset
 end
 
-function Kit.scrollbarPixels(x, y, w, h, offset, contentH)
+function Kit.scrollbarPixels(x, y, w, h, offset, contentH, id)
   contentH = contentH or 0
   local maxOffset = math.max(0, contentH - math.max(0, h))
-  offset = Theme.clamp(offset or 0, 0, maxOffset)
+  local key = (type(id) == "string" and id ~= "") and id or sbKey(x, y, w, h)
+  local st = Kit._scrollState and Kit._scrollState[key]
+  if st and type(st.offset) == "number" then
+    offset = Theme.clamp(st.offset, 0, maxOffset)
+  else
+    offset = Theme.clamp(offset or 0, 0, maxOffset)
+  end
   if contentH <= h + 1 or h <= 0 then return offset end
   local sb = Kit._sbDrag
-  if sb and sb.key == sbKey(x, y, w, h) and type(sb.offset) == "number" then
+  if sb and sb.key == key and type(sb.offset) == "number" then
     offset = Theme.clamp(sb.offset, 0, maxOffset)
+  end
+  if Kit._scrollState and Kit._scrollState[key] then
+    Kit._scrollState[key].offset = offset
+    Kit._scrollState[key].maxOffset = maxOffset
   end
 
   local s = Kit.scale
@@ -1082,7 +1334,7 @@ function Kit.scrollbarPixels(x, y, w, h, offset, contentH)
     Theme.col(PAL.cardBorder, 0.35)
     G.rectangle("fill", bx, y, bw, h, bw / 2, bw / 2)
     local hot = Kit.hover(hitX, ty, hitW, th)
-      or (sb and sb.key == sbKey(x, y, w, h))
+      or (sb and sb.key == key)
     Theme.col(PAL.blue, hot and 0.9 or 0.7)
     G.rectangle("fill", bx, ty, bw, th, bw / 2, bw / 2)
   end

@@ -614,11 +614,18 @@ local function ensureTabVisible(s, viewW)
 end
 
 -- Horizontal scrollbar under the tab strip. Returns updated pixel offset.
-local function tabHScrollbar(x, y, w, h, offset, contentW, viewW)
+-- hitY/hitH (optional) expand the arrow-key hover target (e.g. whole tab strip).
+local function tabHScrollbar(x, y, w, h, offset, contentW, viewW, hitY, hitH)
   local maxOff = math.max(0, (contentW or 0) - math.max(0, viewW or 0))
-  offset = Theme.clamp(offset or 0, 0, maxOff)
-  if maxOff <= 0 or w <= 0 or h <= 0 then return 0 end
   local s = Kit.scale
+  local keyOpts = {
+    axis = "x", kind = "pixels",
+    step = math.max(40 * s, 64 * s),
+    page = math.max(40 * s, (viewW or w) * 0.6),
+  }
+  offset = Kit.rememberScroll("tabBarH", x, hitY or y, w, hitH or h,
+    offset, maxOff, keyOpts)
+  if maxOff <= 0 or w <= 0 or h <= 0 then return 0 end
   local thumbW = math.max(28 * s, w * viewW / math.max(1, contentW))
   local travel = math.max(1, w - thumbW)
   local tx = x + travel * (offset / maxOff)
@@ -643,6 +650,11 @@ local function tabHScrollbar(x, y, w, h, offset, contentW, viewW)
       end
     end
   end
+
+  keyOpts.updateOnly = true
+  offset = Kit.rememberScroll("tabBarH", x, hitY or y, w, hitH or h,
+    offset, maxOff, keyOpts)
+  tx = x + travel * (offset / math.max(1, maxOff))
 
   if love and love.graphics then
     Theme.col(PAL.cardBorder, 0.35)
@@ -745,6 +757,9 @@ end
 
 function App.update(dt)
   if not S then return end
+  if Kit.scrollUpdate then
+    pcall(function() Kit.scrollUpdate(dt or 0) end)
+  end
   if S.audioPreview or S.tab == "audio" then
     pcall(function() Audio.update(S, dt or 0) end)
   end
@@ -982,9 +997,11 @@ function App.draw()
   Kit.popClip()
 
   if showBar then
+    local barY = tabY + tabH + barGap
     S.tabBarScroll = tabHScrollbar(
-      tabViewX, tabY + tabH + barGap, tabViewW, barH,
-      S.tabBarScroll or 0, contentW, tabViewW)
+      tabViewX, barY, tabViewW, barH,
+      S.tabBarScroll or 0, contentW, tabViewW,
+      tabY, tabH + barGap + barH)
   else
     S.tabBarScroll = 0
   end
@@ -1085,6 +1102,8 @@ function App.keypressed(key)
       or S.mapTilesetPicker or S._pathPrompt then
     return
   end
+  -- Hovered scrollbar first; otherwise list selection / panel keys.
+  if Kit.scrollKeypressed and Kit.scrollKeypressed(key) then return end
   if RegList.keypressed(S, key) then return end
   if S.tab == "maps" and Maps.keypressed then
     Maps.keypressed(S, key)

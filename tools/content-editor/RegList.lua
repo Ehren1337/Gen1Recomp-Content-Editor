@@ -134,7 +134,7 @@ function RegList.drawList(S, App, x, y, w, h, title, ids, opts)
   local scrollH = listH - 16 * s
   local rowW = Kit.scrollInnerWidth(scrollW)
   S[offKey] = Kit.scroll(scrollX, listY + 8 * s, scrollW, scrollH,
-    S[offKey] or 0, #ids, perPage)
+    S[offKey] or 0, #ids, perPage, nil, offKey)
   local selKey = opts.selKey or "regId"
   local accent = opts.accent or PAL.blue
   local nav = RegList.bindNav(S, ids, {
@@ -158,7 +158,7 @@ function RegList.drawList(S, App, x, y, w, h, title, ids, opts)
     ry = ry + rowH + 4 * s
   end
   S[offKey] = Kit.scrollbar(scrollX, listY + 8 * s, scrollW, scrollH,
-    S[offKey] or 0, #ids, perPage)
+    S[offKey] or 0, #ids, perPage, offKey)
   if opts.footerLabel and Kit.button(x, y + h - 36 * s, listW, 32 * s,
       opts.footerLabel, { kind = "good" }) then
     if opts.onFooter then opts.onFooter() end
@@ -221,9 +221,10 @@ local function switchSlot(S, delta)
 end
 
 -- Up/Down/Page navigate the active list; Left/Right switch list columns.
--- No-op while a textfield has focus.
+-- No-op while a textfield has focus or a scrollbar is arrow-scrolling.
 function RegList.keypressed(S, key)
   if not S or Kit.focus then return false end
+  if Kit.scrollNavActive and Kit.scrollNavActive() then return false end
   resolveActive(S)
   if key == "left" then return switchSlot(S, -1) end
   if key == "right" then return switchSlot(S, 1) end
@@ -244,6 +245,11 @@ end
 function RegList.update(S, dt)
   if not S then return end
   if Kit.focus or Kit.blockClicks then
+    S._regNavHold = nil
+    return
+  end
+  -- Don't fight the focused scrollbar's arrow-key hold-repeat.
+  if Kit.scrollNavActive and Kit.scrollNavActive() then
     S._regNavHold = nil
     return
   end

@@ -48,6 +48,18 @@ MODKIT_VERSION = "1.0.0"
 
 LUAJIT = os.environ.get("MODKIT_LUAJIT", "luajit")
 
+
+def luajit_env():
+    """Env for spawning system luajit under LÖVE AppImages.
+
+    AppImages set LD_LIBRARY_PATH to bundled libs; that makes /usr/bin/luajit
+    load the wrong libluajit (undefined symbol luaJIT_version_2_1_…).
+    """
+    env = os.environ.copy()
+    env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 IMAGE_EXTS = {".png"}
 ASSET_EXTS = {".png", ".wav", ".bin"}
 ROM_PATCH_EXTS = {".gb", ".gbc", ".ips", ".bps"}
@@ -715,7 +727,8 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None):
         driver_path = handle.name
     try:
         proc = subprocess.run([LUAJIT, driver_path], cwd=repo,
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, timeout=120,
+                              env=luajit_env())
     except FileNotFoundError:
         findings.append(Finding("MK100", "error",
                                 f"cannot run {LUAJIT} (install luajit or "
@@ -1055,7 +1068,8 @@ def check_data_dump(repo, path, base, rel):
     driver = DUMP_DRIVER % (lua_quote(path), lua_quote(vanilla))
     try:
         proc = subprocess.run([LUAJIT, "-e", driver], cwd=repo,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60,
+                              env=luajit_env())
     except FileNotFoundError:
         # the gate must fail closed: a missing interpreter is a broken
         # environment, not a clean mod
@@ -1265,7 +1279,7 @@ def cmd_bounce(args, repo):
         handle.write(driver)
         driver_path = handle.name
     try:
-        proc = subprocess.run([LUAJIT, driver_path], cwd=repo)
+        proc = subprocess.run([LUAJIT, driver_path], cwd=repo, env=luajit_env())
     finally:
         os.unlink(driver_path)
     return 0 if proc.returncode == 0 else 1
@@ -1398,7 +1412,8 @@ def dump_dataset(repo, base):
     handle.close()
     try:
         proc = subprocess.run([os.environ.get("LUA", "luajit"), handle.name],
-                              cwd=repo, capture_output=True, text=True)
+                              cwd=repo, capture_output=True, text=True,
+                              env=luajit_env())
     finally:
         os.unlink(handle.name)
     if proc.returncode != 0:

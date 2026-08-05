@@ -21,13 +21,14 @@ function FormPane.begin(S, key, x, y, w, h)
   local contentH = S["_" .. key .. "ContentH"] or h
   local needsBar = contentH > h + 1
   local gutter = needsBar and Kit.scrollbarSize() or 0
-  local scroll = Kit.scrollPixels(x, y, w, h, S[key] or 0, contentH)
+  local scroll = Kit.scrollPixels(x, y, w, h, S[key] or 0, contentH, key)
   S[key] = scroll
   Kit.pushClip(x, y, math.max(0, w - gutter), h)
   return y - scroll, {
     x = x, y = y, w = w, h = h,
     contentW = math.max(0, w - gutter),
     gutter = gutter,
+    scrollId = key,
   }
 end
 
@@ -38,7 +39,7 @@ function FormPane.finish(S, key, contentTop, contentBottom, view)
   Kit.popClip()
   if contentH > view.h + 1 then
     S[key] = Kit.scrollbarPixels(view.x, view.y, view.w, view.h,
-      S[key] or 0, contentH)
+      S[key] or 0, contentH, key)
   end
 end
 

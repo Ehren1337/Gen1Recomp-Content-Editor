@@ -206,7 +206,7 @@ return
       tmhm = {},
       types = {
         "NORMAL",
-        "BIRD",
+        "FLYING",
       },
     },
   },

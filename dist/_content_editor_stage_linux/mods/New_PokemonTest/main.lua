@@ -9763,7 +9763,7 @@ return function(mod)
     tmhm = {},
     types = {
       "NORMAL",
-      "BIRD",
+      "FLYING",
     },
   })
 

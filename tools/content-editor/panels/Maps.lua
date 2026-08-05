@@ -220,6 +220,116 @@ local function ensureOwned(S, mapId)
   return copy
 end
 
+local function oppositeDir(dir)
+  if dir == "north" then return "south" end
+  if dir == "south" then return "north" end
+  if dir == "east" then return "west" end
+  if dir == "west" then return "east" end
+  return nil
+end
+
+-- Wire A[dir] → B and B[opposite] → A with negated block offset (Tiled/vanilla).
+local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
+  opts = opts or {}
+  local from = ensureOwned(S, fromId)
+  if not from then return nil end
+  from.connections = from.connections or {}
+  local opp = oppositeDir(dir)
+  local prev = from.connections[dir]
+  local prevMap = prev and prev.map
+
+  local function clearBack(destId)
+    if not destId or not opp then return end
+    local backMap = ensureOwned(S, destId)
+    if not backMap then return end
+    backMap.connections = backMap.connections or {}
+    local back = backMap.connections[opp]
+    if back and back.map == fromId then
+      backMap.connections[opp] = nil
+      if S.data and S.data.maps then S.data.maps[destId] = backMap end
+      MapLoader.invalidate(destId)
+    end
+  end
+
+  wantOff = math.floor(tonumber(wantOff) or 0)
+  if not wantMap or wantMap == "" then
+    if prevMap then clearBack(prevMap) end
+    from.connections[dir] = nil
+  else
+    if prevMap and prevMap ~= wantMap then clearBack(prevMap) end
+    from.connections[dir] = { map = wantMap, offset = wantOff }
+    local dest = ensureOwned(S, wantMap)
+    if dest and opp then
+      dest.connections = dest.connections or {}
+      dest.connections[opp] = { map = fromId, offset = -wantOff }
+      if S.data and S.data.maps then S.data.maps[wantMap] = dest end
+      MapLoader.invalidate(wantMap)
+    end
+  end
+  if S.data and S.data.maps then S.data.maps[fromId] = from end
+  MapLoader.invalidate(fromId)
+  if opts.world then S._worldFitKey = nil end
+  if App and App.markDirty then App.markDirty() end
+  return from
+end
+
+local function cloneNumList(v)
+  local a = {}
+  for i = 1, #(v or {}) do a[i] = v[i] end
+  return a
+end
+
+local function listIndex(list, n)
+  for i, v in ipairs(list or {}) do
+    if v == n then return i end
+  end
+  return nil
+end
+
+local function listSet(list, n, on)
+  local i = listIndex(list, n)
+  if on and not i then
+    list[#list + 1] = n
+    table.sort(list)
+  elseif not on and i then
+    table.remove(list, i)
+  end
+end
+
+-- Clone vanilla tileset into the mod so collision flag edits persist.
+local function ensureOwnedTileset(S, tilesetId, App)
+  if not tilesetId or tilesetId == "" then return nil end
+  S.project.tilesets = S.project.tilesets or {}
+  if S.project.tilesets[tilesetId] then return S.project.tilesets[tilesetId] end
+  local rec = S.data and S.data.tilesets and S.data.tilesets[tilesetId]
+  if not rec then return nil end
+  local copy = {}
+  for k, v in pairs(rec) do
+    if k == "walkable" or k == "doorTiles" or k == "warpTiles"
+        or k == "counterTiles" or k == "waterTiles" or k == "shoreTiles" then
+      copy[k] = cloneNumList(v)
+    elseif k == "blocks" and type(v) == "table" then
+      local b = {}
+      for i, row in ipairs(v) do
+        local r = {}
+        for j = 1, #row do r[j] = row[j] end
+        b[i] = r
+      end
+      copy.blocks = b
+    else
+      copy[k] = v
+    end
+  end
+  copy.waterTiles = copy.waterTiles or {}
+  copy.shoreTiles = copy.shoreTiles or {}
+  copy._isNew = false
+  S.project.tilesets[tilesetId] = copy
+  if S.data and S.data.tilesets then S.data.tilesets[tilesetId] = copy end
+  MapLoader.invalidateAll()
+  if App and App.markDirty then App.markDirty() end
+  return copy
+end
+
 -- ---- block selection / shift ------------------------------------------------
 
 local function normalizeBlockSel(sel)
@@ -1172,9 +1282,10 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     return map
   end
 
-  Kit.text("micro", "Connections", px + 10 * s, y, PAL.caption)
+  Kit.text("micro", "Connections (auto two-way)", px + 10 * s, y, PAL.caption)
   y = y + 16 * s
   map.connections = map.connections or {}
+  local fromId = map.id or S.mapId
   local listBottom = py + canvasH - 16 * s
   for _, dir in ipairs({ "north", "south", "east", "west" }) do
     if y + fh > listBottom then break end
@@ -1182,35 +1293,33 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     local val = cur and cur.map or ""
     local v = field(App, "mp_wc_" .. dir, px + 10 * s, y, propW - 20 * s, fh,
       val, dir)
-    local want = (v == "") and nil or {
-      map = v:upper():gsub("%s+", "_"),
-      offset = (cur and cur.offset) or 0,
-    }
+    local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
     local curMap = cur and cur.map or ""
-    local wantMap = want and want.map or ""
-    if curMap ~= wantMap then
-      map = mutate()
-      map.connections = map.connections or {}
-      map.connections[dir] = want
-      S._worldFitKey = nil
-      App.markDirty()
+    local curOff = cur and (cur.offset or 0) or 0
+    if (curMap or "") ~= (wantMap or "") then
+      map = applyConnectionEdit(S, fromId, dir, wantMap, curOff, App,
+        { world = true }) or mutate()
+      owned = true
     end
-    if want and map.connections[dir] then
+    if wantMap and map.connections and map.connections[dir] then
       local off = tonumber(field(App, "mp_wco_" .. dir,
         px + 10 * s, y + fh + 2 * s, 60 * s, fh - 4 * s,
         tostring(map.connections[dir].offset or 0), "0")) or 0
       if off ~= (map.connections[dir].offset or 0) then
-        map = mutate()
-        map.connections[dir].offset = off
-        S._worldFitKey = nil
-        App.markDirty()
+        map = applyConnectionEdit(S, fromId, dir, wantMap, off, App,
+          { world = true }) or mutate()
+        owned = true
       end
       Kit.text("micro", "offset", px + 78 * s, y + fh + 6 * s, PAL.faint)
-      local dest = want.map
-      local ok = layout.positions[dest] ~= nil
-        or (S.data.maps and S.data.maps[dest])
-        or (S.project.maps and S.project.maps[dest])
-      Kit.text("micro", ok and "linked" or "missing",
+      local destDef = resolveMapDef(S, wantMap)
+      local back = destDef and destDef.connections
+        and destDef.connections[oppositeDir(dir)]
+      local ok = back and back.map == fromId
+        and (back.offset or 0) == -(map.connections[dir].offset or 0)
+      local known = layout.positions[wantMap] ~= nil or destDef ~= nil
+      local label = ok and "↔ linked"
+        or (known and "↔ pending" or "missing")
+      Kit.text("micro", label,
         px + 120 * s, y + fh + 6 * s, ok and PAL.green or PAL.red)
       y = y + fh + 2 * s
     end
@@ -1539,6 +1648,35 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     else
       return
     end
+  elseif tool == "collision" then
+    -- Toggle tileset walkable for this cell's feet tile (shared tileset).
+    local tid = mapDef.tileset
+    local ts = ensureOwnedTileset(S, tid, App)
+    if not ts then
+      S.status = "No tileset for collision paint"
+      return
+    end
+    local tile = Map.defCellTile(mapDef, ts, cx, cy)
+    if tile == nil then
+      S.status = "No tile at cell"
+      return
+    end
+    ts.walkable = ts.walkable or {}
+    -- Default solid/walk (not toggle): shared tileset tiles must not flip
+    -- back and forth while brush-dragging across cells.
+    local mode = S.mapCollisionMode or "solid"
+    local was = listIndex(ts.walkable, tile) ~= nil
+    local want = (mode == "walk") or (mode == "toggle" and not was)
+    if mode == "solid" then want = false end
+    if want == was then return end
+    listSet(ts.walkable, tile, want)
+    if S.data and S.data.tilesets then S.data.tilesets[tid] = ts end
+    MapLoader.invalidateAll()
+    App.markDirty()
+    S.mapShowCollision = true
+    S.status = string.format("Tile %d → %s (tileset %s)",
+      tile, want and "walk" or "solid", tostring(tid))
+    return
   elseif tool == "warp" then
     clearWarpDestPick(S)
     mapDef.warps = mapDef.warps or {}
@@ -1799,7 +1937,8 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
 
   local tool = S.mapTool or "paint"
   -- Dest pick is a single click; do not brush-drag while armed.
-  local brush = (tool == "paint" or tool == "erase" or tool == "pick")
+  local brush = (tool == "paint" or tool == "erase" or tool == "pick"
+      or tool == "collision")
     and not S.warpDestPick
   local selecting = (tool == "select") and not S.warpDestPick
   local over = Kit.hit(vx, vy, vw, vh)
@@ -1941,6 +2080,10 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     hint = string.format(
       "%.1fx  %s  click=set warp dest  Esc=cancel  MMB/RMB/Space=pan",
       S.mapZoom, ts)
+  elseif tool == "collision" then
+    hint = string.format(
+      "%.1fx  %s  click=toggle walk/solid  mode=%s  (tileset-wide)",
+      S.mapZoom, ts, tostring(S.mapCollisionMode or "toggle"))
   elseif brush then
     hint = string.format(
       "%.1fx  %s  blk=%s  drag=paint  MMB/RMB/Space=pan  hold WASD",
@@ -2112,7 +2255,8 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
   local thumb = 24 * s
   local perPage = math.max(1, math.floor(listH / (rowH + 3 * s)))
   local innerW = Kit.scrollInnerWidth(listW)
-  p.offset = Kit.scroll(cx, listY, listW, listH, p.offset or 0, #list, perPage)
+  p.offset = Kit.scroll(cx, listY, listW, listH, p.offset or 0, #list, perPage,
+    nil, "mapTilesetPickerOffset")
 
   if #list == 0 then
     Kit.emptyBox(cx, listY, listW, listH, "No tilesets match")
@@ -2147,7 +2291,8 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
     end
     Kit.popClip()
   end
-  p.offset = Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage)
+  p.offset = Kit.scrollbar(cx, listY, listW, listH, p.offset or 0, #list, perPage,
+    "mapTilesetPickerOffset")
 
   local focusId = p.focus or map.tileset or list[1]
   local by = listY + listH + 6 * s
@@ -2422,11 +2567,31 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end) then return py end
 
-  if prow("Border", function(fx, fy, fw, fh_)
-    local v = tonumber(field(App, "mp_border", fx, fy, 60 * s, fh_,
-      tostring(map.borderBlock or 0), "0")) or 0
-    if v ~= (map.borderBlock or 0) then
-      map = mutate(); map.borderBlock = v; MapLoader.invalidate(map.id)
+  if prow("Border block", function(fx, fy, fw, fh_)
+    local bid = map.borderBlock or 0
+    local thumb = fh_
+    drawBlockThumb(S, map.tileset, bid, fx, fy, thumb)
+    local fieldX = fx + thumb + 6 * s
+    local v = tonumber(field(App, "mp_border", fieldX, fy, 50 * s, fh_,
+      tostring(bid), "0")) or 0
+    if v ~= bid then
+      map = mutate()
+      map.borderBlock = v
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+    end
+    local btnX = fieldX + 56 * s
+    local btnW = math.max(0, fw - (btnX - fx))
+    if btnW >= 56 * s and Kit.button(btnX, fy, btnW, fh_, "Use brush", {
+        kind = "accent",
+        tooltip = "Set border to paint block "
+          .. tostring(S.paintBlock or 0),
+      }) then
+      map = mutate()
+      map.borderBlock = S.paintBlock or 0
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+      S.status = "Border block → " .. tostring(map.borderBlock)
     end
   end) then return py end
 
@@ -2479,33 +2644,39 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end) then return py end
 
-  Kit.text("micro", "Connections (neighbor map id)", px + 10 * s, py, PAL.caption)
+  Kit.text("micro", "Connections (auto two-way)", px + 10 * s, py, PAL.caption)
+  py = py + 14 * s
+  Kit.text("micro", "Sets return link with offset negated",
+    px + 10 * s, py, PAL.faint)
   py = py + 16 * s
   map.connections = map.connections or {}
+  local fromId = map.id or S.mapId
   for _, dir in ipairs({ "north", "south", "east", "west" }) do
     if py + fh > listBottom then break end
     local cur = map.connections[dir]
     local val = cur and cur.map or ""
     local v = field(App, "mp_c_" .. dir, px + 10 * s, py, propW - 20 * s, fh,
       val, dir)
-    local want = (v == "") and nil or { map = v:upper():gsub("%s+", "_"),
-      offset = (cur and cur.offset) or 0 }
+    local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
     local curMap = cur and cur.map or ""
-    local wantMap = want and want.map or ""
-    if curMap ~= wantMap then
-      map = mutate()
-      map.connections = map.connections or {}
-      map.connections[dir] = want
+    local curOff = cur and (cur.offset or 0) or 0
+    if (curMap or "") ~= (wantMap or "") then
+      map = applyConnectionEdit(S, fromId, dir, wantMap, curOff, App) or mutate()
     end
-    if want and map.connections[dir] then
+    if wantMap and map.connections and map.connections[dir] then
       local off = tonumber(field(App, "mp_co_" .. dir,
         px + 10 * s, py + fh + 2 * s, 60 * s, fh - 4 * s,
         tostring(map.connections[dir].offset or 0), "0")) or 0
       if off ~= (map.connections[dir].offset or 0) then
-        map = mutate()
-        map.connections[dir].offset = off
+        map = applyConnectionEdit(S, fromId, dir, wantMap, off, App) or mutate()
       end
       Kit.text("micro", "offset", px + 78 * s, py + fh + 6 * s, PAL.faint)
+      local dest = resolveMapDef(S, wantMap)
+      local back = dest and dest.connections and dest.connections[oppositeDir(dir)]
+      local ok = back and back.map == fromId
+        and (back.offset or 0) == -(map.connections[dir].offset or 0)
+      Kit.text("micro", ok and "↔ linked" or (dest and "↔ pending" or "missing"),
+        px + 120 * s, py + fh + 6 * s, ok and PAL.green or PAL.red)
       py = py + fh + 2 * s
     end
     py = py + fh + 4 * s
@@ -2560,7 +2731,7 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   if S.paintBlock >= maxB then S.paintBlock = math.max(0, maxB - 1) end
 
   S.mapBlockOffset = Kit.scroll(gridX, gridY, gridW, gridH,
-    S.mapBlockOffset or 0, maxB, perPage, cols)
+    S.mapBlockOffset or 0, maxB, perPage, cols, "mapBlockOffset")
   local start = S.mapBlockOffset or 0
   Kit.pushClip(gridX, gridY, innerW, gridH)
   for n = 0, perPage - 1 do
@@ -2571,10 +2742,16 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     local bx = gridX + c * (thumb + gap)
     local by = gridY + r * (thumb + gap)
     local on = (S.paintBlock or 1) == i
+    local isBorder = (map.borderBlock or 0) == i
     drawBlockThumb(S, active, i, bx, by, thumb)
     if on then
       love.graphics.setColor(0.24, 0.88, 0.54, 1)
       love.graphics.rectangle("line", bx - 1, by - 1, thumb + 2, thumb + 2)
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+    if isBorder then
+      love.graphics.setColor(0.95, 0.75, 0.2, 0.95)
+      love.graphics.rectangle("line", bx + 2, by + 2, thumb - 4, thumb - 4)
       love.graphics.setColor(1, 1, 1, 1)
     end
     if Kit.press(bx, by, thumb, thumb) then
@@ -2585,10 +2762,10 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   end
   Kit.popClip()
   S.mapBlockOffset = Kit.scrollbar(gridX, gridY, gridW, gridH,
-    S.mapBlockOffset or 0, maxB, perPage)
+    S.mapBlockOffset or 0, maxB, perPage, "mapBlockOffset")
 
   local fy = dy + dh - pad - footerH + 2 * s
-  local fw = math.floor((gridW - 12 * s) / 3)
+  local fw = math.floor((gridW - 18 * s) / 4)
   if Kit.button(gridX, fy, fw, footerH - 4 * s, "Replace PNG", {
       kind = "accent", tooltip = "Import PNG for this map's tileset",
     }) then
@@ -2605,6 +2782,16 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     local picked = ModIO.chooseFile("Pokemonium / Tiled TMX",
       "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*")
     if picked then Maps.importTmx(S, picked, App) end
+  end
+  if Kit.button(gridX + 3 * (fw + 6 * s), fy, fw, footerH - 4 * s, "Set border", {
+      kind = "ghost",
+      tooltip = "Use selected paint block as map.borderBlock (out-of-bounds fill)",
+    }) then
+    map = mutate()
+    map.borderBlock = S.paintBlock or 0
+    MapLoader.invalidate(map.id)
+    App.markDirty()
+    S.status = "Border block → " .. tostring(map.borderBlock)
   end
   return map
 end
@@ -3535,19 +3722,18 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
   return py
 end
 
-local function drawEncountersStub(S, App, px, py, propW, fh, s)
-  Kit.text("micro", "Wild tables and Special mons (DVs / moves) live on the",
-    px + 10 * s, py, PAL.muted)
-  py = py + 16 * s
-  Kit.text("micro", "Encounters tab.", px + 10 * s, py, PAL.muted)
-  py = py + 22 * s
-  if Kit.button(px + 10 * s, py, propW - 20 * s, 30 * s, "Open Encounters tab",
-      { kind = "accent" }) then
-    S.tab = "encounters"
-    S.encountersMode = "wild"
-    if S.mapId then S.encountersMapId = S.mapId end
+local function drawEncounters(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  py = EncounterEdit.drawWild(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  if py + 36 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 30 * s,
+        "Specials on Encounters tab", { kind = "ghost" }) then
+      S.tab = "encounters"
+      S.encountersMode = "special"
+      if S.mapId then S.encountersMapId = S.mapId end
+    end
+    py = py + 36 * s
   end
-  return py + 36 * s
+  return py
 end
 
 function Maps.draw(S, x, y, w, h, App)
@@ -3608,7 +3794,7 @@ function Maps.draw(S, x, y, w, h, App)
   local mapScrollH = listH - 16 * s
   local mapRowW = Kit.scrollInnerWidth(mapScrollW)
   S.mapListOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
-    mapScrollH, S.mapListOffset or 0, #ids, perPage)
+    mapScrollH, S.mapListOffset or 0, #ids, perPage, nil, "mapListOffset")
   local mapNav = RegList.bindNav(S, ids, {
     selKey = "mapId",
     offsetKey = "mapListOffset",
@@ -3652,7 +3838,7 @@ function Maps.draw(S, x, y, w, h, App)
     ry = ry + rowH + 3 * s
   end
   S.mapListOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
-    mapScrollH, S.mapListOffset or 0, #ids, perPage)
+    mapScrollH, S.mapListOffset or 0, #ids, perPage, "mapListOffset")
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New map", { kind = "good" }) then
     local nid = "NEW_MAP"
@@ -3696,6 +3882,7 @@ function Maps.draw(S, x, y, w, h, App)
     { id = "erase", tip = "Paint block 0 (empty / void)" },
     { id = "pick", tip = "Click the map to sample a block into the brush" },
     { id = "select", tip = "Drag a block marquee; shift with dx/dy (Space/MMB pans)" },
+    { id = "collision", tip = "Toggle walk/solid for the cell's feet tile (tileset-wide)" },
     { id = "warp", tip = "Place or select warps" },
     { id = "object", tip = "Place NPCs / objects" },
     { id = "sign", tip = "Place signs" },
@@ -3704,13 +3891,33 @@ function Maps.draw(S, x, y, w, h, App)
   local tx = mainX
   for _, tool in ipairs(tools) do
     local on = (S.mapTool or "paint") == tool.id
-    local bw = (tool.id == "trainer" or tool.id == "select" or tool.id == "object")
+    local bw = (tool.id == "trainer" or tool.id == "select"
+        or tool.id == "object" or tool.id == "collision")
       and 70 * s or 54 * s
     if Kit.chip(tx, y, bw, 26 * s, tool.id:upper(), on, PAL.blue, nil, tool.tip) then
       S.mapTool = tool.id
       if tool.id == "object" or tool.id == "trainer" then S.mapSection = "objects" end
+      if tool.id == "collision" then
+        S.mapShowCollision = true
+        S.mapCollisionMode = S.mapCollisionMode or "solid"
+        S.status = "COLLISION: paint walk/solid on cell feet tiles (tileset-wide)"
+      end
     end
     tx = tx + bw + 4 * s
+  end
+  if (S.mapTool or "paint") == "collision" then
+    for _, mode in ipairs({
+      { id = "solid", label = "Solid" },
+      { id = "walk", label = "Walk" },
+    }) do
+      local on = (S.mapCollisionMode or "solid") == mode.id
+      local mw = 52 * s
+      if Kit.chip(tx, y, mw, 26 * s, mode.label, on, PAL.red, nil,
+          "Paint " .. mode.label:lower() .. " (tileset walkable list)") then
+        S.mapCollisionMode = mode.id
+      end
+      tx = tx + mw + 4 * s
+    end
   end
   if Kit.button(tx + 4 * s, y, 72 * s, 26 * s, "Dialog", {
       kind = "ghost", tooltip = "Edit this map's NPC / sign text",
@@ -3828,9 +4035,23 @@ function Maps.draw(S, x, y, w, h, App)
     drawBlockThumb(S, tsId, S.paintBlock or 1, mainX, barY, thumb)
     Kit.text("micro", "block " .. tostring(S.paintBlock or 1),
       mainX + thumb + 6 * s, barY + 2 * s, PAL.caption)
-    Kit.text("micro", Kit.ellipsize("micro", tsId or "?", 140 * s),
+    Kit.text("micro", Kit.ellipsize("micro", tsId or "?", 100 * s),
       mainX + thumb + 6 * s, barY + 14 * s, PAL.muted)
-    local bx = mainX + thumb + 160 * s
+    local bx = mainX + thumb + 120 * s
+    drawBlockThumb(S, tsId, map.borderBlock or 0, bx, barY, thumb)
+    Kit.text("micro", "border " .. tostring(map.borderBlock or 0),
+      bx + thumb + 4 * s, barY + 2 * s, PAL.caption)
+    if Kit.button(bx + thumb + 4 * s, barY + 14 * s, 72 * s, 14 * s, "Set border", {
+        kind = "ghost",
+        tooltip = "Set borderBlock from the selected paint block",
+      }) then
+      map = ensureOwned(S, S.mapId) or map
+      map.borderBlock = S.paintBlock or 0
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+      S.status = "Border block → " .. tostring(map.borderBlock)
+    end
+    bx = bx + thumb + 84 * s
     if Kit.chip(bx, barY + 2 * s, 90 * s, barH - 4 * s, "Collision",
         S.mapShowCollision, PAL.red) then
       S.mapShowCollision = not S.mapShowCollision
@@ -3935,8 +4156,8 @@ function Maps.draw(S, x, y, w, h, App)
     contentY = drawSigns(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "encounters" then
-    contentY = drawEncountersStub(S, App, formX, contentY, formW, fh, s)
-      or contentY
+    contentY = drawEncounters(S, map, mutate, App, formX, contentY, formW,
+      listBottom, fh, s) or contentY
   elseif S.mapSection == "hidden" then
     contentY = drawHiddenItems(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY

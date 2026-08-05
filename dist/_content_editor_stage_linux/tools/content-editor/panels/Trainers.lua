@@ -67,6 +67,42 @@ local function deriveHpDv(dvs)
     + (tonumber(dvs.special) or 0) % 2
 end
 
+local function normalizeBulkDvs(src, defDvs)
+  local out = copyStatBlock(src, DV_KEYS, 15)
+  if not out then
+    out = {}
+    for _, k in ipairs(DV_KEYS) do out[k] = defDvs[k] end
+  end
+  if out.hp == nil then out.hp = deriveHpDv(out) end
+  return out
+end
+
+local function normalizeBulkSe(src)
+  local out = copyStatBlock(src, EV_KEYS, 65535)
+  if not out then
+    out = { hp = 0, attack = 0, defense = 0, speed = 0, special = 0 }
+  end
+  return out
+end
+
+-- Apply DVs and/or Stat Exp to every mon in a party (keeps level/species/moves).
+local function applyStatsToParty(party, dvs, se)
+  if type(party) ~= "table" then return 0 end
+  local n = 0
+  for mi, mon in ipairs(party) do
+    party[mi] = {
+      level = mon.level or 5,
+      species = mon.species or "PIDGEY",
+      moves = copyMoves(mon.moves),
+      dvs = dvs and copyStatBlock(dvs, DV_KEYS, 15) or copyStatBlock(mon.dvs, DV_KEYS, 15),
+      statExp = se and copyStatBlock(se, EV_KEYS, 65535)
+        or copyStatBlock(mon.statExp, EV_KEYS, 65535),
+    }
+    n = n + 1
+  end
+  return n
+end
+
 -- Vanilla parties store only level+species. Battle uses learnset moves and
 -- constants.trainerDvs (fallback 9/8/8/8). Show those as placeholders.
 local DEFAULT_TRAINER_DVS = {
@@ -727,6 +763,100 @@ function Trainers.draw(S, x, y, w, h, App)
     local prevSize = 56 * s
     local slots = math.max(1, #party)
     local numW = 44 * s
+    local defDvs = defaultTrainerDvs(S)
+
+    -- Bulk DVs / Stat Exp for every mon in this party (or all parties).
+    do
+      S.trainerBulkDvs = S.trainerBulkDvs or normalizeBulkDvs(nil, defDvs)
+      S.trainerBulkSe = S.trainerBulkSe or normalizeBulkSe(nil)
+      Kit.text("micro", "Bulk DVs / Stat Exp — apply to all mons",
+        viewX, fy, PAL.caption)
+      fy = fy + 14 * s
+      local dvGap = 8 * s
+      local dvCell = numW + dvGap + 18 * s
+      for di, key in ipairs(DV_KEYS) do
+        local lab = DV_LABELS[key]
+        local lx = viewX + (di - 1) * dvCell
+        Kit.text("micro", lab, lx, fy, PAL.faint)
+        local cur = S.trainerBulkDvs[key]
+        if cur == nil and key == "hp" then cur = deriveHpDv(S.trainerBulkDvs) end
+        local raw = field(App, "tr_bulk_dv_" .. key,
+          lx, fy + 12 * s, numW, fh - 4 * s,
+          cur ~= nil and tostring(cur) or "", "0")
+        S.trainerBulkDvs[key] = Theme.clamp(tonumber(raw) or 0, 0, 15)
+      end
+      S.trainerBulkDvs.hp = S.trainerBulkDvs.hp or deriveHpDv(S.trainerBulkDvs)
+      fy = fy + 12 * s + fh + 4 * s
+      local btnW = 120 * s
+      if Kit.button(viewX, fy, btnW, 26 * s, "DVs → party", {
+          kind = "accent",
+          tooltip = "Copy these DVs onto every mon in the current party",
+        }) then
+        tr = mutate()
+        local p = tr.parties[S.trainerPartyIndex]
+        local dvs = normalizeBulkDvs(S.trainerBulkDvs, defDvs)
+        local n = applyStatsToParty(p, dvs, nil)
+        App.markDirty()
+        S.status = string.format("Applied DVs to %d mon(s) in party %d",
+          n, S.trainerPartyIndex or 1)
+      end
+      if Kit.button(viewX + btnW + 8 * s, fy, btnW + 24 * s, 26 * s,
+          "DVs → all parties", {
+            kind = "ghost",
+            tooltip = "Copy these DVs onto every mon in every party of this trainer",
+          }) then
+        tr = mutate()
+        local dvs = normalizeBulkDvs(S.trainerBulkDvs, defDvs)
+        local n = 0
+        for _, p in ipairs(tr.parties or {}) do
+          n = n + applyStatsToParty(p, dvs, nil)
+        end
+        App.markDirty()
+        S.status = string.format("Applied DVs to %d mon(s) across all parties", n)
+      end
+      fy = fy + 32 * s
+
+      local seGap = 8 * s
+      local seCell = numW + seGap + 18 * s
+      for ei, key in ipairs(EV_KEYS) do
+        local lab = EV_LABELS[key]
+        local lx = viewX + (ei - 1) * seCell
+        Kit.text("micro", lab, lx, fy, PAL.faint)
+        local cur = S.trainerBulkSe[key] or 0
+        local raw = field(App, "tr_bulk_se_" .. key,
+          lx, fy + 12 * s, numW, fh - 4 * s, tostring(cur), "0")
+        S.trainerBulkSe[key] = Theme.clamp(tonumber(raw) or 0, 0, 65535)
+      end
+      fy = fy + 12 * s + fh + 4 * s
+      if Kit.button(viewX, fy, btnW, 26 * s, "EVs → party", {
+          kind = "accent",
+          tooltip = "Copy these Stat Exp values onto every mon in the current party",
+        }) then
+        tr = mutate()
+        local p = tr.parties[S.trainerPartyIndex]
+        local se = normalizeBulkSe(S.trainerBulkSe)
+        local n = applyStatsToParty(p, nil, se)
+        App.markDirty()
+        S.status = string.format("Applied Stat Exp to %d mon(s) in party %d",
+          n, S.trainerPartyIndex or 1)
+      end
+      if Kit.button(viewX + btnW + 8 * s, fy, btnW + 24 * s, 26 * s,
+          "EVs → all parties", {
+            kind = "ghost",
+            tooltip = "Copy these Stat Exp values onto every mon in every party",
+          }) then
+        tr = mutate()
+        local se = normalizeBulkSe(S.trainerBulkSe)
+        local n = 0
+        for _, p in ipairs(tr.parties or {}) do
+          n = n + applyStatsToParty(p, nil, se)
+        end
+        App.markDirty()
+        S.status = string.format("Applied Stat Exp to %d mon(s) across all parties", n)
+      end
+      fy = fy + 36 * s
+    end
+
     for mi = 1, slots do
       local mon = party[mi] or { level = 5, species = "PIDGEY" }
       local speciesDef = (S.project.pokemon and S.project.pokemon[mon.species])
