@@ -210,14 +210,15 @@ function Project.draw(S, x, y, w, h, App)
   local src = S.dataSource or "fixtures"
   local prefs = S.dataPrefs or DataSource.loadPrefs()
   local srcLine = DataSource.label(src)
-  if src == "recomp" and prefs.recompRoot then
-    srcLine = srcLine .. " — " .. tostring(prefs.recompRoot)
+  if prefs.recompRoot and prefs.recompRoot ~= "" then
+    srcLine = srcLine .. " — Linked: " .. tostring(prefs.recompRoot)
   end
   Kit.text("small", srcLine, x, row, PAL.text)
   row = row + 22 * s
   Kit.text("micro",
     "Shareable packs ship without a ROM cache. Link your Gen1Recomp folder "
-      .. "or Import a ROM (cache stays in the save directory, not this pack).",
+      .. "or Import a ROM (cache stays in the save directory, not this pack). "
+      .. "Playtest launches the Linked Recomp folder when one is set.",
     x, row, PAL.muted)
   row = row + 32 * s
   local dsW = 150 * s
@@ -288,7 +289,9 @@ function Project.draw(S, x, y, w, h, App)
   end
   if Kit.button(x + btnW + 10 * s, row, btnW, fh, "Playtest", {
       kind = "accent",
-      tooltip = "Enable this mod in options and launch the game",
+      tooltip = prefs.recompRoot and prefs.recompRoot ~= ""
+        and ("Sync mod into Linked Recomp and launch:\n" .. tostring(prefs.recompRoot))
+        or "Enable this mod and launch (Link Recomp to playtest the full game)",
     }) then
     if App.playtestMod then App.playtestMod()
     else S.status = "Implement App.playtestMod() to launch a playtest build" end

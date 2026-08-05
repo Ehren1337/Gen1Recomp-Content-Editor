@@ -445,6 +445,16 @@ local function resolveLoveExe(searchRoots)
   return "love"
 end
 
+local function linkedRecompRoot()
+  local prefs = (S and S.dataPrefs) or DataSource.loadPrefs()
+  local recomp = (prefs and prefs.recompRoot)
+    or DataSource.mountedRecompRoot()
+  if recomp and recomp ~= "" and DataSource.isValidRecompRoot(recomp) then
+    return recomp:gsub("[/\\]+$", "")
+  end
+  return nil
+end
+
 function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -453,21 +463,24 @@ function App.playtestMod()
   local id = S.project.id
   local packRoot = repoRoot()
   local sep = package.config:sub(1, 1)
-  local launchRoot = packRoot
   local source = S.dataSource or "fixtures"
+  -- Always prefer the Linked Recomp folder when one is set — even if the
+  -- editor is currently reading imported/local/fixture data for authoring.
+  local recomp = linkedRecompRoot()
+  local launchRoot = packRoot
+  local usedRecomp = false
 
-  if source == "recomp" then
-    local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
-      or DataSource.mountedRecompRoot()
-    if recomp and DataSource.isValidRecompRoot(recomp) then
-      local dest = recomp .. sep .. "mods" .. sep .. id
-      local src = S.path or (ModIO.modsRoot() .. sep .. id)
-      local okCopy, copyErr = DataSource.copyTree(src, dest)
-      if not okCopy then
-        return say("Playtest sync failed: " .. tostring(copyErr))
-      end
-      launchRoot = recomp
+  if recomp then
+    local dest = recomp .. sep .. "mods" .. sep .. id
+    local src = S.path or (ModIO.modsRoot() .. sep .. id)
+    local okCopy, copyErr = DataSource.copyTree(src, dest)
+    if not okCopy then
+      return say("Playtest sync failed: " .. tostring(copyErr))
     end
+    launchRoot = recomp
+    usedRecomp = true
+  elseif source == "fixtures" then
+    -- No linked install and no ROM cache: still launch, but warn.
   end
 
   local okEnable, errEnable = pcall(function()
@@ -479,7 +492,10 @@ function App.playtestMod()
     return
   end
 
-  local loveExe = resolveLoveExe({ packRoot, launchRoot })
+  -- Prefer the target install's LÖVE binary when launching Recomp.
+  local loveExe = usedRecomp
+    and resolveLoveExe({ launchRoot, packRoot })
+    or resolveLoveExe({ packRoot, launchRoot })
   local cmd
   if sep == "\\" then
     cmd = string.format('start "" "%s" "%s"', loveExe, launchRoot)
@@ -490,12 +506,13 @@ function App.playtestMod()
   if not ok then
     return say("Playtest launch failed: " .. tostring(err))
   end
-  if source == "fixtures" then
-    say("Playtest launched (fixtures — stub data only). Link Recomp or Import ROM for full game.")
-  elseif source == "recomp" then
+  if usedRecomp then
     say("Playtest launched in linked Recomp with mod: " .. id)
+  elseif source == "fixtures" then
+    say("Playtest launched (fixtures — stub data only). Link Recomp or Import ROM for full game.")
   else
-    say("Playtest launched with mod enabled: " .. id)
+    say("Playtest launched with mod enabled: " .. id
+      .. " (no Linked Recomp — launching this pack)")
   end
 end
 
