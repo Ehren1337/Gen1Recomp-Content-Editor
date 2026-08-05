@@ -7,6 +7,7 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local ModIO = require("ModIO")
+local MapLoader = require("src.world.MapLoader")
 local PAL = Theme.PAL
 
 local Gfx = {}
@@ -14,7 +15,17 @@ local Gfx = {}
 local MODES = {
   { id = "palettes", label = "Palettes", tip = "SGB/GBC color palettes (4 colors)" },
   { id = "sprites", label = "Sprites", tip = "Overworld sprite sheets" },
-  { id = "tilesets", label = "Tilesets", tip = "Walkable / door / warp tile lists" },
+  { id = "tilesets", label = "Tilesets",
+    tip = "Walkable / grass / water / door / warp tile flags" },
+}
+
+local TILE_PX = 8  -- Gen1 tileset sheet cells are 8x8
+local FLAG_MODES = {
+  { id = "walk", label = "Walk", tip = "Passable (in walkable list)" },
+  { id = "solid", label = "Solid", tip = "Collision / blocked (not walkable)" },
+  { id = "water", label = "Water", tip = "Surfable water tile" },
+  { id = "grass", label = "Grass", tip = "Tall grass (wild encounters)" },
+  { id = "shore", label = "Shore", tip = "Shore / beach (surf edge)" },
 }
 
 local function parseRgb(s, fallback)
@@ -66,6 +77,156 @@ end
 local function joinNums(t)
   if type(t) ~= "table" then return "" end
   return table.concat(t, ",")
+end
+
+local function listIndex(list, n)
+  for i, v in ipairs(list or {}) do
+    if v == n then return i end
+  end
+  return nil
+end
+
+local function listSet(list, n, on)
+  local i = listIndex(list, n)
+  if on and not i then
+    list[#list + 1] = n
+    table.sort(list)
+  elseif not on and i then
+    table.remove(list, i)
+  end
+end
+
+local function cloneNumList(v)
+  local a = {}
+  for i = 1, #(v or {}) do a[i] = v[i] end
+  return a
+end
+
+local function syncTilesetLive(S, id, ts)
+  if S.data and S.data.tilesets then
+    S.data.tilesets[id] = ts
+  end
+  MapLoader.invalidateAll()
+end
+
+local function tilesetTileCount(rec, img)
+  local tpr = rec.tilesPerRow or 16
+  if img then
+    local cols = math.max(1, math.floor(img:getWidth() / TILE_PX))
+    local rows = math.max(1, math.floor(img:getHeight() / TILE_PX))
+    return cols * rows, cols
+  end
+  local maxId = 0
+  for _, block in ipairs(rec.blocks or {}) do
+    for _, t in ipairs(block) do
+      if type(t) == "number" and t > maxId then maxId = t end
+    end
+  end
+  return maxId + 1, tpr
+end
+
+-- Clickable 8x8 sheet: paint walk / solid / water / grass / shore.
+-- Returns the Y after the painter (for FormPane content height).
+local function drawTileFlagPainter(S, App, rec, ensureFn, id, x, y, w, s, palName)
+  Kit.text("micro", "TILE FLAGS (click to paint)", x, y, PAL.caption)
+  y = y + 14 * s
+  S.gfxTileFlagMode = S.gfxTileFlagMode or "walk"
+  local mx = x
+  for _, mode in ipairs(FLAG_MODES) do
+    local on = S.gfxTileFlagMode == mode.id
+    local bw = Kit.textWidth("micro", mode.label) + 14 * s
+    if mx + bw > x + w then
+      mx = x
+      y = y + 26 * s
+    end
+    if Kit.chip(mx, y, bw, 22 * s, mode.label, on, PAL.green, nil, mode.tip) then
+      S.gfxTileFlagMode = mode.id
+    end
+    mx = mx + bw + 3 * s
+  end
+  y = y + 28 * s
+  Kit.text("micro",
+    "green=walk  red=solid  blue=water  cyan=shore  yellow=grass",
+    x, y, PAL.faint)
+  y = y + 14 * s
+
+  local img = Preview.image(S, rec.image)
+  local count, cols = tilesetTileCount(rec, img)
+  cols = cols or (rec.tilesPerRow or 16)
+  local cell = math.max(12 * s, math.min(20 * s, math.floor((w - 4 * s) / cols)))
+  local rows = math.max(1, math.ceil(count / cols))
+  local gridW = cols * cell
+  local gridH = rows * cell
+  local walk = {}
+  for _, t in ipairs(rec.walkable or {}) do walk[t] = true end
+  local water = {}
+  for _, t in ipairs(rec.waterTiles or {}) do water[t] = true end
+  local shore = {}
+  for _, t in ipairs(rec.shoreTiles or {}) do shore[t] = true end
+  local grass = rec.grassTile
+
+  Kit.pushClip(x, y, w, gridH)
+  Theme.col(PAL.bgBot, 1)
+  love.graphics.rectangle("fill", x, y, gridW, gridH)
+
+  local shaded = (not rec.trueColor) and Preview.pushPaletteShader(S, palName)
+  if img and love.graphics.draw then
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(img, x, y, 0, cell / TILE_PX, cell / TILE_PX)
+  end
+  if shaded then Preview.popPaletteShader(shaded) end
+
+  for tid = 0, count - 1 do
+    local col = tid % cols
+    local row = math.floor(tid / cols)
+    local tx = x + col * cell
+    local ty = y + row * cell
+
+    if water[tid] then
+      love.graphics.setColor(0.15, 0.45, 1, 0.4)
+      love.graphics.rectangle("fill", tx, ty, cell, cell)
+    end
+    if shore[tid] then
+      love.graphics.setColor(0.2, 0.85, 0.9, 0.35)
+      love.graphics.rectangle("fill", tx, ty, cell, cell)
+    end
+    if walk[tid] then
+      love.graphics.setColor(0.2, 0.9, 0.4, 0.28)
+      love.graphics.rectangle("fill", tx, ty, cell, cell)
+    else
+      love.graphics.setColor(1, 0.2, 0.25, 0.32)
+      love.graphics.rectangle("fill", tx, ty, cell, cell)
+    end
+    if grass ~= nil and grass == tid then
+      love.graphics.setColor(1, 0.9, 0.15, 0.95)
+      love.graphics.rectangle("line", tx + 1, ty + 1, cell - 2, cell - 2)
+    end
+
+    if Kit.press(tx, ty, cell, cell) then
+      local e = ensureFn()
+      e.walkable = e.walkable or {}
+      e.waterTiles = e.waterTiles or {}
+      e.shoreTiles = e.shoreTiles or {}
+      local mode = S.gfxTileFlagMode or "walk"
+      if mode == "walk" then
+        listSet(e.walkable, tid, true)
+      elseif mode == "solid" then
+        listSet(e.walkable, tid, false)
+      elseif mode == "water" then
+        listSet(e.waterTiles, tid, listIndex(e.waterTiles, tid) == nil)
+      elseif mode == "shore" then
+        listSet(e.shoreTiles, tid, listIndex(e.shoreTiles, tid) == nil)
+      elseif mode == "grass" then
+        e.grassTile = (e.grassTile == tid) and nil or tid
+      end
+      syncTilesetLive(S, id, e)
+      App.markDirty()
+    end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+  Kit.popClip()
+
+  return y + gridH + 8 * s
 end
 
 function Gfx.draw(S, x, y, w, h, App)
@@ -310,6 +471,7 @@ function Gfx.draw(S, x, y, w, h, App)
         proj[nid] = {
           id = nid, image = "assets/" .. nid:lower() .. ".png",
           tilesPerRow = 16, blocks = blocks, walkable = { 1 },
+          waterTiles = {}, shoreTiles = {},
           doorTiles = {}, warpTiles = {}, counterTiles = {},
           animation = "TILEANIM_NONE", _isNew = true,
         }
@@ -329,10 +491,9 @@ function Gfx.draw(S, x, y, w, h, App)
     if owned then return proj[id] end
     local copy = {}
     for k, v in pairs(rec) do
-      if k == "walkable" or k == "doorTiles" or k == "warpTiles" or k == "counterTiles" then
-        local a = {}
-        for i = 1, #(v or {}) do a[i] = v[i] end
-        copy[k] = a
+      if k == "walkable" or k == "doorTiles" or k == "warpTiles"
+          or k == "counterTiles" or k == "waterTiles" or k == "shoreTiles" then
+        copy[k] = cloneNumList(v)
       elseif k == "blocks" and type(v) == "table" then
         local b = {}
         for i, row in ipairs(v) do
@@ -345,11 +506,20 @@ function Gfx.draw(S, x, y, w, h, App)
         copy[k] = v
       end
     end
+    copy.waterTiles = copy.waterTiles or {}
+    copy.shoreTiles = copy.shoreTiles or {}
     copy._isNew = false
     proj[id] = copy
     owned = true
+    syncTilesetLive(S, id, copy)
     App.markDirty()
     return copy
+  end
+
+  local function editList(key, value)
+    local e = ensure()
+    e[key] = value
+    syncTilesetLive(S, id, e)
   end
   Kit.caption(formX, modeY, id .. (owned and "" or "  (vanilla)"))
   local fy, view, viewX, viewW = RegList.beginForm(S, formX, listY, formW, listH,
@@ -423,27 +593,51 @@ function Gfx.draw(S, x, y, w, h, App)
   row("Walkable", function(fx, fy_, fw, fh_)
     local cur = joinNums(rec.walkable)
     local v = RegList.field(App, "ts_walk", fx, fy_, fw, fh_, cur, "1,16,19")
-    if v ~= cur then ensure().walkable = csvNums(v) end
+    if v ~= cur then editList("walkable", csvNums(v)) end
+  end)
+  Kit.text("micro", "Passable 8x8 tile ids. Anything else is solid (collision).",
+    viewX + labelW, fy - 4 * s, PAL.faint)
+  fy = fy + 12 * s
+  row("Grass tile", function(fx, fy_, fw, fh_)
+    local cur = rec.grassTile ~= nil and tostring(rec.grassTile) or ""
+    local v = RegList.field(App, "ts_grass", fx, fy_, fw, fh_, cur, "82")
+    if v ~= cur then
+      local e = ensure()
+      e.grassTile = tonumber(v)
+      syncTilesetLive(S, id, e)
+    end
+  end)
+  row("Water tiles", function(fx, fy_, fw, fh_)
+    local cur = joinNums(rec.waterTiles)
+    local v = RegList.field(App, "ts_water", fx, fy_, fw, fh_, cur, "20")
+    if v ~= cur then editList("waterTiles", csvNums(v)) end
+  end)
+  row("Shore tiles", function(fx, fy_, fw, fh_)
+    local cur = joinNums(rec.shoreTiles)
+    local v = RegList.field(App, "ts_shore", fx, fy_, fw, fh_, cur, "50,72")
+    if v ~= cur then editList("shoreTiles", csvNums(v)) end
   end)
   row("Door tiles", function(fx, fy_, fw, fh_)
     local cur = joinNums(rec.doorTiles)
     local v = RegList.field(App, "ts_door", fx, fy_, fw, fh_, cur, "27")
-    if v ~= cur then ensure().doorTiles = csvNums(v) end
+    if v ~= cur then editList("doorTiles", csvNums(v)) end
   end)
   row("Warp tiles", function(fx, fy_, fw, fh_)
     local cur = joinNums(rec.warpTiles)
     local v = RegList.field(App, "ts_warp", fx, fy_, fw, fh_, cur, "19,27")
-    if v ~= cur then ensure().warpTiles = csvNums(v) end
+    if v ~= cur then editList("warpTiles", csvNums(v)) end
   end)
   row("Counter tiles", function(fx, fy_, fw, fh_)
     local cur = joinNums(rec.counterTiles)
     local v = RegList.field(App, "ts_ctr", fx, fy_, fw, fh_, cur, "18")
-    if v ~= cur then ensure().counterTiles = csvNums(v) end
+    if v ~= cur then editList("counterTiles", csvNums(v)) end
   end)
   row("Animation", function(fx, fy_, fw, fh_)
     local cur = tostring(rec.animation or "TILEANIM_NONE")
     local v = RegList.field(App, "ts_anim", fx, fy_, fw, fh_, cur, "TILEANIM_NONE")
-    if v ~= cur then ensure().animation = v end
+    if v ~= cur then
+      local e = ensure(); e.animation = v; syncTilesetLive(S, id, e)
+    end
   end)
   row("TrueColor", function(fx, fy_, fw, fh_)
     local on = rec.trueColor and true or false
@@ -451,14 +645,18 @@ function Gfx.draw(S, x, y, w, h, App)
       local e = ensure()
       e.trueColor = not on
       if not e.trueColor then e.trueColor = nil end
+      syncTilesetLive(S, id, e)
       App.markDirty()
     end
   end)
   Kit.text("micro",
-    string.format("%d blocks · edit walk/door/warp lists as tile ids",
+    string.format("%d blocks · paint flags below or edit tile-id lists",
       #(rec.blocks or {})),
     viewX, fy, PAL.faint)
-  fy = fy + 20 * s
+  fy = fy + 18 * s
+  -- Refresh rec after possible ensure() so painter sees owned lists.
+  rec = owned and proj[id] or rec
+  fy = drawTileFlagPainter(S, App, rec, ensure, id, viewX, fy, viewW, s, tsPal)
   FormPane.finish(S, "gfxFormScroll", contentTop, fy, view)
   if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
       "Revert", { kind = "danger" }) then

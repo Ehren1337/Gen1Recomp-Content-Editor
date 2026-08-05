@@ -760,6 +760,18 @@ function ModWriter.emitMain(project)
     out[#out + 1] = ""
   end
 
+  local baIds = {}
+  for bid in pairs(project.battle_anims or {}) do baIds[#baIds + 1] = bid end
+  table.sort(baIds)
+  for _, bid in ipairs(baIds) do
+    local raw = project.battle_anims[bid]
+    local rec = stripEditorFields(raw)
+    local verb = (raw._isNew == false) and "patch" or "register"
+    out[#out + 1] = string.format("  mod.content.battle_anims:%s(%q, %s)",
+      verb, bid, emitTableLiteral(rec, 1))
+    out[#out + 1] = ""
+  end
+
   local iIds = {}
   for iid in pairs(project.items or {}) do iIds[#iIds + 1] = iid end
   table.sort(iIds)
@@ -1045,6 +1057,39 @@ function ModWriter.emitMain(project)
     out[#out + 1] = ""
   end
 
+  -- field.playerSprites (walk / bike / surf / fly / surfPikachu remaps)
+  if type(project.playerSprites) == "table" then
+    local ps = {}
+    for k, v in pairs(project.playerSprites) do
+      if type(k) == "string" and type(v) == "string" and v ~= "" then
+        ps[k] = v
+      end
+    end
+    if next(ps) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "playerSprites", emitTableLiteral(ps, 1))
+      out[#out + 1] = ""
+    end
+  end
+
+  -- field.playerPics (battle / trainer-card art paths)
+  if type(project.playerPics) == "table" then
+    local pp = {}
+    for k, v in pairs(project.playerPics) do
+      if type(k) == "string" and type(v) == "string" and v ~= "" then
+        pp[k] = v
+      end
+    end
+    if next(pp) then
+      local lit = rewriteModPaths(emitTableLiteral(pp, 1))
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "playerPics", lit)
+      out[#out + 1] = ""
+    end
+  end
+
   -- field.hiddenItems
   if type(project.hiddenItems) == "table" and next(project.hiddenItems) then
     out[#out + 1] = string.format(
@@ -1053,12 +1098,29 @@ function ModWriter.emitMain(project)
     out[#out + 1] = ""
   end
 
-  -- field.badgeGates
-  if type(project.badgeGates) == "table" and next(project.badgeGates) then
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "badgeGates", emitTableLiteral(project.badgeGates, 1))
-    out[#out + 1] = ""
+  -- field.badgeGates (false = suppress / DELETE so deep-merge removes it)
+  if type(project.badgeGates) == "table" then
+    local gates, gateDelete = {}, {}
+    for mid, gate in pairs(project.badgeGates) do
+      if gate == false then
+        gateDelete[#gateDelete + 1] = mid
+      elseif type(gate) == "table" then
+        gates[mid] = stripEditorFields(gate)
+      end
+    end
+    if next(gates) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "badgeGates", emitTableLiteral(gates, 1))
+      out[#out + 1] = ""
+    end
+    table.sort(gateDelete)
+    for _, mid in ipairs(gateDelete) do
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, { [%q] = mod.DELETE })",
+        "badgeGates", mid)
+      out[#out + 1] = ""
+    end
   end
 
   -- Oak's Lab starter remap (pokemon.before_give), same seam as

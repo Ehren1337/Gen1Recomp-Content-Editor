@@ -6,6 +6,7 @@ local Theme = require("Theme")
 local Search = require("Search")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
+local PalettePicker = require("PalettePicker")
 local ModIO = require("ModIO")
 local PAL = Theme.PAL
 
@@ -421,9 +422,29 @@ function Items.draw(S, x, y, w, h, App)
   local fh = 28 * s
 
   local prevSize = 72 * s
-  Preview.drawItemIcon(S, item, formX + formW - prevSize, fy, prevSize, prevSize)
+  local itemPal = Preview.itemPaletteName(S, item)
+  local function openItemPal()
+    PalettePicker.open(S, {
+      current = item.palette,
+      allowClear = true,
+      clearLabel = "(sprite / MEWMON default)",
+      title = "ITEM ICON PALETTE",
+      onPick = function(id)
+        item = mutate()
+        item.palette = id
+        Preview.invalidate()
+        App.markDirty()
+      end,
+    })
+  end
+  Preview.drawItemIcon(S, item, formX + formW - prevSize, fy, prevSize, prevSize, itemPal)
+  if Kit.press(formX + formW - prevSize, fy, prevSize, prevSize) then
+    openItemPal()
+  end
+  Preview.drawNamedSwatches(S, itemPal,
+    formX + formW - prevSize, fy + prevSize + 2 * s, prevSize, 10 * s)
   Kit.text("micro", "icon", formX + formW - prevSize + 4 * s,
-    fy + prevSize + 2 * s, PAL.faint)
+    fy + prevSize + 14 * s, PAL.faint)
   local fieldW = formW - labelW - prevSize - 16 * s
   if fieldW < 140 * s then fieldW = formW - labelW - 8 * s end
 
@@ -484,6 +505,24 @@ function Items.draw(S, x, y, w, h, App)
           end)
         end)
     end
+  end)
+  row("Palette", function(fx, fy_, fw, fh_)
+    PalettePicker.row(S, {
+      x = fx, y = fy_, w = fw, h = fh_,
+      current = item.palette or "",
+      effective = Preview.itemPaletteName(S, item),
+      emptyLabel = "(default)",
+      clearLabel = "(sprite / MEWMON default)",
+      allowClear = true,
+      title = "ITEM ICON PALETTE",
+      tooltip = "SGB palette for this item's icon preview",
+      onPick = function(id)
+        item = mutate()
+        item.palette = id
+        Preview.invalidate()
+        App.markDirty()
+      end,
+    })
   end)
 
   Kit.text("small", "Effect", formX, fy + 6 * s, PAL.caption)

@@ -26,6 +26,9 @@ local Events = require("Events")
 local Audio = require("Audio")
 local Gfx = require("Gfx")
 local AiClasses = require("AiClasses")
+local BattleAnims = require("BattleAnims")
+local BattleAnimPreview = require("BattleAnimPreview")
+local Player = require("Player")
 local PalettePicker = require("PalettePicker")
 
 local App = {}
@@ -51,12 +54,16 @@ local TABS = {
     tip = "Trainer classes, parties, and battle headers" },
   { id = "ai",       label = "AI",
     tip = "Trainer AI classes (item use / switching)" },
+  { id = "player",   label = "PLAYER",
+    tip = "Player overworld sprites, walk anim frames, battle pics" },
   { id = "items",    label = "ITEMS",
     tip = "Items and bag effect templates" },
   { id = "pokemon",  label = "POKEMON",
     tip = "Species stats, sprites, icons, learnsets" },
   { id = "moves",    label = "MOVES",
     tip = "Move power, accuracy, effects, advanced flags" },
+  { id = "anims",    label = "ANIMS",
+    tip = "Battle move animations, subanims, tilesheets" },
   { id = "effects",  label = "EFFECTS",
     tip = "Author move_effects from templates" },
   { id = "types",    label = "TYPES",
@@ -76,12 +83,14 @@ local PANELS = {
   pokemon = Pokemon,
   items = Items,
   moves = Moves,
+  anims = BattleAnims,
   effects = MoveEffects,
   types = Types,
   maps = Maps,
   dialog = Dialog,
   trainers = Trainers,
   ai = AiClasses,
+  player = Player,
   audio = Audio,
   gfx = Gfx,
   events = Events,
@@ -519,6 +528,10 @@ function App.redo()
 end
 
 function App.close()
+  if S then
+    pcall(function() Audio.stopPreview(S) end)
+    pcall(function() BattleAnimPreview.stop(S) end)
+  end
   if anyDirty(S) then
     if not S._quitArmed then
       S._quitArmed = true
@@ -535,7 +548,15 @@ local function cycleTab(delta)
     if t.id == S.tab then idx = i; break end
   end
   idx = ((idx - 1 + delta) % #TABS) + 1
+  local prev = S.tab
   S.tab = TABS[idx].id
+  if prev == "audio" and S.tab ~= "audio" then
+    pcall(function() Audio.stopPreview(S) end)
+  end
+  if (prev == "moves" or prev == "anims")
+      and S.tab ~= "moves" and S.tab ~= "anims" then
+    pcall(function() BattleAnimPreview.stop(S) end)
+  end
   say("Tab: " .. TABS[idx].label)
 end
 
@@ -607,6 +628,13 @@ end
 
 function App.update(dt)
   if not S then return end
+  if S.audioPreview or S.tab == "audio" then
+    pcall(function() Audio.update(S, dt or 0) end)
+  end
+  if S.battleAnimPreview
+      or S.tab == "moves" or S.tab == "anims" then
+    pcall(function() BattleAnimPreview.update(S, dt or 0) end)
+  end
   if S._romImporter then
     local imp = S._romImporter
     pcall(function() imp:update(dt or 0) end)
@@ -768,6 +796,13 @@ function App.draw()
     local tw = math.max(72 * s, Kit.textWidth("micro", t.label) + 18 * s)
     local on = S.tab == t.id
     if Kit.chip(tx, tabY, tw, tabH, t.label, on, PAL.green, PAL.steel, t.tip) then
+      if S.tab == "audio" and t.id ~= "audio" then
+        pcall(function() Audio.stopPreview(S) end)
+      end
+      if (S.tab == "moves" or S.tab == "anims")
+          and t.id ~= "moves" and t.id ~= "anims" then
+        pcall(function() BattleAnimPreview.stop(S) end)
+      end
       S.tab = t.id
     end
     tx = tx + tw + 6 * s
@@ -777,7 +812,10 @@ function App.draw()
   local contentH = H - contentY - 44 * s
   History.beginFrame(S)
   -- Block underlying panel hits while a modal is up.
-  if PalettePicker.isOpen(S) or S._pathPrompt then Kit.blockClicks = true end
+  if PalettePicker.isOpen(S) or BattleAnims.isPickerOpen(S)
+      or S._pathPrompt or S.mapTilesetPicker then
+    Kit.blockClicks = true
+  end
   local panel = PANELS[S.tab]
   if panel and panel.draw then
     panel.draw(S, 20 * s, contentY, W - 40 * s, contentH, App)
@@ -798,6 +836,14 @@ function App.draw()
   if PalettePicker.isOpen(S) then
     Kit.blockClicks = false
     PalettePicker.draw(S, 0, 0, W, H)
+  end
+  if BattleAnims.isPickerOpen(S) then
+    Kit.blockClicks = false
+    BattleAnims.drawPicker(S, 0, 0, W, H)
+  end
+  if S.mapTilesetPicker and Maps.drawTilesetPicker then
+    Kit.blockClicks = false
+    Maps.drawTilesetPicker(S, 0, 0, W, H, App)
   end
   if S._pathPrompt then
     Kit.blockClicks = false
@@ -834,7 +880,8 @@ function App.keypressed(key)
   if Kit.keypressed(key) then return end
   if key == "escape" then
     if PalettePicker.keypressed(S, key) then return end
-    if S.tab == "maps" and S.mapTilesetPicker then
+    if BattleAnims.pickerKeypressed(S, key) then return end
+    if S.mapTilesetPicker then
       S.mapTilesetPicker = nil
       Kit.blur()
       return
@@ -846,7 +893,11 @@ function App.keypressed(key)
   end
   if key == "]" or key == "tab" then return cycleTab(1) end
   if key == "[" then return cycleTab(-1) end
-  if PalettePicker.isOpen(S) then return end
+  -- Modals own keyboard (except Kit textfields / Esc above).
+  if PalettePicker.isOpen(S) or BattleAnims.isPickerOpen(S)
+      or S.mapTilesetPicker or S._pathPrompt then
+    return
+  end
   if S.tab == "maps" and Maps.keypressed then
     Maps.keypressed(S, key)
   elseif S.tab == "code" and Code.keypressed then
@@ -868,6 +919,11 @@ end
 function App.mousereleased() end
 
 function App.wheelmoved(_, y)
+  -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.
+  if S and (S.mapTilesetPicker or PalettePicker.isOpen(S) or S._pathPrompt) then
+    wheelY = wheelY + (y or 0)
+    return
+  end
   if S and S.tab == "maps" and Maps.wheelmoved and Maps.wheelmoved(S, y) then
     return
   end

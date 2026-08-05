@@ -42,7 +42,35 @@ local function sortedIds(t)
   return ids
 end
 
+-- Renaming used to leave the live table aliased under every intermediate id
+-- in S.data.maps (prepareLiveMap). Drop those stale keys so the list only
+-- shows real project / vanilla ids.
+local function scrubStaleLiveMapAliases(S)
+  if not (S and S.data and S.data.maps and S.project and S.project.maps) then
+    return
+  end
+  local liveId = {}
+  for id, def in pairs(S.project.maps) do
+    if type(def) == "table" then liveId[def] = id end
+  end
+  local drop = {}
+  for id, def in pairs(S.data.maps) do
+    local real = liveId[def]
+    if real and real ~= id then
+      drop[#drop + 1] = id
+    end
+  end
+  for _, id in ipairs(drop) do
+    if S._vanillaMapBackup and S._vanillaMapBackup[id] then
+      S.data.maps[id] = S._vanillaMapBackup[id]
+    else
+      S.data.maps[id] = nil
+    end
+  end
+end
+
 local function allMapIds(S)
+  scrubStaleLiveMapAliases(S)
   local seen, ids = {}, {}
   for id in pairs((S.project and S.project.maps) or {}) do
     seen[id] = true
@@ -58,6 +86,53 @@ local function allMapIds(S)
   end
   table.sort(ids)
   return ids
+end
+
+-- Move a project map to a new id. Also rebinds the live data.maps alias so
+-- the old key cannot linger in the sidebar list.
+local function renameMapId(S, map, newId, App)
+  local oldId = map.id
+  if not newId or newId == oldId then return false end
+  if not newId:match("^[%w_]+$") then return false end
+  if S.project.maps[newId] then return false end
+  if S.data and S.data.maps and S.data.maps[newId]
+      and S.data.maps[newId] ~= map then
+    return false
+  end
+
+  S.project.maps[oldId] = nil
+  map.id = newId
+  S.project.maps[newId] = map
+  S.mapId = newId
+  if S.data and S.data.maps then
+    if S.data.maps[oldId] == map then
+      S.data.maps[oldId] = nil
+    end
+    if S._vanillaMapBackup and S._vanillaMapBackup[oldId] then
+      S.data.maps[oldId] = S._vanillaMapBackup[oldId]
+    end
+    S.data.maps[newId] = map
+  end
+  if S._vanillaMapBackup then
+    S._vanillaMapBackup[newId] = S._vanillaMapBackup[oldId]
+    S._vanillaMapBackup[oldId] = nil
+  end
+  for _, bag in ipairs({ "hiddenItems", "badgeGates" }) do
+    local t = S.project[bag]
+    if t and t[oldId] ~= nil and t[newId] == nil then
+      t[newId] = t[oldId]
+      t[oldId] = nil
+    end
+  end
+  local songs = S.project.audio and S.project.audio.mapSongs
+  if songs and songs[oldId] ~= nil and songs[newId] == nil then
+    songs[newId] = songs[oldId]
+    songs[oldId] = nil
+  end
+  S._mapCenteredFor = nil
+  S._mapIdDraft = nil
+  if App then App.markDirty() end
+  return true
 end
 
 local function resolveMapDef(S, mapId)
@@ -216,24 +291,48 @@ local function ensureHiddenItems(S, mapId)
   return S.project.hiddenItems[mapId]
 end
 
+-- project.badgeGates[mapId] = false means "suppress / delete this gate"
+-- (Save emits mod.DELETE so deep-merge actually removes it).
 local function resolveBadgeGate(S, mapId)
   State.ensureProjectFields(S.project)
-  if S.project.badgeGates[mapId] then
-    return S.project.badgeGates[mapId], true
+  local proj = S.project.badgeGates[mapId]
+  if proj == false then
+    return nil, true, true
+  end
+  if type(proj) == "table" then
+    return proj, true, false
   end
   local base = S.data and S.data.field and S.data.field.badgeGates
       and S.data.field.badgeGates[mapId]
-  return base, false
+  return base, false, false
+end
+
+local function syncLiveBadgeGate(S, mapId, gateOrNil)
+  if not (S.data and S.data.field) then return end
+  S.data.field.badgeGates = S.data.field.badgeGates or {}
+  S.data.field.badgeGates[mapId] = gateOrNil
 end
 
 local function ensureBadgeGate(S, mapId)
   State.ensureProjectFields(S.project)
-  if not S.project.badgeGates[mapId] then
-    local base = S.data and S.data.field and S.data.field.badgeGates
-        and S.data.field.badgeGates[mapId]
-    S.project.badgeGates[mapId] = cloneGate(base)
-  end
-  return S.project.badgeGates[mapId]
+  local cur = S.project.badgeGates[mapId]
+  if type(cur) == "table" then return cur end
+  local base = S.data and S.data.field and S.data.field.badgeGates
+      and S.data.field.badgeGates[mapId]
+  -- After a delete (false), start a fresh gate rather than resurrecting nil.
+  if cur == false then base = nil end
+  local gate = cloneGate(base)
+  S.project.badgeGates[mapId] = gate
+  syncLiveBadgeGate(S, mapId, gate)
+  return gate
+end
+
+local function removeBadgeGate(S, mapId)
+  State.ensureProjectFields(S.project)
+  -- false = explicit suppress (needed so vanilla FieldDefaults / prior
+  -- deep-merge patches do not come back on Save).
+  S.project.badgeGates[mapId] = false
+  syncLiveBadgeGate(S, mapId, nil)
 end
 
 local function defaultFishing(S)
@@ -302,6 +401,61 @@ local function cycle(list, cur, dir)
     n = 1
   end
   return list[n]
+end
+
+-- Songs available for map_songs overrides (AUDIO tab + this Maps field).
+local function songIds(S)
+  local ids, seen = {}, {}
+  local function add(id)
+    if type(id) == "string" and id ~= "" and not seen[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
+  end
+  if S.data and S.data.audio and type(S.data.audio.songs) == "table" then
+    for id in pairs(S.data.audio.songs) do add(id) end
+  end
+  if S.project and S.project.audio and type(S.project.audio.songs) == "table" then
+    for id in pairs(S.project.audio.songs) do add(id) end
+  end
+  if #ids == 0 then
+    for _, id in ipairs({
+      "Music_PalletTown", "Music_Cities1", "Music_Cities2",
+      "Music_Routes1", "Music_Routes2", "Music_Routes3", "Music_Routes4",
+      "Music_IndigoPlateau", "Music_Gym", "Music_Pokecenter",
+      "Music_Dungeon1", "Music_Dungeon2", "Music_Dungeon3",
+      "Music_Cinnabar", "Music_Lavender", "Music_Celadon",
+      "Music_ViridianForest", "Music_SSAnne",
+    }) do add(id) end
+  end
+  table.sort(ids)
+  return ids
+end
+
+local function mapSongFor(S, mapId)
+  if not mapId then return "", false end
+  local proj = S.project and S.project.audio and S.project.audio.mapSongs
+  if proj and proj[mapId] ~= nil then
+    return tostring(proj[mapId]), true
+  end
+  local data = S.data and S.data.audio and S.data.audio.mapSongs
+  if data and data[mapId] ~= nil then
+    return tostring(data[mapId]), false
+  end
+  return "", false
+end
+
+local function setMapSong(S, mapId, songId, App)
+  if not (S and S.project and mapId) then return end
+  State.ensureProjectFields(S.project)
+  S.project.audio = S.project.audio or {}
+  S.project.audio.mapSongs = S.project.audio.mapSongs or {}
+  if songId == nil or songId == "" then
+    S.project.audio.mapSongs[mapId] = nil
+  else
+    S.project.audio.mapSongs[mapId] = songId
+  end
+  if App then App.markDirty() end
 end
 
 local DEFAULT_MART = {
@@ -438,6 +592,9 @@ end
 
 local function openTilesetPicker(S)
   S.mapTilesetPicker = { query = "", offset = 0, opened = true }
+  S._mapDrag = nil
+  S._mapViewHit = false
+  S._worldViewHit = false
 end
 
 local function tilesetDef(S, tilesetId)
@@ -582,6 +739,401 @@ local function clampZoom(z)
   if z < 0.5 then return 0.5 end
   if z > 8 then return 8 end
   return z
+end
+
+local function clampWorldZoom(z)
+  if z < 0.04 then return 0.04 end
+  if z > 2 then return 2 end
+  return z
+end
+
+-- Forward declare: World view draws live tiles before this is assigned.
+local prepareLiveMap
+
+-- World view: current map + its direct N/S/E/W neighbors only
+-- (same strip math as OverworldState.computeNeighbors).
+local WORLD_BLOCK = 32
+
+local function worldConnDelta(dir, offset, curDef, destDef)
+  local off = (offset or 0) * WORLD_BLOCK
+  if dir == "north" then
+    return off, -destDef.height * WORLD_BLOCK
+  elseif dir == "south" then
+    return off, curDef.height * WORLD_BLOCK
+  elseif dir == "west" then
+    return -destDef.width * WORLD_BLOCK, off
+  end
+  return curDef.width * WORLD_BLOCK, off
+end
+
+-- Place `other` when `other.connections[dir]` points at `cur`.
+local function worldReverseDelta(dir, offset, curDef, otherDef)
+  local off = (offset or 0) * WORLD_BLOCK
+  if dir == "north" then
+    return -off, curDef.height * WORLD_BLOCK
+  elseif dir == "south" then
+    return -off, -otherDef.height * WORLD_BLOCK
+  elseif dir == "west" then
+    return curDef.width * WORLD_BLOCK, -off
+  end
+  return -otherDef.width * WORLD_BLOCK, -off
+end
+
+local function buildWorldLayout(S)
+  local rootId = S.mapId
+  local rootDef = rootId and resolveMapDef(S, rootId) or nil
+  local maps, positions, edges = {}, {}, {}
+  if not (rootDef and type(rootDef.width) == "number"
+      and type(rootDef.height) == "number") then
+    return {
+      positions = positions, edges = edges, maps = maps,
+      bounds = { x = 0, y = 0, w = WORLD_BLOCK, h = WORLD_BLOCK },
+      rootId = rootId,
+    }
+  end
+
+  maps[rootId] = rootDef
+  local placed = { [rootId] = { ox = 0, oy = 0 } }
+
+  -- Outgoing neighbors from the current map.
+  for dir, conn in pairs(rootDef.connections or {}) do
+    local dest = conn and conn.map
+    if dest then
+      local destDef = resolveMapDef(S, dest)
+      edges[#edges + 1] = {
+        from = rootId, to = dest, dir = dir,
+        offset = conn.offset or 0,
+        ok = destDef ~= nil,
+      }
+      if destDef and type(destDef.width) == "number"
+          and type(destDef.height) == "number" and not placed[dest] then
+        maps[dest] = destDef
+        local dx, dy = worldConnDelta(dir, conn.offset, rootDef, destDef)
+        placed[dest] = { ox = dx, oy = dy }
+      end
+    end
+  end
+
+  -- Inbound: other maps that connect into the current map (show if not
+  -- already placed via an outbound link).
+  for _, id in ipairs(allMapIds(S)) do
+    if id ~= rootId then
+      local def = resolveMapDef(S, id)
+      if def then
+        for dir, conn in pairs(def.connections or {}) do
+          if conn and conn.map == rootId then
+            edges[#edges + 1] = {
+              from = id, to = rootId, dir = dir,
+              offset = conn.offset or 0, ok = true,
+            }
+            if type(def.width) == "number" and type(def.height) == "number"
+                and not placed[id] then
+              maps[id] = def
+              local dx, dy = worldReverseDelta(dir, conn.offset, rootDef, def)
+              placed[id] = { ox = dx, oy = dy }
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local minX, minY = math.huge, math.huge
+  local maxX, maxY = -math.huge, -math.huge
+  for id, p in pairs(placed) do
+    local def = maps[id]
+    local w = def.width * WORLD_BLOCK
+    local h = def.height * WORLD_BLOCK
+    if p.ox < minX then minX = p.ox end
+    if p.oy < minY then minY = p.oy end
+    if p.ox + w > maxX then maxX = p.ox + w end
+    if p.oy + h > maxY then maxY = p.oy + h end
+  end
+  if minX == math.huge then
+    minX, minY = 0, 0
+    maxX = rootDef.width * WORLD_BLOCK
+    maxY = rootDef.height * WORLD_BLOCK
+  end
+
+  for id, p in pairs(placed) do
+    local def = maps[id]
+    positions[id] = {
+      x = p.ox - minX,
+      y = p.oy - minY,
+      w = def.width * WORLD_BLOCK,
+      h = def.height * WORLD_BLOCK,
+    }
+  end
+
+  return {
+    positions = positions,
+    edges = edges,
+    maps = maps,
+    bounds = { x = 0, y = 0, w = maxX - minX, h = maxY - minY },
+    rootId = rootId,
+  }
+end
+
+local function worldFitKey(S, layout)
+  return tostring(layout.rootId or "") .. ":"
+    .. tostring(layout.bounds.w) .. "x" .. tostring(layout.bounds.h)
+end
+
+local function fitWorldCamera(S, layout, vw, vh)
+  local b = layout.bounds
+  local pad = 40
+  local zx = vw / math.max(1, b.w + pad * 2)
+  local zy = vh / math.max(1, b.h + pad * 2)
+  S.worldZoom = clampWorldZoom(math.min(zx, zy, 1.5))
+  local z = S.worldZoom
+  S.worldCamX = b.x + b.w * 0.5 - vw / (2 * z)
+  S.worldCamY = b.y + b.h * 0.5 - vh / (2 * z)
+  S._worldFitKey = worldFitKey(S, layout)
+end
+
+local function drawWorldView(S, App, vx, vy, vw, vh, propW)
+  local s = Kit.scale
+  local layout = buildWorldLayout(S)
+  local canvasW = math.max(40 * s, vw - propW - 12 * s)
+  local canvasH = vh
+  Kit.card(vx, vy, canvasW, canvasH, 12 * s)
+
+  local pad = 8 * s
+  local viewX = vx + pad
+  local viewY = vy + pad
+  local viewW = canvasW - 2 * pad
+  local viewH = canvasH - 2 * pad
+  S._worldViewHit = Kit.hit(viewX, viewY, viewW, viewH)
+  S._worldViewW, S._worldViewH = viewW, viewH
+
+  local fitKey = worldFitKey(S, layout)
+  if S._worldFitKey ~= fitKey or S.worldCamX == nil then
+    fitWorldCamera(S, layout, viewW, viewH)
+  end
+  S.worldZoom = clampWorldZoom(S.worldZoom or 0.25)
+  S._worldFocusId = nil
+
+  -- Pan / select (clicking a neighbor recenters World on that map)
+  if Kit.mouseDown and not Kit.blockClicks and (S._worldDrag or S._worldViewHit) then
+    if not S._worldDrag and Kit.mouseClicked and S._worldViewHit then
+      local z = S.worldZoom
+      local wx = S.worldCamX + (Kit.mouseX - viewX) / z
+      local wy = S.worldCamY + (Kit.mouseY - viewY) / z
+      local hitId = nil
+      for id, p in pairs(layout.positions) do
+        if wx >= p.x and wx <= p.x + p.w and wy >= p.y and wy <= p.y + p.h then
+          hitId = id
+          break
+        end
+      end
+      if hitId then
+        if hitId ~= S.mapId then
+          S.mapId = hitId
+          S._mapIdDraft = nil
+          S._mapCenteredFor = nil
+          S._worldFitKey = nil
+        end
+        S._worldDrag = { kind = "select", id = hitId }
+      else
+        S._worldDrag = {
+          kind = "pan", mx = Kit.mouseX, my = Kit.mouseY,
+          camX = S.worldCamX, camY = S.worldCamY,
+        }
+      end
+    elseif S._worldDrag and S._worldDrag.kind == "pan" then
+      local d = S._worldDrag
+      local z = S.worldZoom
+      S.worldCamX = d.camX - (Kit.mouseX - d.mx) / z
+      S.worldCamY = d.camY - (Kit.mouseY - d.my) / z
+    end
+  else
+    S._worldDrag = nil
+  end
+
+  Kit.pushClip(viewX, viewY, viewW, viewH)
+  Theme.col(PAL.bgBot, 1)
+  love.graphics.rectangle("fill", viewX, viewY, viewW, viewH)
+
+  local z = S.worldZoom
+  love.graphics.push()
+  love.graphics.translate(viewX, viewY)
+  love.graphics.scale(z, z)
+  love.graphics.translate(-S.worldCamX, -S.worldCamY)
+
+  -- Draw real map tile bodies (not placeholder boxes).
+  for id, p in pairs(layout.positions) do
+    local def = layout.maps[id] or resolveMapDef(S, id)
+    local sel = S.mapId == id
+    if def then
+      prepareLiveMap(S, id, def)
+      local ok, loaded = pcall(MapLoader.load, S.data, id)
+      if ok and loaded and loaded.renderer and loaded.renderer.drawMapOnly then
+        love.graphics.push()
+        love.graphics.translate(p.x, p.y)
+        local pal = mapPaletteName(S, def)
+        local shaded = Preview.pushPaletteShader(S, pal)
+        love.graphics.setColor(1, 1, 1, sel and 1 or 0.92)
+        -- Full map body in local space; cam 0,0 shows the whole sheet.
+        loaded.renderer:drawMapOnly(0, 0, p.w, p.h)
+        Preview.popPaletteShader(shaded)
+        love.graphics.pop()
+      else
+        Theme.col(PAL.rowBg, 0.9)
+        love.graphics.rectangle("fill", p.x, p.y, p.w, p.h)
+      end
+    else
+      Theme.col(PAL.rowBg, 0.9)
+      love.graphics.rectangle("fill", p.x, p.y, p.w, p.h)
+    end
+    Theme.stroke(p.x, p.y, p.w, p.h, 2,
+      sel and PAL.green or PAL.cardBorder,
+      sel and 0.95 or 0.4, sel and 3 or 1.5)
+  end
+
+  -- Connection lines on top of maps.
+  if love.graphics.setLineWidth then love.graphics.setLineWidth(2) end
+  for _, e in ipairs(layout.edges) do
+    local a = layout.positions[e.from]
+    local b = layout.positions[e.to]
+    if a then
+      local x1 = a.x + a.w * 0.5
+      local y1 = a.y + a.h * 0.5
+      local x2, y2
+      if b then
+        x2 = b.x + b.w * 0.5
+        y2 = b.y + b.h * 0.5
+        Theme.col(e.ok and PAL.blue or PAL.red, e.ok and 0.65 or 0.85)
+      else
+        local stub = 48
+        x2, y2 = x1, y1
+        if e.dir == "north" then y2 = a.y - stub
+        elseif e.dir == "south" then y2 = a.y + a.h + stub
+        elseif e.dir == "west" then x2 = a.x - stub
+        else x2 = a.x + a.w + stub end
+        Theme.col(PAL.red, 0.85)
+      end
+      if love.graphics.line then
+        love.graphics.line(x1, y1, x2, y2)
+      end
+    end
+  end
+
+  love.graphics.pop()
+
+  -- Screen-space labels along the top edge of each map.
+  for id, p in pairs(layout.positions) do
+    local sx = viewX + (p.x - S.worldCamX) * z
+    local sy = viewY + (p.y - S.worldCamY) * z
+    local sw = p.w * z
+    local sh = p.h * z
+    local sel = S.mapId == id
+    if sel or (sw >= 40 * s and sh >= 16 * s) then
+      local label = id
+      local maxW = math.max(12 * s, sw - 6 * s)
+      if Kit.textWidth("micro", label) > maxW then
+        label = Kit.ellipsize("micro", label, maxW)
+      end
+      local tw = Kit.textWidth("micro", label)
+      local tx = sx + (sw - tw) * 0.5
+      local ty = sy + 3 * s
+      Theme.col(PAL.bgBot, sel and 0.85 or 0.65)
+      love.graphics.rectangle("fill", tx - 3 * s, ty - 1 * s,
+        tw + 6 * s, 12 * s, 3, 3)
+      Kit.text("micro", label, tx, ty, sel and PAL.green or PAL.text)
+    end
+  end
+
+  Kit.popClip()
+
+  Kit.text("micro", "drag empty to pan · click map to select · wheel zoom",
+    viewX + 6 * s, viewY + viewH - 16 * s, PAL.faint)
+
+  -- Side panel: connections for the selected map
+  local px = vx + canvasW + 12 * s
+  local py = vy
+  local map, owned = resolveMapDef(S, S.mapId)
+  local title = (S.mapId or "?") .. (owned and "" or " (vanilla)")
+  Kit.caption(px, py - 18 * s, Kit.ellipsize("caption", title, propW))
+  Kit.card(px, py, propW, canvasH, 12 * s)
+
+  local fh = 26 * s
+  local y = py + 10 * s
+  Kit.text("micro", "MAP CONNECTIONS", px + 10 * s, y, PAL.caption)
+  y = y + 18 * s
+  Kit.text("micro", "Current map and its N/S/E/W neighbors.",
+    px + 10 * s, y, PAL.faint)
+  y = y + 22 * s
+
+  if Kit.button(px + 10 * s, y, propW - 20 * s, 28 * s, "Fit", {
+      kind = "ghost", tooltip = "Zoom to this map and its neighbors",
+    }) then
+    fitWorldCamera(S, layout, viewW, viewH)
+  end
+  y = y + 34 * s
+  if Kit.button(px + 10 * s, y, propW - 20 * s, 28 * s, "Open in Editor", {
+      kind = "accent", tooltip = "Edit blocks / warps for the selected map",
+    }) then
+    S.mapViewMode = "editor"
+    S._mapCenteredFor = nil
+  end
+  y = y + 40 * s
+
+  if not map then
+    Kit.text("micro", "Select a map in the list or graph.",
+      px + 10 * s, y, PAL.muted)
+    return
+  end
+
+  local function mutate()
+    map = ensureOwned(S, S.mapId)
+    owned = true
+    return map
+  end
+
+  Kit.text("micro", "Connections", px + 10 * s, y, PAL.caption)
+  y = y + 16 * s
+  map.connections = map.connections or {}
+  local listBottom = py + canvasH - 16 * s
+  for _, dir in ipairs({ "north", "south", "east", "west" }) do
+    if y + fh > listBottom then break end
+    local cur = map.connections[dir]
+    local val = cur and cur.map or ""
+    local v = field(App, "mp_wc_" .. dir, px + 10 * s, y, propW - 20 * s, fh,
+      val, dir)
+    local want = (v == "") and nil or {
+      map = v:upper():gsub("%s+", "_"),
+      offset = (cur and cur.offset) or 0,
+    }
+    local curMap = cur and cur.map or ""
+    local wantMap = want and want.map or ""
+    if curMap ~= wantMap then
+      map = mutate()
+      map.connections = map.connections or {}
+      map.connections[dir] = want
+      S._worldFitKey = nil
+      App.markDirty()
+    end
+    if want and map.connections[dir] then
+      local off = tonumber(field(App, "mp_wco_" .. dir,
+        px + 10 * s, y + fh + 2 * s, 60 * s, fh - 4 * s,
+        tostring(map.connections[dir].offset or 0), "0")) or 0
+      if off ~= (map.connections[dir].offset or 0) then
+        map = mutate()
+        map.connections[dir].offset = off
+        S._worldFitKey = nil
+        App.markDirty()
+      end
+      Kit.text("micro", "offset", px + 78 * s, y + fh + 6 * s, PAL.faint)
+      local dest = want.map
+      local ok = layout.positions[dest] ~= nil
+        or (S.data.maps and S.data.maps[dest])
+        or (S.project.maps and S.project.maps[dest])
+      Kit.text("micro", ok and "linked" or "missing",
+        px + 120 * s, y + fh + 6 * s, ok and PAL.green or PAL.red)
+      y = y + fh + 2 * s
+    end
+    y = y + fh + 4 * s
+  end
 end
 
 local function centerOn(S, cx, cy)
@@ -738,7 +1290,7 @@ local function importTilesetPng(S, App, tilesetId, opts)
     end)
 end
 
-local function prepareLiveMap(S, mapId, def)
+prepareLiveMap = function(S, mapId, def)
   if not (S.data and mapId and def) then return end
   for tid, ts in pairs(S.project.tilesets or {}) do
     local live = liveTilesetForEditor(S, ts)
@@ -762,6 +1314,22 @@ local function prepareLiveMap(S, mapId, def)
     MapLoader.invalidate(mapId)
     S._mapNeedsRebuild = nil
   end
+end
+
+-- Direct N/S/E/W neighbors for the map preview (same offsets as the game).
+local function editorNeighbors(S, rootDef)
+  local out = {}
+  if not rootDef then return out end
+  for dir, conn in pairs(rootDef.connections or {}) do
+    local dest = conn and conn.map
+    local destDef = dest and resolveMapDef(S, dest)
+    if destDef and type(destDef.width) == "number"
+        and type(destDef.height) == "number" then
+      local ox, oy = worldConnDelta(dir, conn.offset, rootDef, destDef)
+      out[#out + 1] = { id = dest, def = destDef, ox = ox, oy = oy, dir = dir }
+    end
+  end
+  return out
 end
 
 local function facingFromRange(range)
@@ -1033,13 +1601,37 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     love.graphics.setColor(1, 1, 1, 1)
     local worldW = vw / S.mapZoom
     local worldH = vh / S.mapZoom
+    local camX = S.mapCamX or 0
+    local camY = S.mapCamY or 0
+
+    -- Connected neighbors behind the current map (engine drawMapOnly path).
+    if S.mapShowNeighbors ~= false then
+      for _, nb in ipairs(editorNeighbors(S, mapDef)) do
+        prepareLiveMap(S, nb.id, nb.def)
+        local nok, nmap = pcall(MapLoader.load, S.data, nb.id)
+        if nok and nmap and nmap.renderer and nmap.renderer.drawMapOnly then
+          local nPal = mapPaletteName(S, nb.def)
+          local nShaded = Preview.pushPaletteShader(S, nPal)
+          love.graphics.setColor(1, 1, 1, 0.75)
+          nmap.renderer:drawMapOnly(camX - nb.ox, camY - nb.oy, worldW, worldH)
+          Preview.popPaletteShader(nShaded)
+          love.graphics.setColor(0.27, 0.59, 1, 0.35)
+          love.graphics.rectangle("line",
+            nb.ox - camX, nb.oy - camY,
+            (nmap.widthCells or nb.def.width * 2) * CELL,
+            (nmap.heightCells or nb.def.height * 2) * CELL)
+        end
+      end
+    end
+
     local palName = mapPaletteName(S, mapDef)
     local shaded = Preview.pushPaletteShader(S, palName)
-    map.renderer:draw(S.mapCamX or 0, S.mapCamY or 0, worldW, worldH)
+    love.graphics.setColor(1, 1, 1, 1)
+    map.renderer:draw(camX, camY, worldW, worldH)
     Preview.popPaletteShader(shaded)
     love.graphics.setColor(1, 1, 1, 0.22)
     love.graphics.rectangle("line",
-      - (S.mapCamX or 0), - (S.mapCamY or 0),
+      - camX, - camY,
       map.widthCells * CELL, map.heightCells * CELL)
     drawCollisionOverlay(S, mapDef)
     drawMarkerOverlays(S, mapDef)
@@ -1142,7 +1734,15 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
 end
 
 function Maps.wheelmoved(S, dy)
-  if not (S and S._mapViewW) then return false end
+  if not S then return false end
+  -- Modal owns the wheel (Kit.scroll on the list). Do not zoom the map.
+  if S.mapTilesetPicker then return false end
+  if S.mapViewMode == "world" and S._worldViewHit then
+    S.worldZoom = clampWorldZoom(
+      (S.worldZoom or 0.25) + (dy > 0 and 0.05 or -0.05))
+    return true
+  end
+  if not S._mapViewW then return false end
   if S._mapViewHit then
     S.mapZoom = clampZoom((S.mapZoom or 2) + (dy > 0 and 0.25 or -0.25))
     return true
@@ -1151,13 +1751,24 @@ function Maps.wheelmoved(S, dy)
 end
 
 function Maps.keypressed(S, key)
-  if S.mapTilesetPicker then
-    if key == "escape" then
-      S.mapTilesetPicker = nil
-      Kit.blur()
-      return true
+  -- Escape / typing handled at App while the tileset modal is up.
+  if S.mapTilesetPicker then return true end
+  if S.mapViewMode == "world" then
+    local step = 64 / math.max(0.04, S.worldZoom or 0.25)
+    if key == "up" or key == "w" then
+      S.worldCamY = (S.worldCamY or 0) - step
+    elseif key == "down" or key == "s" then
+      S.worldCamY = (S.worldCamY or 0) + step
+    elseif key == "left" or key == "a" then
+      S.worldCamX = (S.worldCamX or 0) - step
+    elseif key == "right" or key == "d" then
+      S.worldCamX = (S.worldCamX or 0) + step
+    elseif key == "=" or key == "+" then
+      S.worldZoom = clampWorldZoom((S.worldZoom or 0.25) + 0.05)
+    elseif key == "-" then
+      S.worldZoom = clampWorldZoom((S.worldZoom or 0.25) - 0.05)
     end
-    return false
+    return
   end
   local step = CELL
   if key == "up" or key == "w" then
@@ -1175,13 +1786,25 @@ function Maps.keypressed(S, key)
   end
 end
 
-local function drawTilesetPicker(S, map, mutate, App, x, y, w, h)
-  local p = S.mapTilesetPicker
-  if not p or not map then return end
+-- Full-window modal (same contract as PalettePicker): App draws this over
+-- (0,0,W,H) after the Maps panel so hit tests match the painted rects.
+function Maps.drawTilesetPicker(S, x, y, w, h, App)
+  local p = S and S.mapTilesetPicker
+  if not p or not App then return end
+  local map = resolveMapDef(S, S.mapId)
+  if not map then
+    S.mapTilesetPicker = nil
+    return
+  end
+  local function mutate()
+    return ensureOwned(S, S.mapId)
+  end
+
   local s = Kit.scale
+  -- Swallow the click that opened the modal so it does not also hit a row.
   if p.opened then
     p.opened = nil
-    Kit.blockClicks = true
+    Kit.mouseClicked = false
     p.focus = map.tileset
   end
 
@@ -1467,17 +2090,22 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   end
 
   if prow("ID", function(fx, fy, fw, fh_)
-    local v = field(App, "mp_id", fx, fy, fw, fh_, map.id, "MAP_ID")
-    if v ~= map.id and v:match("^[%w_]+$")
-       and not S.project.maps[v]
-       and not (S.data.maps and S.data.maps[v]) then
-      map = mutate()
-      S.project.maps[map.id] = nil
-      map.id = v
-      S.project.maps[v] = map
-      S.mapId = v
-      S._mapCenteredFor = nil
-      App.markDirty()
+    -- Draft while typing; commit on Enter / focus loss so each keystroke
+    -- does not create a sidebar entry (and a live data.maps alias).
+    local shown = S._mapIdDraft
+    if shown == nil then shown = map.id end
+    local v = field(App, "mp_id", fx, fy, fw, fh_, shown, "MAP_ID")
+    if Kit.focus == "mp_id" then
+      S._mapIdDraft = v
+    elseif S._mapIdDraft ~= nil then
+      local newId = v
+      S._mapIdDraft = nil
+      if newId ~= map.id then
+        map = mutate()
+        if not renameMapId(S, map, newId, App) then
+          S.status = "Map id unavailable or invalid: " .. tostring(newId)
+        end
+      end
     end
   end) then return py end
 
@@ -1554,6 +2182,34 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   Kit.text("micro", "effective: " .. mapPaletteName(S, map),
     px + 10 * s, py, PAL.faint)
   py = py + 14 * s
+
+  if prow("Music", function(fx, fy, fw, fh_)
+    local cur, ownedSong = mapSongFor(S, map.id)
+    local label = cur ~= "" and cur or "(none)"
+    local clearW = ownedSong and 64 * s or 0
+    local gap = ownedSong and 4 * s or 0
+    local cycleW = math.max(80 * s, fw - clearW - gap)
+    if Kit.button(fx, fy, cycleW, fh_,
+        Kit.ellipsize("small", label, cycleW - 8 * s), {
+          kind = "ghost",
+          tooltip = "Cycle this map's song (mod.content.map_songs)",
+        }) then
+      setMapSong(S, map.id, cycle(songIds(S), cur), App)
+    end
+    if ownedSong and Kit.button(fx + cycleW + gap, fy, clearW, fh_, "Clear", {
+        kind = "danger",
+        tooltip = "Remove mod song override (restore vanilla)",
+      }) then
+      setMapSong(S, map.id, nil, App)
+    end
+  end) then return py end
+  if prow("Music id", function(fx, fy, fw, fh_)
+    local cur = select(1, mapSongFor(S, map.id))
+    local v = field(App, "mp_music", fx, fy, fw, fh_, cur, "Music_...")
+    if v ~= cur then
+      setMapSong(S, map.id, (v ~= "" and v) or nil, App)
+    end
+  end) then return py end
 
   Kit.text("micro", "Connections (neighbor map id)", px + 10 * s, py, PAL.caption)
   py = py + 16 * s
@@ -2282,13 +2938,21 @@ end
 local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   State.ensureProjectFields(S.project)
   local mapId = map.id or S.mapId
-  local gate, owned = resolveBadgeGate(S, mapId)
+  local gate, owned, deleted = resolveBadgeGate(S, mapId)
 
   Kit.text("micro", "Badge gate (field.badgeGates)", px + 10 * s, py, PAL.muted)
   py = py + 18 * s
-  if not gate then
-    Kit.text("micro", "No badge gate on this map.", px + 10 * s, py, PAL.faint)
-    py = py + 18 * s
+
+  if deleted or not gate then
+    if deleted then
+      Kit.text("micro",
+        "Gate removed for this mod (Save writes DELETE so it stays gone).",
+        px + 10 * s, py, PAL.yellow)
+      py = py + 18 * s
+    else
+      Kit.text("micro", "No badge gate on this map.", px + 10 * s, py, PAL.faint)
+      py = py + 18 * s
+    end
     if py + 30 * s <= listBottom
         and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "+ Add gate",
           { kind = "good" }) then
@@ -2298,8 +2962,20 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
     return py + 36 * s
   end
 
+  -- Remove sits at the top so it is never clipped below the panel.
+  if py + 30 * s <= listBottom
+      and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Remove gate", {
+        kind = "danger",
+        tooltip = "Delete this badge gate (emits mod.DELETE on Save)",
+      }) then
+    removeBadgeGate(S, mapId)
+    App.markDirty()
+    return py + 36 * s
+  end
+  py = py + 34 * s
+
   if not owned then
-    Kit.text("micro", "Vanilla -- edit to override", px + 10 * s, py, PAL.faint)
+    Kit.text("micro", "Vanilla — edit clones into the mod", px + 10 * s, py, PAL.faint)
     py = py + 16 * s
   end
 
@@ -2315,6 +2991,7 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
     local g = ensureBadgeGate(S, mapId)
     if g[fieldKey] ~= value then
       g[fieldKey] = value
+      syncLiveBadgeGate(S, mapId, g)
       App.markDirty()
     end
   end
@@ -2356,12 +3033,14 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
       local g = ensureBadgeGate(S, mapId)
       g.coords = g.coords or cloneGateCoords(coords)
       g.coords[ci] = { x = cx, y = cy }
+      syncLiveBadgeGate(S, mapId, g)
       App.markDirty()
     end
     if Kit.button(px + propW - 42 * s, py, 28 * s, fh, "X", { kind = "danger" }) then
       local g = ensureBadgeGate(S, mapId)
       g.coords = g.coords or cloneGateCoords(coords)
       table.remove(g.coords, ci)
+      syncLiveBadgeGate(S, mapId, g)
       App.markDirty()
       break
     end
@@ -2373,15 +3052,9 @@ local function drawBadgeGates(S, map, mutate, App, px, py, propW, listBottom, fh
     local g = ensureBadgeGate(S, mapId)
     g.coords = g.coords or cloneGateCoords(coords)
     g.coords[#g.coords + 1] = { x = 0, y = 0 }
+    syncLiveBadgeGate(S, mapId, g)
     App.markDirty()
     py = py + 32 * s
-  end
-  if owned and py + 36 * s <= listBottom
-      and Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Remove gate",
-        { kind = "danger" }) then
-    S.project.badgeGates[mapId] = nil
-    App.markDirty()
-    py = py + 36 * s
   end
   return py
 end
@@ -2622,11 +3295,26 @@ function Maps.draw(S, x, y, w, h, App)
     return
   end
 
-  local pickerOpen = S.mapTilesetPicker ~= nil
-  if pickerOpen then Kit.blockClicks = true end
-
   local listW = math.min(200 * s, w * 0.22)
   Kit.caption(x, y, "MAPS")
+  S.mapViewMode = S.mapViewMode or "editor"
+  local modeY = y
+  local modeX = x + Kit.textWidth("caption", "MAPS") + 16 * s
+  for _, mode in ipairs({
+    { id = "editor", label = "Editor" },
+    { id = "world", label = "World" },
+  }) do
+    local on = S.mapViewMode == mode.id
+    local bw = Kit.textWidth("micro", mode.label) + 16 * s
+    if Kit.chip(modeX, modeY, bw, 22 * s, mode.label, on, PAL.green, nil,
+        mode.id == "world"
+          and "Show this map and its N/S/E/W neighbors"
+          or "Paint blocks, warps, objects") then
+      S.mapViewMode = mode.id
+      if mode.id == "world" then S._worldFitKey = nil end
+    end
+    modeX = modeX + bw + 4 * s
+  end
   local qh = 28 * s
   local qy = y + 22 * s
   local q, qChanged = Search.field(S, "mapQuery", x, qy, listW, qh, "search maps...")
@@ -2665,9 +3353,11 @@ function Maps.draw(S, x, y, w, h, App)
     local owned = S.project.maps[id] ~= nil
     if Kit.row(mapScrollX, ry, mapRowW, rowH, S.mapId == id, PAL.green) then
       S.mapId = id
+      S._mapIdDraft = nil
       S._mapCenteredFor = nil
       S._mapPaletteFor = nil
       S.mapObjectIndex, S.mapWarpIndex, S.mapSignIndex = 1, 1, 1
+      if S.mapViewMode == "world" then S._worldFitKey = nil end
     end
     local textX = mapScrollX + 6 * s
     local textMax = math.max(8, mapRowW - 12 * s)
@@ -2711,6 +3401,15 @@ function Maps.draw(S, x, y, w, h, App)
 
   local mainX = x + listW + 12 * s
   local mainW = w - listW - 12 * s
+
+  if S.mapViewMode == "world" then
+    local propW = 260 * s
+    local worldY = qy
+    local worldH = h - (worldY - y)
+    drawWorldView(S, App, mainX, worldY, mainW, worldH, propW)
+    return
+  end
+
   local dockH = math.min(200 * s, math.max(140 * s, h * 0.28))
 
   local tools = {
@@ -2774,6 +3473,12 @@ function Maps.draw(S, x, y, w, h, App)
       S.mapShowCollision = not S.mapShowCollision
     end
     bx = bx + 98 * s
+    local showNb = S.mapShowNeighbors ~= false
+    if Kit.chip(bx, barY + 2 * s, 96 * s, barH - 4 * s, "Neighbors",
+        showNb, PAL.blue, nil, "Draw connected maps at N/S/E/W seams") then
+      S.mapShowNeighbors = not showNb
+    end
+    bx = bx + 104 * s
     local spr = S.placeSprite or "SPRITE_RED"
     local sdef = spriteDef(S, spr)
     if sdef and sdef.image then
@@ -2797,7 +3502,6 @@ function Maps.draw(S, x, y, w, h, App)
 
   if not map then
     Kit.emptyBox(mainX, canvasY, mainW, canvasH, "No maps -- add one or Import TMX")
-    if pickerOpen then Kit.blockClicks = false end
     return
   end
 
@@ -2896,6 +3600,7 @@ function Maps.draw(S, x, y, w, h, App)
     end
     MapLoader.invalidate(mid)
     S.mapId = next(S.project.maps) or ids[1]
+    S._mapIdDraft = nil
     S._mapCenteredFor = nil
     App.markDirty()
   end
@@ -2905,11 +3610,6 @@ function Maps.draw(S, x, y, w, h, App)
   if S.importReport and S.importReport ~= "" then
     local brief = S.importReport:gsub("\r", ""):match("([^\n]+)") or ""
     Kit.text("micro", brief, mainX, dockY - 14 * s, PAL.faint)
-  end
-
-  if pickerOpen then
-    Kit.blockClicks = false
-    drawTilesetPicker(S, map, mutate, App, x, y, w, h)
   end
 end
 

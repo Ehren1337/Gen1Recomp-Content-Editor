@@ -484,6 +484,10 @@ R.items = {
     -- and UIs fall back to a category sprite (ball / TM clipboard / etc.).
     icon = f.opt(f.union{ f.path, f.rec{ image = f.path,
                                          frames = f.opt(f.int(1)) } }),
+    -- Optional SGB palette for the item icon preview / custom PNG.
+    -- Plain string (same rationale as maps.palette) so ROM-free fixtures
+    -- without a palettes table still validate.
+    palette = f.opt(f.str),
   },
   example = 'mod.content.items:patch("POTION", { price = 100 })',
 }
@@ -528,7 +532,14 @@ R.tilesets = {
     imageWidth = f.opt(f.int(1)), imageHeight = f.opt(f.int(1)),
     tilesPerRow = f.opt(f.int(1)),
     blocks = f.list(f.any),
-    walkable = f.opt(f.any), counterTiles = f.opt(f.any),
+    -- Collision / terrain: walkable = passable 8x8 tile ids (not in list =
+    -- solid). grassTile = tall-grass encounter tile. waterTiles/shoreTiles
+    -- = surfable (Map.lua).
+    walkable = f.opt(f.any),
+    grassTile = f.opt(f.int(0, 255)),
+    waterTiles = f.opt(f.any),
+    shoreTiles = f.opt(f.any),
+    counterTiles = f.opt(f.any),
     doorTiles = f.opt(f.any), warpTiles = f.opt(f.any),
     animation = f.opt(f.str),
     trueColor = f.opt(f.bool),
@@ -572,8 +583,22 @@ R.trainers = {
     -- Reuse a base trainer class's portrait without redistributing its asset.
     basePic = f.opt(f.id("trainers")),
     baseMoney = f.opt(f.int(0)),
-    parties = f.list(f.list(f.rec{ level = f.int(1),
-                                   species = f.id("pokemon") })),
+    -- Optional moves / dvs / statExp override vanilla trainer-party defaults.
+    -- Gen1 DVs are 0-15; "EVs" are Gen1 statExp (0-65535), not Gen3 EVs.
+    parties = f.list(f.list(f.rec{
+      level = f.int(1),
+      species = f.id("pokemon"),
+      moves = f.opt(f.list(f.id("moves"))),
+      dvs = f.opt(f.rec{
+        attack = f.int(0, 15), defense = f.int(0, 15),
+        speed = f.int(0, 15), special = f.int(0, 15),
+        hp = f.opt(f.int(0, 15)),
+      }),
+      statExp = f.opt(f.rec{
+        hp = f.int(0), attack = f.int(0), defense = f.int(0),
+        speed = f.int(0), special = f.int(0),
+      }),
+    })),
     aiMods = f.opt(f.any),
     aiClass = f.opt(f.id("ai_classes")),
     brain = f.opt(f.fn),
@@ -1197,6 +1222,12 @@ R.field = {
     playerPics = f.rec{
       back = f.opt(f.str), demoBack = f.opt(f.str),
       oakBack = f.opt(f.str), front = f.opt(f.str) },
+    -- Overworld wearables (FieldDefaults.PLAYER_SPRITES): sprite registry
+    -- ids for walk / bike / surf / fly / Yellow surfing Pikachu.  Optional
+    -- keys inherit vanilla (SPRITE_RED, SPRITE_RED_BIKE, …).
+    playerSprites = f.rec{
+      walk = f.opt(f.str), bike = f.opt(f.str), surf = f.opt(f.str),
+      fly = f.opt(f.str), surfPikachu = f.opt(f.str) },
     -- the new-game and boot config a total conversion replaces
     boot = f.rec{
       startMap = f.opt(f.str), startX = f.opt(f.int(0)), startY = f.opt(f.int(0)),

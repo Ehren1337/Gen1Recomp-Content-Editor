@@ -414,11 +414,48 @@ function Preview.pokemonFront(S, mon)
   return mon.spriteFront
 end
 
-local function spriteImage(S, spriteId, fallback)
+local function spriteDef(S, spriteId)
   local sprites = S and S.data and S.data.sprites
   local def = sprites and sprites[spriteId]
+  if def then return def end
+  local proj = S and S.project and S.project.sprites
+  return proj and proj[spriteId] or nil
+end
+
+local function spriteImage(S, spriteId, fallback)
+  local def = spriteDef(S, spriteId)
   if def and def.image then return def.image end
   return fallback
+end
+
+local function spritePalette(S, spriteId)
+  local def = spriteDef(S, spriteId)
+  local src = def and def.paletteSource
+  if type(src) == "string" and src ~= "" and Preview.paletteColors(S, src) then
+    return src
+  end
+  return nil
+end
+
+-- Category stand-in sprite id for an item (nil when a custom icon is set).
+local function itemCategorySpriteId(item)
+  if not item then return nil end
+  local entry = item.icon
+  if type(entry) == "string" and entry ~= "" then return nil end
+  if type(entry) == "table" and type(entry.image) == "string" and entry.image ~= "" then
+    return nil
+  end
+  local id = tostring(item.id or "")
+  local isBall = item.ball or id:find("_BALL$") or id == "SAFARI_BALL"
+  if isBall then return "SPRITE_POKE_BALL" end
+  if item.machine or id:match("^TM_") or id:match("^HM_") then
+    return "SPRITE_CLIPBOARD"
+  end
+  if id:find("FOSSIL") or id == "OLD_AMBER" then return "SPRITE_FOSSIL" end
+  if id == "POKEDEX" or id == "TOWN_MAP" then return "SPRITE_POKEDEX" end
+  if id:find("_STONE$") then return "SPRITE_FOSSIL" end
+  if item.keyItem or item.tossable == false then return "SPRITE_POKEDEX" end
+  return "SPRITE_POKE_BALL"
 end
 
 -- Item icon path: custom item.icon, else a category stand-in from ROM art.
@@ -432,34 +469,33 @@ function Preview.itemIconPath(S, item)
   end
   local id = tostring(item.id or "")
   local icons = S and S.data and S.data.icons and S.data.icons.icons
-  local isBall = item.ball or id:find("_BALL$") or id == "SAFARI_BALL"
-  if isBall then
-    return (icons and icons.BALL)
-      or spriteImage(S, "SPRITE_POKE_BALL", "assets/generated/sprites/poke_ball.png")
+  local sid = itemCategorySpriteId(item)
+  if sid == "SPRITE_POKE_BALL" and icons and icons.BALL then return icons.BALL end
+  if (id:find("FOSSIL") or id == "OLD_AMBER") and icons and icons.HELIX then
+    return icons.HELIX
   end
-  if item.machine or id:match("^TM_") or id:match("^HM_") then
-    return spriteImage(S, "SPRITE_CLIPBOARD", "assets/generated/sprites/clipboard.png")
-  end
-  if id:find("FOSSIL") or id == "OLD_AMBER" then
-    return (icons and icons.HELIX)
-      or spriteImage(S, "SPRITE_FOSSIL", "assets/generated/sprites/fossil.png")
-  end
-  if id == "POKEDEX" or id == "TOWN_MAP" then
-    return spriteImage(S, "SPRITE_POKEDEX", "assets/generated/sprites/pokedex.png")
-  end
-  if id:find("_STONE$") then
-    return (icons and icons.FAIRY)
-      or spriteImage(S, "SPRITE_FOSSIL", "assets/generated/sprites/fossil.png")
-  end
-  if item.keyItem or item.tossable == false then
-    return spriteImage(S, "SPRITE_POKEDEX", "assets/generated/sprites/pokedex.png")
-  end
-  -- Default / medicine / bicycle: overworld item ball (Gen1 has no bag icons)
-  return spriteImage(S, "SPRITE_POKE_BALL", "assets/generated/sprites/poke_ball.png")
+  if id:find("_STONE$") and icons and icons.FAIRY then return icons.FAIRY end
+  local fallbacks = {
+    SPRITE_POKE_BALL = "assets/generated/sprites/poke_ball.png",
+    SPRITE_CLIPBOARD = "assets/generated/sprites/clipboard.png",
+    SPRITE_FOSSIL = "assets/generated/sprites/fossil.png",
+    SPRITE_POKEDEX = "assets/generated/sprites/pokedex.png",
+  }
+  return spriteImage(S, sid, fallbacks[sid] or "assets/generated/sprites/poke_ball.png")
 end
 
-function Preview.drawItemIcon(S, item, x, y, maxW, maxH)
-  return Preview.draw(S, Preview.itemIconPath(S, item), x, y, maxW, maxH)
+-- Item icon palette (authored item.palette → category sprite paletteSource → MEWMON).
+function Preview.itemPaletteName(S, item)
+  if item and type(item.palette) == "string" and item.palette ~= "" then
+    return item.palette
+  end
+  local sid = itemCategorySpriteId(item)
+  return (sid and spritePalette(S, sid)) or "MEWMON"
+end
+
+function Preview.drawItemIcon(S, item, x, y, maxW, maxH, paletteName)
+  local pal = paletteName or Preview.itemPaletteName(S, item)
+  return Preview.draw(S, Preview.itemIconPath(S, item), x, y, maxW, maxH, pal)
 end
 
 -- Party-menu icon path + built-in class name (name => bake OBP0 like PartyMenu).

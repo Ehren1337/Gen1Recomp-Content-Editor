@@ -6,6 +6,9 @@ local Theme = require("Theme")
 local Search = require("Search")
 local TypeIds = require("TypeIds")
 local FormPane = require("FormPane")
+local State = require("State")
+local BattleAnims = require("BattleAnims")
+local BattleAnimPreview = require("BattleAnimPreview")
 local PAL = Theme.PAL
 
 local Moves = {}
@@ -404,6 +407,46 @@ function Moves.draw(S, x, y, w, h, App)
       end
     end
   end)
+  row("Battle anim", function(fx, fy_, fw, fh_)
+    State.ensureProjectFields(S.project)
+    local mid = move.id
+    local animRec, animOwned = BattleAnims.resolve(S, mid)
+    local n = (type(animRec) == "table" and type(animRec.seq) == "table")
+      and #animRec.seq or 0
+    local status = animRec
+      and ((animOwned and "mod · " or "vanilla · ") .. n .. " rows")
+      or "(none)"
+    Kit.text("micro", Kit.ellipsize("micro", status, fw - 200 * s),
+      fx, fy_ + 8 * s, PAL.muted)
+    local bw = 92 * s
+    if Kit.button(fx + fw - bw * 2 - 6 * s, fy_, bw, fh_, "Clone…", {
+        kind = "accent",
+        tooltip = "Copy another move's battle anim onto this move id",
+      }) then
+      BattleAnims.openPicker(S, {
+        current = mid,
+        excludeId = mid,
+        title = "CLONE BATTLE ANIM ONTO " .. tostring(mid),
+        onPick = function(srcId)
+          BattleAnims.cloneMoveAnim(S, mid, srcId, App)
+          S.status = ("Cloned battle anim %s → %s"):format(srcId, mid)
+        end,
+      })
+    end
+    if Kit.button(fx + fw - bw, fy_, bw, fh_, "Edit", {
+        kind = "ghost",
+        tooltip = "Open this move's anim on the ANIMS tab",
+      }) then
+      S.tab = "anims"
+      S.battleAnimMode = "moves"
+      S.battleAnimId = mid
+      S.battleAnimMoveId = mid
+      S.battleAnimRow = 1
+    end
+  end)
+
+  fy = fy + 4 * s
+  fy = BattleAnimPreview.draw(S, move.id, viewX, fy, viewW, s)
 
   Kit.text("micro",
     "Muted list rows are vanilla. First edit clones into the mod (Save = patch).",

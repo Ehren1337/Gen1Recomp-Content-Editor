@@ -661,13 +661,38 @@ function BattleState.newTrainer(game, oppClass, partyIndex)
   end
   local trainerDvs = (game.data.constants and game.data.constants.trainerDvs)
                      or TRAINER_DVS
+  local Stats = require("src.pokemon.Stats")
   self.enemyParty = {}
   for _, slot in ipairs(partyDef) do
     local mon = Pokemon.new(game.data, slot.species, slot.level)
-    -- fixed trainer DVs, recomputed stats
-    mon.dvs = trainerDvs
-    mon.stats = require("src.pokemon.Stats").calc(game.data.pokemon[slot.species],
-                                                  slot.level, trainerDvs)
+    -- Default: fixed class DVs. A slot can override with its own dvs table.
+    local dvs = trainerDvs
+    if type(slot.dvs) == "table" then
+      dvs = {
+        attack = tonumber(slot.dvs.attack) or trainerDvs.attack,
+        defense = tonumber(slot.dvs.defense) or trainerDvs.defense,
+        speed = tonumber(slot.dvs.speed) or trainerDvs.speed,
+        special = tonumber(slot.dvs.special) or trainerDvs.special,
+      }
+      if slot.dvs.hp ~= nil then
+        dvs.hp = tonumber(slot.dvs.hp) or 0
+      else
+        dvs.hp = (dvs.attack % 2) * 8 + (dvs.defense % 2) * 4
+          + (dvs.speed % 2) * 2 + (dvs.special % 2)
+      end
+    end
+    mon.dvs = dvs
+    if type(slot.statExp) == "table" then
+      mon.statExp = {
+        hp = tonumber(slot.statExp.hp) or 0,
+        attack = tonumber(slot.statExp.attack) or 0,
+        defense = tonumber(slot.statExp.defense) or 0,
+        speed = tonumber(slot.statExp.speed) or 0,
+        special = tonumber(slot.statExp.special) or 0,
+      }
+    end
+    mon.stats = Stats.calc(game.data.pokemon[slot.species],
+                           slot.level, dvs, mon.statExp)
     mon.hp = mon.stats.hp
     table.insert(self.enemyParty, mon)
   end

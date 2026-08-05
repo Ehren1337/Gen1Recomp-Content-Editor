@@ -79,6 +79,9 @@ function State.blankProject(id, name)
     palettes = {},    -- id -> colors
     sprites = {},     -- overworld sprite defs
     aiClasses = {},   -- trainer AI class records
+    battle_anims = {}, -- registry ids: MOVE / subanim:N / tilesheet:N
+    playerSprites = {}, -- field.playerSprites slot -> sprite id
+    playerPics = {},    -- field.playerPics slot -> image path
     -- Oak's Lab ball remap: vanillaSpecies -> { species, level }
     starterRemap = {},
     nextMapIndex = 1000,
@@ -109,6 +112,9 @@ function State.ensureProjectFields(project)
   project.palettes = project.palettes or {}
   project.sprites = project.sprites or {}
   project.aiClasses = project.aiClasses or {}
+  project.battle_anims = project.battle_anims or {}
+  project.playerSprites = project.playerSprites or {}
+  project.playerPics = project.playerPics or {}
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
   project.starterRemap = project.starterRemap or {}

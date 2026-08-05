@@ -1,4 +1,4 @@
--- Shared SGB palette picker modal for Maps / Pokemon / Trainers / GFX.
+-- Shared SGB palette picker modal for Maps / Pokemon / Trainers / Items / GFX.
 
 local Kit = require("Kit")
 local Theme = require("Theme")

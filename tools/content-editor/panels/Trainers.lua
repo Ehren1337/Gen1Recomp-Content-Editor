@@ -8,7 +8,147 @@ local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
+local Pokemon = require("src.pokemon.Pokemon")
 local PAL = Theme.PAL
+
+local DV_KEYS = { "attack", "defense", "speed", "special", "hp" }
+local DV_LABELS = { attack = "Atk", defense = "Def", speed = "Spe",
+  special = "Spc", hp = "HP" }
+local EV_KEYS = { "hp", "attack", "defense", "speed", "special" }
+local EV_LABELS = { hp = "HP", attack = "Atk", defense = "Def",
+  speed = "Spe", special = "Spc" }
+
+local function copyMoves(moves)
+  if type(moves) ~= "table" then return nil end
+  local out = {}
+  for i = 1, math.min(4, #moves) do
+    local id = moves[i]
+    if type(id) == "string" and id ~= "" then
+      out[#out + 1] = id
+    end
+  end
+  if #out == 0 then return nil end
+  return out
+end
+
+local function copyStatBlock(src, keys, maxV)
+  if type(src) ~= "table" then return nil end
+  local out, any = {}, false
+  for _, k in ipairs(keys) do
+    local n = tonumber(src[k])
+    if n ~= nil then
+      n = math.floor(n)
+      if maxV then n = Theme.clamp(n, 0, maxV) end
+      if n < 0 then n = 0 end
+      out[k] = n
+      any = true
+    end
+  end
+  return any and out or nil
+end
+
+local function copyPartySlot(mon)
+  local slot = {
+    level = mon.level or 5,
+    species = mon.species or "PIDGEY",
+  }
+  slot.moves = copyMoves(mon.moves)
+  slot.dvs = copyStatBlock(mon.dvs, DV_KEYS, 15)
+  slot.statExp = copyStatBlock(mon.statExp, EV_KEYS, 65535)
+  return slot
+end
+
+local function deriveHpDv(dvs)
+  if type(dvs) ~= "table" then return 0 end
+  return (tonumber(dvs.attack) or 0) % 2 * 8
+    + (tonumber(dvs.defense) or 0) % 2 * 4
+    + (tonumber(dvs.speed) or 0) % 2 * 2
+    + (tonumber(dvs.special) or 0) % 2
+end
+
+-- Vanilla parties store only level+species. Battle uses learnset moves and
+-- constants.trainerDvs (fallback 9/8/8/8). Show those as placeholders.
+local DEFAULT_TRAINER_DVS = {
+  attack = 9, defense = 8, speed = 8, special = 8, hp = 8,
+}
+
+-- Mirror BattleState special third-move tables for accurate placeholders.
+local LONE_MOVES = {
+  OPP_BROCK = { 2, "BIDE" },
+  OPP_MISTY = { 2, "BUBBLEBEAM" },
+  OPP_LT_SURGE = { 3, "THUNDERBOLT" },
+  OPP_ERIKA = { 3, "MEGA_DRAIN" },
+  OPP_KOGA = { 4, "TOXIC" },
+  OPP_SABRINA = { 4, "PSYWAVE" },
+  OPP_BLAINE = { 4, "FIRE_BLAST" },
+  OPP_GIOVANNI = { 5, "FISSURE", onlyParty = 3 },
+}
+local TEAM_MOVES = {
+  OPP_LORELEI = "BLIZZARD", OPP_BRUNO = "FISSURE",
+  OPP_AGATHA = "TOXIC", OPP_LANCE = "BARRIER",
+}
+local RIVAL_STARTER_MOVES = {
+  VENUSAUR = "MEGA_DRAIN", CHARIZARD = "FIRE_BLAST", BLASTOISE = "BLIZZARD",
+}
+
+local function speciesDef(S, speciesId)
+  if not speciesId then return nil end
+  return (S.project.pokemon and S.project.pokemon[speciesId])
+    or (S.data and S.data.pokemon and S.data.pokemon[speciesId])
+end
+
+local function defaultTrainerDvs(S)
+  local t = S.data and S.data.constants and S.data.constants.trainerDvs
+  if type(t) ~= "table" then
+    return {
+      attack = DEFAULT_TRAINER_DVS.attack,
+      defense = DEFAULT_TRAINER_DVS.defense,
+      speed = DEFAULT_TRAINER_DVS.speed,
+      special = DEFAULT_TRAINER_DVS.special,
+      hp = DEFAULT_TRAINER_DVS.hp,
+    }
+  end
+  local out = {
+    attack = tonumber(t.attack) or DEFAULT_TRAINER_DVS.attack,
+    defense = tonumber(t.defense) or DEFAULT_TRAINER_DVS.defense,
+    speed = tonumber(t.speed) or DEFAULT_TRAINER_DVS.speed,
+    special = tonumber(t.special) or DEFAULT_TRAINER_DVS.special,
+  }
+  out.hp = tonumber(t.hp)
+  if out.hp == nil then out.hp = deriveHpDv(out) end
+  return out
+end
+
+local function defaultMovesForMon(S, oppClass, partyIndex, monIndex, mon)
+  local def = speciesDef(S, mon.species)
+  local moves = {}
+  if def then
+    local got = Pokemon.movesAtLevel({
+      level1Moves = def.level1Moves or {},
+      learnset = def.learnset or {},
+    }, mon.level or 1)
+    for i, id in ipairs(got) do moves[i] = id end
+  end
+  local function setThird(moveId)
+    if not moveId then return end
+    local i = math.min(3, #moves + 1)
+    moves[i] = moveId
+  end
+  local lone = LONE_MOVES[oppClass]
+  if lone and lone[1] == monIndex
+      and (not lone.onlyParty or lone.onlyParty == partyIndex) then
+    setThird(lone[2])
+  elseif TEAM_MOVES[oppClass] and monIndex == 5 then
+    setThird(TEAM_MOVES[oppClass])
+  elseif oppClass == "OPP_RIVAL3" then
+    if monIndex == 1 then
+      setThird("SKY_ATTACK")
+    elseif monIndex == 6 and RIVAL_STARTER_MOVES[mon.species] then
+      setThird(RIVAL_STARTER_MOVES[mon.species])
+    end
+  end
+  return moves
+end
 
 local Trainers = {}
 
@@ -60,7 +200,7 @@ local function deepCloneTrainer(tr, id)
   for pi, party in ipairs(tr.parties or {}) do
     copy.parties[pi] = {}
     for mi, mon in ipairs(party) do
-      copy.parties[pi][mi] = { level = mon.level, species = mon.species }
+      copy.parties[pi][mi] = copyPartySlot(mon)
     end
   end
   return copy
@@ -274,6 +414,22 @@ function Trainers.draw(S, x, y, w, h, App)
   local viewY = listY + pad
   local viewW = formW - 2 * pad
   local viewH = math.max(40 * s, listH - pad - footerH)
+
+  -- Party tab strip needs the wheel before FormPane steals it for vertical scroll.
+  if S.trainerSection == "parties" and (Kit.wheelY or 0) ~= 0 then
+    local n = #(tr.parties or {})
+    local bw, gap, navW, actW = 56 * s, 4 * s, 28 * s, 148 * s
+    local stripW = math.max(40 * s, viewW - actW - navW * 2 - 12 * s)
+    local maxOff = math.max(0, n * (bw + gap) - stripW)
+    local stripX = viewX + ((maxOff > 0) and (navW + 4 * s) or 0)
+    local stripY = viewY - (S.trainerFormScroll or 0) + 20 * s
+    if maxOff > 0 and Kit.hit(stripX, stripY, stripW, 28 * s) then
+      S.trainerPartyTabScroll = Theme.clamp(
+        (S.trainerPartyTabScroll or 0) - Kit.wheelY * (bw + gap) * 2, 0, maxOff)
+      Kit.wheelY = 0
+    end
+  end
+
   FormPane.track(S, "trainerFormScroll",
     tostring(S.trainerId) .. "|" .. tostring(S.trainerSection))
   local fy, view = FormPane.begin(S, "trainerFormScroll", viewX, viewY, viewW, viewH)
@@ -473,23 +629,82 @@ function Trainers.draw(S, x, y, w, h, App)
       viewX, fy, PAL.muted)
     fy = fy + 20 * s
 
-    local px = viewX
+    -- Scrollable P1..Pn strip; +Party / Del stay pinned on the right.
+    local bw, gap = 56 * s, 4 * s
+    local navW = 28 * s
+    local actW = 148 * s
+    local stripW = math.max(40 * s, viewW - actW - navW * 2 - 12 * s)
+    local contentW = #tr.parties * (bw + gap)
+    local maxOff = math.max(0, contentW - stripW)
+    S.trainerPartyTabScroll = Theme.clamp(S.trainerPartyTabScroll or 0, 0, maxOff)
+
+    local navX = viewX
+    if maxOff > 0 then
+      if Kit.button(navX, fy, navW, fh, "<", {
+          kind = "ghost", tooltip = "Scroll party tabs left",
+        }) then
+        S.trainerPartyTabScroll = Theme.clamp(
+          S.trainerPartyTabScroll - (bw + gap) * 3, 0, maxOff)
+      end
+      navX = navX + navW + 4 * s
+    end
+
+    local stripX = navX
+    if Kit.hit(stripX, fy, stripW, fh) then
+      if Kit.mouseDown then
+        if not S._partyTabDrag then
+          S._partyTabDrag = {
+            x = Kit.mouseX, off = S.trainerPartyTabScroll or 0,
+          }
+        else
+          S.trainerPartyTabScroll = Theme.clamp(
+            S._partyTabDrag.off + (S._partyTabDrag.x - Kit.mouseX), 0, maxOff)
+        end
+      else
+        S._partyTabDrag = nil
+      end
+    else
+      S._partyTabDrag = nil
+    end
+
+    Kit.pushClip(stripX, fy, stripW, fh)
+    local px = stripX - (S.trainerPartyTabScroll or 0)
     for pi = 1, #tr.parties do
       local on = S.trainerPartyIndex == pi
-      local bw = 70 * s
       if Kit.chip(px, fy, bw, fh, "P" .. pi, on, PAL.yellow) then
         S.trainerPartyIndex = pi
+        -- Keep the selected tab in view.
+        local left = (pi - 1) * (bw + gap)
+        local right = left + bw
+        if left < S.trainerPartyTabScroll then
+          S.trainerPartyTabScroll = left
+        elseif right > S.trainerPartyTabScroll + stripW then
+          S.trainerPartyTabScroll = math.max(0, right - stripW)
+        end
       end
-      px = px + bw + 4 * s
+      px = px + bw + gap
     end
-    if #tr.parties < 20 and Kit.button(px, fy, 70 * s, fh, "+Party",
+    Kit.popClip()
+
+    local ax = stripX + stripW + 8 * s
+    if maxOff > 0 then
+      if Kit.button(ax, fy, navW, fh, ">", {
+          kind = "ghost", tooltip = "Scroll party tabs right",
+        }) then
+        S.trainerPartyTabScroll = Theme.clamp(
+          S.trainerPartyTabScroll + (bw + gap) * 3, 0, maxOff)
+      end
+      ax = ax + navW + 4 * s
+    end
+    if #tr.parties < 20 and Kit.button(ax, fy, 70 * s, fh, "+Party",
         { kind = "good" }) then
       tr = mutate()
       tr.parties[#tr.parties + 1] = { { level = 5, species = "PIDGEY" } }
       S.trainerPartyIndex = #tr.parties
+      S.trainerPartyTabScroll = math.max(0, #tr.parties * (bw + gap) - stripW)
       App.markDirty()
     end
-    if #tr.parties > 1 and Kit.button(px + 78 * s, fy, 70 * s, fh, "Del P",
+    if #tr.parties > 1 and Kit.button(ax + 78 * s, fy, 70 * s, fh, "Del P",
         { kind = "danger" }) then
       tr = mutate()
       table.remove(tr.parties, S.trainerPartyIndex)
@@ -501,6 +716,7 @@ function Trainers.draw(S, x, y, w, h, App)
     local party = tr.parties[S.trainerPartyIndex] or {}
     local prevSize = 56 * s
     local slots = math.max(1, #party)
+    local numW = 44 * s
     for mi = 1, slots do
       local mon = party[mi] or { level = 5, species = "PIDGEY" }
       local speciesDef = (S.project.pokemon and S.project.pokemon[mon.species])
@@ -512,15 +728,11 @@ function Trainers.draw(S, x, y, w, h, App)
         Preview.draw(S, nil, viewX, fy, prevSize, prevSize)
       end
       local mx = viewX + prevSize + 10 * s
+      local rowTop = fy
       local lvl = tonumber(field(App, "tr_lv_" .. mi, mx, fy, 50 * s, fh,
         tostring(mon.level or 5), "5")) or 5
       local sp = field(App, "tr_sp_" .. mi, mx + 60 * s, fy, 160 * s, fh,
         mon.species or "PIDGEY", "PIDGEY"):upper():gsub("%s+", "_")
-      if lvl ~= (mon.level or 5) or sp ~= (mon.species or "") then
-        tr = mutate()
-        local p = tr.parties[S.trainerPartyIndex]
-        p[mi] = { level = lvl, species = sp }
-      end
       if Kit.button(mx + 230 * s, fy, 36 * s, fh, "X", { kind = "danger" })
           and #party > 1 then
         tr = mutate()
@@ -528,7 +740,165 @@ function Trainers.draw(S, x, y, w, h, App)
         App.markDirty()
         break
       end
-      fy = fy + math.max(fh, prevSize) + 6 * s
+      fy = fy + fh + 4 * s
+
+      local partyIdx = S.trainerPartyIndex or 1
+      local defMoves = defaultMovesForMon(S, S.trainerId, partyIdx, mi, mon)
+      local defDvs = defaultTrainerDvs(S)
+      local hasMoveOverride = mon.moves ~= nil
+      local hasDvOverride = mon.dvs ~= nil
+      local hasSeOverride = mon.statExp ~= nil
+
+      -- Caption row, then fields on the next line so hints never cover inputs.
+      local moveHint = hasMoveOverride and "override" or "level-up default"
+      Kit.text("micro", "Moves · " .. moveHint, mx, fy, PAL.caption)
+      fy = fy + 14 * s
+      local moves = mon.moves or {}
+      local typedMoves = {}
+      local moveW = math.max(70 * s, math.floor((viewW - (mx - viewX) - 8 * s) / 4))
+      for slot = 1, 4 do
+        local cur = hasMoveOverride and tostring(moves[slot] or "")
+          or tostring(defMoves[slot] or "")
+        local v = field(App, "tr_mv_" .. mi .. "_" .. slot,
+          mx + (slot - 1) * (moveW + 4 * s), fy, moveW, fh,
+          cur, "MOVE"):upper():gsub("%s+", "_")
+        if v == "MOVE" then v = "" end
+        typedMoves[slot] = v
+      end
+      local newMoves = {}
+      for slot = 1, 4 do
+        if typedMoves[slot] ~= "" then
+          newMoves[#newMoves + 1] = typedMoves[slot]
+        end
+      end
+      do
+        local same = #newMoves == #defMoves
+        if same then
+          for i = 1, #newMoves do
+            if newMoves[i] ~= defMoves[i] then same = false; break end
+          end
+        end
+        -- Keep nil unless the user actually overrides the level-up set.
+        if same and not hasMoveOverride then
+          newMoves = nil
+        elseif #newMoves == 0 and hasMoveOverride then
+          newMoves = nil
+        elseif same and hasMoveOverride then
+          -- Explicitly same as defaults: drop the override.
+          newMoves = nil
+        end
+      end
+      fy = fy + fh + 8 * s
+
+      local dvHint = hasDvOverride and "override" or "class default"
+      Kit.text("micro", "DVs 0-15 · " .. dvHint, mx, fy, PAL.caption)
+      fy = fy + 14 * s
+      local dvs = hasDvOverride and (mon.dvs or {}) or defDvs
+      local newDvs = {}
+      local dvGap = 8 * s
+      local dvCell = numW + dvGap + 18 * s
+      local hasDv = false
+      for di, key in ipairs(DV_KEYS) do
+        local lab = DV_LABELS[key]
+        local lx = mx + (di - 1) * dvCell
+        Kit.text("micro", lab, lx, fy, PAL.faint)
+        local cur = dvs[key]
+        if cur == nil and key == "hp" then cur = deriveHpDv(dvs) end
+        local raw = field(App, "tr_dv_" .. mi .. "_" .. key,
+          lx, fy + 12 * s, numW, fh - 4 * s,
+          cur ~= nil and tostring(cur) or "", "-")
+        if raw ~= "" and raw ~= "-" then
+          newDvs[key] = Theme.clamp(tonumber(raw) or 0, 0, 15)
+          hasDv = true
+        end
+      end
+      if hasDv then
+        if newDvs.hp == nil then newDvs.hp = deriveHpDv(newDvs) end
+        local same = true
+        for _, key in ipairs(DV_KEYS) do
+          if tonumber(newDvs[key] or -1) ~= tonumber(defDvs[key] or -1) then
+            same = false; break
+          end
+        end
+        if same then newDvs = nil end
+      else
+        newDvs = nil
+      end
+      fy = fy + 12 * s + fh + 8 * s
+
+      local seHint = hasSeOverride and "Gen1 EV override" or "default 0"
+      Kit.text("micro", "Stat Exp · " .. seHint, mx, fy, PAL.caption)
+      fy = fy + 14 * s
+      local se = hasSeOverride and (mon.statExp or {}) or {
+        hp = 0, attack = 0, defense = 0, speed = 0, special = 0,
+      }
+      local newSe = {}
+      local hasSe = false
+      local seGap = 8 * s
+      local seCell = numW + seGap + 18 * s
+      for ei, key in ipairs(EV_KEYS) do
+        local lab = EV_LABELS[key]
+        local lx = mx + (ei - 1) * seCell
+        Kit.text("micro", lab, lx, fy, PAL.faint)
+        local cur = se[key]
+        local raw = field(App, "tr_se_" .. mi .. "_" .. key,
+          lx, fy + 12 * s, numW, fh - 4 * s,
+          cur ~= nil and tostring(cur) or "0", "0")
+        if raw ~= "" and raw ~= "-" then
+          newSe[key] = Theme.clamp(tonumber(raw) or 0, 0, 65535)
+          hasSe = true
+        end
+      end
+      if hasSe then
+        local allZero = true
+        for _, key in ipairs(EV_KEYS) do
+          if tonumber(newSe[key] or 0) ~= 0 then allZero = false; break end
+        end
+        if allZero then newSe = nil end
+      else
+        newSe = nil
+      end
+      fy = fy + 12 * s + fh + 10 * s
+
+      local function optBlockChanged(oldB, newB, keys)
+        local o = copyStatBlock(oldB, keys, nil)
+        if o == nil and newB == nil then return false end
+        if (o == nil) ~= (newB == nil) then return true end
+        for _, k in ipairs(keys) do
+          if tonumber(o[k] or 0) ~= tonumber(newB[k] or 0) then return true end
+        end
+        return false
+      end
+
+      local changed = lvl ~= (mon.level or 5) or sp ~= (mon.species or "")
+      local oldMoves = copyMoves(mon.moves)
+      if (oldMoves == nil) ~= (newMoves == nil) then
+        changed = true
+      elseif newMoves then
+        if #oldMoves ~= #newMoves then
+          changed = true
+        else
+          for i = 1, #newMoves do
+            if oldMoves[i] ~= newMoves[i] then changed = true; break end
+          end
+        end
+      end
+      if optBlockChanged(mon.dvs, newDvs, DV_KEYS) then changed = true end
+      if optBlockChanged(mon.statExp, newSe, EV_KEYS) then changed = true end
+
+      if changed then
+        tr = mutate()
+        local p = tr.parties[S.trainerPartyIndex]
+        p[mi] = {
+          level = lvl,
+          species = sp,
+          moves = newMoves,
+          dvs = newDvs,
+          statExp = newSe,
+        }
+      end
+
+      fy = math.max(fy, rowTop + prevSize) + 10 * s
     end
     if #party < 6 and Kit.button(viewX, fy, 100 * s, 28 * s, "+ Mon",
         { kind = "accent" }) then
