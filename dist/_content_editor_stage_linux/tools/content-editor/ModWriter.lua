@@ -996,6 +996,7 @@ function ModWriter.emitMain(project, baseData)
     thLabels[#thLabels + 1] = lbl
   end
   table.sort(thLabels)
+  local emittedTrainerHeadersGuard = false
   for _, lbl in ipairs(thLabels) do
     local headers = project.trainer_headers[lbl]
     if type(headers) == "table" and next(headers) then
@@ -1005,6 +1006,13 @@ function ModWriter.emitMain(project, baseData)
       end
       table.sort(idxs)
       if #idxs > 0 then
+        if not emittedTrainerHeadersGuard then
+          out[#out + 1] = "  assert(mod.content.trainer_headers,"
+          out[#out + 1] = "    \"engine missing mod.content.trainer_headers — "
+            .. "update Gen1Recomp / Linked Recomp\")"
+          out[#out + 1] = ""
+          emittedTrainerHeadersGuard = true
+        end
         out[#out + 1] = string.format(
           "  mod.content.trainer_headers:patch(%q, {", lbl)
         -- Non-array marker so deep-merge dictionary-patches indices instead

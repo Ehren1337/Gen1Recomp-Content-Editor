@@ -9890,6 +9890,28 @@ return function(mod)
               x = 8,
               y = 10,
             },
+      {
+              index = 12,
+              movement = "STAY",
+              range = "DOWN",
+              sprite = "SPRITE_YOUNGSTER",
+              text = "TEXT_OAKS_LAB_TRAINER12",
+              trainerClass = "OPP_YOUNGSTER",
+              trainerParty = 1,
+              x = 9,
+              y = 8,
+            },
+      {
+              index = 13,
+              level = 50,
+              movement = "STAY",
+              pokemon = "MEW",
+              range = "DOWN",
+              sprite = "SPRITE_BOULDER",
+              text = "TEXT_OAKS_LAB_WILD13",
+              x = 0,
+              y = 8,
+            },
     },
     signs = {},
     tileset = "DOJO",
@@ -9911,8 +9933,46 @@ return function(mod)
   })
 
   mod.content.text:override("_NEWMONDexEntry", "It's a new mon")
+  mod.content.text:override("_OAKS_LABTrainer12After", "You're strong.")
+  mod.content.text:override("_OAKS_LABTrainer12Battle", "Let's fight!")
+  mod.content.text:override("_OAKS_LABTrainer12Won", "I lost...")
+  mod.content.text:override("_OAKS_LABTrainer1After", "You're strong.")
+  mod.content.text:override("_OAKS_LABTrainer1Battle", "Let's fight!")
+  mod.content.text:override("_OAKS_LABTrainer1Won", "I lost...")
+  mod.content.text:override("_OAKS_LABWild13", "Gyaoo!")
   mod.content.text:override("_OaksLabYouWantCharmanderText", "So! You want the\
 bird POKéMON,\11NEWMON?")
+
+  mod.content.text_pointers:patch("OaksLab", {
+    TEXT_OAKS_LAB_WILD13 = {
+      text = "_OAKS_LABWild13",
+    },
+  })
+
+  assert(mod.content.trainer_headers,
+    "engine missing mod.content.trainer_headers — update Gen1Recomp / Linked Recomp")
+
+  mod.content.trainer_headers:patch("OaksLab", {
+    [0] = mod.DELETE,
+    [1] = {
+      after = "_OAKS_LABTrainer1After",
+      battle = "_OAKS_LABTrainer1Battle",
+      event = "MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_1",
+      opponent = "OPP_RIVAL1",
+      party = 1,
+      range = 2,
+      won = "_OAKS_LABTrainer1Won",
+    },
+    [12] = {
+      after = "_OAKS_LABTrainer12After",
+      battle = "_OAKS_LABTrainer12Battle",
+      event = "MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_12",
+      opponent = "OPP_YOUNGSTER",
+      party = 1,
+      range = 2,
+      won = "_OAKS_LABTrainer12Won",
+    },
+  })
 
   mod.content.map_scripts:register("OAKS_LAB", {
     talk = {
@@ -10023,7 +10083,7 @@ bird POKéMON,\11NEWMON?")
         {
                   "show_text",
                   "That's PROF.OAK's\
-                                                                                                                                                          last Pokémon!",
+                                                                                                                                                                  last Pokémon!",
                 },
         {
                   "jump",
@@ -10044,6 +10104,8 @@ bird POKéMON,\11NEWMON?")
   -- event flags declared in the content editor:
   --   EVENT_CHOSE_CHARMANDER
   --   EVENT_GOT_STARTER
+  --   MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_1
+  --   MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_12
 
   mod.content.field:patch("boot", {
     startMap = "REDS_HOUSE_2F",

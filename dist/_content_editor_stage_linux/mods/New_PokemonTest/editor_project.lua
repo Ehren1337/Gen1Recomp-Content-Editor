@@ -7,6 +7,7 @@ return
     songs = {},
   },
   badgeGates = {},
+  battle_anims = {},
   boot = {
     startMap = "REDS_HOUSE_2F",
   },
@@ -14,10 +15,14 @@ return
   eventFlags = {
     EVENT_CHOSE_CHARMANDER = true,
     EVENT_GOT_STARTER = true,
+    MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_1 = true,
+    MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_12 = true,
   },
   fishing = {},
+  font = {},
   hiddenItems = {},
   id = "New_PokemonTest",
+  intro = {},
   items = {},
   map_scripts = {},
   maps = {
@@ -145,6 +150,28 @@ return
                   x = 8,
                   y = 10,
                 },
+        {
+                  index = 12,
+                  movement = "STAY",
+                  range = "DOWN",
+                  sprite = "SPRITE_YOUNGSTER",
+                  text = "TEXT_OAKS_LAB_TRAINER12",
+                  trainerClass = "OPP_YOUNGSTER",
+                  trainerParty = 1,
+                  x = 9,
+                  y = 8,
+                },
+        {
+                  index = 13,
+                  level = 50,
+                  movement = "STAY",
+                  pokemon = "MEW",
+                  range = "DOWN",
+                  sprite = "SPRITE_BOULDER",
+                  text = "TEXT_OAKS_LAB_WILD13",
+                  x = 0,
+                  y = 8,
+                },
       },
       signs = {},
       tileset = "DOJO",
@@ -170,6 +197,8 @@ return
   name = "New Pokemontest",
   nextMapIndex = 1001,
   palettes = {},
+  playerPics = {},
+  playerSprites = {},
   pokemon = {
     NEW_MON = {
       _isNew = true,
@@ -211,6 +240,7 @@ return
     },
   },
   profile = "content",
+  specialEncounters = {},
   sprites = {},
   starterRemap = {
     CHARMANDER = {
@@ -218,6 +248,7 @@ return
       species = "NEW_MON",
     },
   },
+  strings = {},
   talkScripts = {
     ["OAKS_LAB/TEXT_OAKSLAB_CHARMANDER_POKE_BALL"] = {
       _fromVanilla = true,
@@ -366,7 +397,7 @@ return
         {
                   kind = "show_text",
                   text = "That's PROF.OAK's\
-                                                                                                                                                last Pokémon!",
+                                                                                                                                                        last Pokémon!",
                 },
         {
                   kind = "jump",
@@ -382,10 +413,24 @@ return
   },
   text = {
     _NEWMONDexEntry = "It's a new mon",
+    _OAKS_LABTrainer12After = "You're strong.",
+    _OAKS_LABTrainer12Battle = "Let's fight!",
+    _OAKS_LABTrainer12Won = "I lost...",
+    _OAKS_LABTrainer1After = "You're strong.",
+    _OAKS_LABTrainer1Battle = "Let's fight!",
+    _OAKS_LABTrainer1Won = "I lost...",
+    _OAKS_LABWild13 = "Gyaoo!",
     _OaksLabYouWantCharmanderText = "So! You want the\
 bird POKéMON,\11NEWMON?",
   },
-  text_pointers = {},
+  text_pointers = {
+    OaksLab = {
+      TEXT_OAKS_LAB_WILD13 = {
+        text = "_OAKS_LABWild13",
+      },
+    },
+  },
+  theme = {},
   tilesets = {
     BLACK = {
       _isNew = true,
@@ -10188,6 +10233,7 @@ bird POKéMON,\11NEWMON?",
       waterTiles = {},
     },
   },
+  title = {},
   tmxSourceTilesets = {
     Black = {
       columns = 18,
@@ -10382,7 +10428,29 @@ bird POKéMON,\11NEWMON?",
       tsx = "assets/tilesets/source/Water02.tsx",
     },
   },
-  trainer_headers = {},
+  townMap = {},
+  trainer_headers = {
+    OaksLab = {
+      [1] = {
+        after = "_OAKS_LABTrainer1After",
+        battle = "_OAKS_LABTrainer1Battle",
+        event = "MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_1",
+        opponent = "OPP_RIVAL1",
+        party = 1,
+        range = 2,
+        won = "_OAKS_LABTrainer1Won",
+      },
+      [12] = {
+        after = "_OAKS_LABTrainer12After",
+        battle = "_OAKS_LABTrainer12Battle",
+        event = "MOD_NEW_POKEMONTEST_BEAT_OAKS_LAB_12",
+        opponent = "OPP_YOUNGSTER",
+        party = 1,
+        range = 2,
+        won = "_OAKS_LABTrainer12Won",
+      },
+    },
+  },
   trainers = {},
   type_matchups = {},
   types = {},

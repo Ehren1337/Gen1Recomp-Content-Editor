@@ -580,9 +580,11 @@ function Kit.chip(x, y, w, h, label, on, onColor, offColor, tip)
     Theme.col(c, on and 0.16 or 0.06)
     G.rectangle("fill", x, y, w, h, r, r)
     Theme.stroke(x, y, w, h, r, PAL.cardBorder, Kit.hover(x, y, w, h) and 0.5 or 0.28, 1)
+    -- Off chips stay unhighlighted; label is pure white for readability.
+    local ink = on and c or PAL.heading
     Kit.textCenter("micro", label, x,
       y + (h - Kit.textHeight("micro")) / 2 + 1 * Kit.scale, w,
-      c, on and 1 or 0.75)
+      ink, 1)
   end
   return Kit.press(x, y, w, h)
 end
