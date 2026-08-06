@@ -38,10 +38,9 @@ local function now()
   return os.clock()
 end
 
--- Map paint mutates project.maps[id] and aliases it into S.data.maps[id].
--- Restoring only S.project would leave the painted live map on screen and make
--- a second Undo report "Nothing to undo".  Re-bind live data from the project
--- (or the pre-edit vanilla backup) after every history restore.
+-- Map/terrain paint mutates project.maps / project.tilesets and aliases them
+-- into S.data.*. Restoring only S.project would leave the live tables on
+-- screen. Re-bind from the project (or pre-edit vanilla backups) after restore.
 local function syncLiveMaps(S)
   if not (S and S.data and S.data.maps) then return end
   local projectMaps = (S.project and S.project.maps) or {}
@@ -56,6 +55,34 @@ local function syncLiveMaps(S)
   end
 end
 
+local function syncLiveTilesets(S)
+  if not (S and S.data and S.data.tilesets) then return end
+  local projectTs = (S.project and S.project.tilesets) or {}
+  local backup = S._vanillaTilesetBackup or {}
+  for id, ts in pairs(projectTs) do
+    S.data.tilesets[id] = ts
+  end
+  for id, vanilla in pairs(backup) do
+    if not projectTs[id] then
+      S.data.tilesets[id] = vanilla
+    end
+  end
+  -- Drop editor path wrappers so the next draw rebuilds from restored images.
+  S._liveTilesets = nil
+end
+
+local function syncLiveLedges(S)
+  if not (S and S.data and S.data.field) then return end
+  local base = S._vanillaLedgesBackup
+  if not base then return end
+  local out = {}
+  for _, row in ipairs(base) do out[#out + 1] = row end
+  for _, row in ipairs((S.project and S.project.ledges) or {}) do
+    out[#out + 1] = row
+  end
+  S.data.field.ledges = out
+end
+
 local function restore(S, snapshot)
   S.project = ensureProject(snapshot)
   S._histBaseline = deepCopy(S.project)
@@ -65,6 +92,8 @@ local function restore(S, snapshot)
   S._mapCenteredFor = nil
   S._mapNeedsRebuild = S.mapId
   syncLiveMaps(S)
+  syncLiveTilesets(S)
+  syncLiveLedges(S)
   local ok, MapLoader = pcall(require, "src.world.MapLoader")
   if ok and MapLoader and MapLoader.invalidateAll then
     MapLoader.invalidateAll()
@@ -79,6 +108,7 @@ function History.clear(S)
   S._histDirtyFrame = false
   S._histLastPush = nil
   S._histLastTab = nil
+  S._vanillaLedgesBackup = nil
 end
 
 function History.beginFrame(S)

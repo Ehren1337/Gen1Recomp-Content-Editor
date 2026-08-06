@@ -1240,6 +1240,22 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
+  -- field.ledges (deep-merge lists append; emit only author-added rows)
+  if type(project.ledges) == "table" and #project.ledges > 0 then
+    local rows = {}
+    for _, ledge in ipairs(project.ledges) do
+      if type(ledge) == "table" then
+        rows[#rows + 1] = stripEditorFields(ledge)
+      end
+    end
+    if #rows > 0 then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "ledges", emitTableLiteral(rows, 1))
+      out[#out + 1] = ""
+    end
+  end
+
   -- field.hiddenItems
   if type(project.hiddenItems) == "table" and next(project.hiddenItems) then
     out[#out + 1] = string.format(

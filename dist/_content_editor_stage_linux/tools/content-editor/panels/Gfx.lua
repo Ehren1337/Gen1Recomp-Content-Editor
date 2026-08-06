@@ -17,7 +17,7 @@ local MODES = {
   { id = "palettes", label = "Palettes", tip = "SGB/GBC color palettes (4 colors)" },
   { id = "sprites", label = "Sprites", tip = "Overworld sprite sheets" },
   { id = "tilesets", label = "Tilesets",
-    tip = "Walkable / grass / water / door / warp tile flags" },
+    tip = "Sheet flags (walk/solid/water). Paint map blocks on the Maps tab." },
 }
 
 local TILE_PX = 8  -- Gen1 tileset sheet cells are 8x8
@@ -129,7 +129,7 @@ end
 -- Clickable 8x8 sheet: paint walk / solid / water / grass / shore.
 -- Returns the Y after the painter (for FormPane content height).
 local function drawTileFlagPainter(S, App, rec, ensureFn, id, x, y, w, s, palName)
-  Kit.text("micro", "TILE FLAGS (click to paint)", x, y, PAL.caption)
+  Kit.text("micro", "TILE FLAGS (sheet only — map paint is on Maps)", x, y, PAL.caption)
   y = y + 14 * s
   S.gfxTileFlagMode = S.gfxTileFlagMode or "walk"
   local mx = x
@@ -147,7 +147,7 @@ local function drawTileFlagPainter(S, App, rec, ensureFn, id, x, y, w, s, palNam
   end
   y = y + 28 * s
   Kit.text("micro",
-    "green=walk  red=solid  blue=water  cyan=shore  yellow=grass",
+    "green=walk  red=solid  blue=water  cyan=shore  magenta=grass",
     x, y, PAL.faint)
   y = y + 14 * s
 
@@ -199,7 +199,9 @@ local function drawTileFlagPainter(S, App, rec, ensureFn, id, x, y, w, s, palNam
       love.graphics.rectangle("fill", tx, ty, cell, cell)
     end
     if grass ~= nil and grass == tid then
-      love.graphics.setColor(1, 0.9, 0.15, 0.95)
+      love.graphics.setColor(0.95, 0.2, 0.85, 0.45)
+      love.graphics.rectangle("fill", tx, ty, cell, cell)
+      love.graphics.setColor(1, 0.35, 0.95, 1)
       love.graphics.rectangle("line", tx + 1, ty + 1, cell - 2, cell - 2)
     end
 

@@ -73,6 +73,7 @@ function State.blankProject(id, name)
     fishing = {},   -- OLD_ROD / GOOD_ROD overrides (field.fishing)
     hiddenItems = {}, -- mapId -> { { x, y, item }, ... } (field.hiddenItems)
     badgeGates = {},  -- mapId -> gate record (field.badgeGates)
+    ledges = {},      -- added field.ledges hop rules (appended on emit)
     boot = {},        -- field.boot overrides
     constants = {},   -- constants patches (levelCap, badges, …)
     audio = {},       -- songs/cries/sfx/mapSongs
@@ -131,6 +132,7 @@ function State.ensureProjectFields(project)
   project.townMap = project.townMap or {}
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
+  project.ledges = project.ledges or {}
   project.starterRemap = project.starterRemap or {}
   project.specialEncounters = project.specialEncounters or {}
   project.nextMapIndex = project.nextMapIndex or 1000
