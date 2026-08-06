@@ -6,10 +6,15 @@ local function isArray(t)
   if type(t) ~= "table" then return false end
   local n = 0
   for k in pairs(t) do
-    if type(k) ~= "number" then return false end
+    if type(k) ~= "number" or k < 1 or k % 1 ~= 0 then return false end
     if k > n then n = k end
   end
-  return n == #t
+  -- LuaJIT # is unreliable on holes (e.g. {[2]=x} may report #=2).
+  if n ~= #t then return false end
+  for i = 1, n do
+    if t[i] == nil then return false end
+  end
+  return true
 end
 
 local function escapeStr(s)
@@ -987,50 +992,66 @@ function ModWriter.emitMain(project, baseData)
   ModWriter.emitSpecialEncounters(project, out)
 
   -- trainer_headers keyed by map label.
-  -- Deep registries treat a contiguous { [1]=…, [2]=… } payload as an array
-  -- and CONCAT it — so a beat-flag edit appended duplicate headers and every
-  -- trainer kept sharing the first flag.  Force a dictionary merge with a
-  -- DELETE sentinel key (same pattern as the schema's per-index example).
+  -- Newer engines expose mod.content.trainer_headers. Older Gen1Recomp still
+  -- loads Data.trainer_headers at runtime but has no registry — apply the
+  -- same rows on mods.loaded so sight/dialogue/beat flags work there too.
   local thLabels = {}
   for lbl in pairs(project.trainer_headers or {}) do
     thLabels[#thLabels + 1] = lbl
   end
   table.sort(thLabels)
-  local emittedTrainerHeadersGuard = false
+  local thTable = {}
   for _, lbl in ipairs(thLabels) do
     local headers = project.trainer_headers[lbl]
     if type(headers) == "table" and next(headers) then
       local idxs = {}
       for idx in pairs(headers) do
-        if type(idx) == "number" then idxs[#idxs + 1] = idx end
+        if type(idx) == "number" and idx > 0 then idxs[#idxs + 1] = idx end
       end
       table.sort(idxs)
       if #idxs > 0 then
-        if not emittedTrainerHeadersGuard then
-          out[#out + 1] = "  assert(mod.content.trainer_headers,"
-          out[#out + 1] = "    \"engine missing mod.content.trainer_headers — "
-            .. "update Gen1Recomp / Linked Recomp\")"
-          out[#out + 1] = ""
-          emittedTrainerHeadersGuard = true
-        end
-        out[#out + 1] = string.format(
-          "  mod.content.trainer_headers:patch(%q, {", lbl)
-        -- Non-array marker so deep-merge dictionary-patches indices instead
-        -- of concatenating a contiguous 1..n payload.  Key 0 is schema-legal
-        -- (int >= 0); DELETE of a missing slot is a no-op.
-        out[#out + 1] = "    [0] = mod.DELETE,"
+        local bucket = {}
         for _, idx in ipairs(idxs) do
           local hdr = headers[idx]
           if type(hdr) == "table" then
-            local clean = stripEditorFields(hdr)
-            local lit = emitTableLiteral(clean, 2)
-            out[#out + 1] = string.format("    [%d] = %s,", idx, lit)
+            bucket[idx] = stripEditorFields(hdr)
           end
         end
-        out[#out + 1] = "  })"
-        out[#out + 1] = ""
+        if next(bucket) then thTable[lbl] = bucket end
       end
     end
+  end
+  if next(thTable) then
+    local lit = emitTableLiteral(thTable, 2)
+    out[#out + 1] = "  do"
+    out[#out + 1] = "    local _ceTrainerHeaders = " .. lit
+    out[#out + 1] = "    if mod.content.trainer_headers then"
+    out[#out + 1] = "      for label, bucket in pairs(_ceTrainerHeaders) do"
+    -- [0]=DELETE forces dictionary merge (avoids array-concat duplicates).
+    out[#out + 1] = "        local patch = { [0] = mod.DELETE }"
+    out[#out + 1] = "        for idx, hdr in pairs(bucket) do patch[idx] = hdr end"
+    out[#out + 1] = "        mod.content.trainer_headers:patch(label, patch)"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "    else"
+    out[#out + 1] = "      mod.events:on(\"mods.loaded\", function(ev)"
+    out[#out + 1] = "        local th = ev.data and ev.data.trainer_headers"
+    out[#out + 1] = "        if type(th) ~= \"table\" then return end"
+    out[#out + 1] = "        for label, bucket in pairs(_ceTrainerHeaders) do"
+    out[#out + 1] = "          local dest = th[label]"
+    out[#out + 1] = "          if type(dest) ~= \"table\" then"
+    out[#out + 1] = "            dest = {}"
+    out[#out + 1] = "            th[label] = dest"
+    out[#out + 1] = "          end"
+    out[#out + 1] = "          for idx, hdr in pairs(bucket) do"
+    out[#out + 1] = "            if type(idx) == \"number\" and type(hdr) == \"table\" then"
+    out[#out + 1] = "              dest[idx] = hdr"
+    out[#out + 1] = "            end"
+    out[#out + 1] = "          end"
+    out[#out + 1] = "        end"
+    out[#out + 1] = "      end)"
+    out[#out + 1] = "    end"
+    out[#out + 1] = "  end"
+    out[#out + 1] = ""
   end
 
   -- Compile talkScripts (editor steps) into map_scripts.talk rows, then emit.

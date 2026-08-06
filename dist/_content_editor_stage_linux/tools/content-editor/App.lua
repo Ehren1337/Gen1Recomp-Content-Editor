@@ -489,8 +489,8 @@ function App.playtestMod()
   local packRoot = repoRoot()
   local sep = package.config:sub(1, 1)
   local source = S.dataSource or "fixtures"
-  -- Always prefer the Linked Recomp folder when one is set — even if the
-  -- editor is currently reading imported/local/fixture data for authoring.
+  -- Prefer Linked Recomp so playtest matches the real game. Mods no longer
+  -- require engine edits (trainer_headers fall back to mods.loaded).
   local recomp = linkedRecompRoot()
   local launchRoot = packRoot
   local usedRecomp = false
@@ -504,8 +504,6 @@ function App.playtestMod()
     end
     launchRoot = recomp
     usedRecomp = true
-  elseif source == "fixtures" then
-    -- No linked install and no ROM cache: still launch, but warn.
   end
 
   local okEnable, errEnable = pcall(function()
@@ -517,7 +515,6 @@ function App.playtestMod()
     return
   end
 
-  -- Prefer the target install's LÖVE binary when launching Recomp.
   local loveExe = usedRecomp
     and resolveLoveExe({ launchRoot, packRoot })
     or resolveLoveExe({ packRoot, launchRoot })
@@ -534,10 +531,9 @@ function App.playtestMod()
   if usedRecomp then
     say("Playtest launched in linked Recomp with mod: " .. id)
   elseif source == "fixtures" then
-    say("Playtest launched (fixtures — stub data only). Link Recomp or Import ROM for full game.")
+    say("Playtest launched (fixtures - stub data only). Import ROM for full game.")
   else
-    say("Playtest launched with mod enabled: " .. id
-      .. " (no Linked Recomp — launching this pack)")
+    say("Playtest launched with mod enabled: " .. id)
   end
 end
 
