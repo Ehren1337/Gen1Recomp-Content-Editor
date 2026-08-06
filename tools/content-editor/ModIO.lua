@@ -288,6 +288,9 @@ function ModIO.save(modDir, project)
       .. "create a new mod id instead of overwriting it"
   end
 
+  -- Persist trainer_headers seeded from map trainer objects / special battles.
+  ModWriter.ensureTrainerHeaders(project)
+
   local body = ModWriter.serializeProject(project)
   local path = ModIO.projectPath(modDir)
   local tmp = path .. ".tmp"

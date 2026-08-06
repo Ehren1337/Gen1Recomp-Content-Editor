@@ -1712,14 +1712,16 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
   elseif tool == "trainer" then
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
-    local class = S.trainerId or "OPP_YOUNGSTER"
+    local class = (S.trainerId and S.trainerId ~= "" and S.trainerId)
+      or "OPP_YOUNGSTER"
+    local party = math.max(1, tonumber(S.placeTrainerParty) or 1)
     local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_TRAINER" .. n
     local spr = S.placeSprite or "SPRITE_YOUNGSTER"
     mapDef.objects[n] = {
       index = n, x = cx, y = cy,
       sprite = spr, movement = "STAY", range = "DOWN",
       text = textId,
-      trainerClass = class, trainerParty = 1,
+      trainerClass = class, trainerParty = party,
     }
     State.ensureProjectFields(S.project)
     local label = State.mapLabel(S, mapDef.id)
@@ -1735,7 +1737,7 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       after = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "After",
       event = beat,
       opponent = class,
-      party = 1,
+      party = party,
     }
     for _, key in ipairs({ "battle", "won", "after" }) do
       local tid = S.project.trainer_headers[label][n][key]
@@ -1746,7 +1748,32 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     end
     S.mapSection = "objects"
     S.mapObjectIndex = n
-    S.status = string.format("Placed %s as object #%d", class, n)
+    S.status = string.format("Placed %s party %d as object #%d",
+      class, party, n)
+  elseif tool == "wild" then
+    -- Fixed wild (object.pokemon + level): Articuno, Power Plant Voltorb, …
+    mapDef.objects = mapDef.objects or {}
+    local n = #mapDef.objects + 1
+    local species = (S.placeWildSpecies and S.placeWildSpecies ~= ""
+      and S.placeWildSpecies) or "ARTICUNO"
+    local level = math.max(1, math.min(100, tonumber(S.placeWildLevel) or 50))
+    local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_WILD" .. n
+    local spr = S.placeSprite or "SPRITE_BIRD"
+    mapDef.objects[n] = {
+      index = n, x = cx, y = cy,
+      sprite = spr, movement = "STAY", range = "DOWN",
+      text = textId,
+      pokemon = species, level = level,
+    }
+    State.ensureProjectFields(S.project)
+    local cry = "_" .. (mapDef.id or "MAP") .. "Wild" .. n
+    local entry = ensureTextPtr(S, mapDef.id, textId)
+    if entry then entry.text = cry end
+    S.project.text[cry] = S.project.text[cry] or "Gyaoo!"
+    S.mapSection = "objects"
+    S.mapObjectIndex = n
+    S.status = string.format("Placed wild %s Lv%d as object #%d",
+      species, level, n)
   elseif tool == "select" then
     -- pick nearest object / warp / sign
     local best, bestD, kind = nil, 2.5, nil
@@ -1796,6 +1823,18 @@ local function drawObjectSprites(S, mapDef)
         love.graphics.setColor(0.3, 0.9, 0.45, 0.85)
         love.graphics.rectangle("fill",
           px - camX + 2, py - camY + 2, CELL - 4, CELL - 4)
+        love.graphics.setColor(1, 1, 1, 1)
+      end
+      if obj.pokemon and obj.pokemon ~= "" then
+        -- Fixed wild marker (distinct from NPC / trainer outlines).
+        love.graphics.setColor(0.95, 0.45, 0.2, 0.9)
+        love.graphics.rectangle("line",
+          px - camX, py - camY - 4, CELL, CELL)
+        love.graphics.setColor(1, 1, 1, 1)
+      elseif obj.trainerClass and obj.trainerClass ~= "" then
+        love.graphics.setColor(0.95, 0.25, 0.3, 0.9)
+        love.graphics.rectangle("line",
+          px - camX, py - camY - 4, CELL, CELL)
         love.graphics.setColor(1, 1, 1, 1)
       end
       if S.mapObjectIndex == i and S.mapSection == "objects" then
@@ -2529,8 +2568,8 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if sizing then
       draft.w, draft.h = ww, hh
     else
-      local nw = math.max(1, math.min(64, tonumber(ww) or map.width))
-      local nh = math.max(1, math.min(64, tonumber(hh) or map.height))
+      local nw = math.max(1, tonumber(ww) or map.width)
+      local nh = math.max(1, tonumber(hh) or map.height)
       S._mapSizeDraft = nil
       if nw ~= map.width or nh ~= map.height then
         map = mutate()
@@ -3273,6 +3312,80 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     end
   end)
 
+  -- Fixed wild: object.pokemon + level → OverworldState static wild battle
+  if py + fh + 20 * s <= listBottom then
+    Kit.text("micro", "Fixed wild (cell)", px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    local isWild = obj.pokemon and obj.pokemon ~= ""
+    if Kit.chip(px + 10 * s, py, 100 * s, fh, isWild and "ON" or "OFF",
+        isWild, PAL.yellow) then
+      map = mutate()
+      if isWild then
+        map.objects[i].pokemon = nil
+        map.objects[i].level = nil
+      else
+        -- Mutually exclusive with trainer battle on the same object.
+        map.objects[i].trainerClass = nil
+        map.objects[i].trainerParty = nil
+        map.objects[i].pokemon = S.placeWildSpecies or "ARTICUNO"
+        map.objects[i].level = tonumber(S.placeWildLevel) or 50
+        local tid = map.objects[i].text
+        if not tid or tid == "" then
+          tid = string.format("TEXT_%s_WILD%d", map.id, i)
+          map.objects[i].text = tid
+        end
+        local cry = "_" .. (map.id or "MAP") .. "Wild" .. i
+        local entry = ensureTextPtr(S, map.id, tid)
+        if entry and (not entry.text or entry.text == "") then
+          entry.text = cry
+        end
+        State.ensureProjectFields(S.project)
+        local key = (entry and entry.text) or cry
+        S.project.text[key] = S.project.text[key] or "Gyaoo!"
+      end
+      App.markDirty()
+      obj = map.objects[i]
+      isWild = obj.pokemon and obj.pokemon ~= ""
+    end
+    py = py + fh + 6 * s
+  end
+
+  if obj.pokemon and obj.pokemon ~= "" then
+    row("Species", function(fx, fy, fw, fh_)
+      local monDef = (S.project.pokemon and S.project.pokemon[obj.pokemon])
+        or (S.data and S.data.pokemon and S.data.pokemon[obj.pokemon])
+      if monDef and monDef.spriteFront then
+        Preview.draw(S, monDef.spriteFront, fx, fy - 2 * s, fh_ + 4 * s, fh_ + 4 * s,
+          Preview.monPaletteName(S, monDef, obj.pokemon))
+        fx = fx + fh_ + 10 * s
+        fw = fw - fh_ - 10 * s
+      end
+      local v = field(App, "ob_wild_sp", fx, fy, fw, fh_,
+        obj.pokemon or "", "ARTICUNO"):upper():gsub("%s+", "_")
+      if v ~= "" and v ~= obj.pokemon then
+        map = mutate()
+        map.objects[i].pokemon = v
+        S.placeWildSpecies = v
+      end
+    end)
+    row("Level", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.level) or 50
+      local v = tonumber(field(App, "ob_wild_lv", fx, fy, 70 * s, fh_,
+        tostring(cur), "50")) or cur
+      v = math.max(1, math.min(100, v))
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].level = v
+        S.placeWildLevel = v
+      end
+    end)
+    if py + 14 * s <= listBottom then
+      Kit.text("micro", "Talk cry uses this object's Text id (Dialog tab).",
+        px + 10 * s, py, PAL.faint)
+      py = py + 16 * s
+    end
+  end
+
   -- Trainer battle: object.trainerClass engages OverworldState:engageTrainer
   if py + fh + 20 * s <= listBottom then
     Kit.text("micro", "Trainer battle", px + 10 * s, py, PAL.caption)
@@ -3285,8 +3398,10 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         map.objects[i].trainerClass = nil
         map.objects[i].trainerParty = nil
       else
+        map.objects[i].pokemon = nil
+        map.objects[i].level = nil
         map.objects[i].trainerClass = S.trainerId or "OPP_YOUNGSTER"
-        map.objects[i].trainerParty = 1
+        map.objects[i].trainerParty = tonumber(S.placeTrainerParty) or 1
         State.ensureProjectFields(S.project)
         local label = State.mapLabel(S, map.id)
         local idx = map.objects[i].index or i
@@ -3304,7 +3419,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
             after = base .. "After",
             event = beat,
             opponent = map.objects[i].trainerClass,
-            party = 1,
+            party = map.objects[i].trainerParty or 1,
           }
           S.project.text[base .. "Battle"] = "Let's fight!"
           S.project.text[base .. "Won"] = "I lost..."
@@ -3330,6 +3445,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       if v ~= obj.trainerClass then
         map = mutate()
         map.objects[i].trainerClass = v
+        if v then S.trainerId = v end
         local label = State.mapLabel(S, map.id)
         local idx = map.objects[i].index or i
         State.ensureProjectFields(S.project)
@@ -3342,9 +3458,11 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     row("Party index", function(fx, fy, fw, fh_)
       local cur = obj.trainerParty or 1
       local v = tonumber(field(App, "ob_tp", fx, fy, 60 * s, fh_, tostring(cur), "1")) or 1
+      v = math.max(1, v)
       if v ~= cur then
         map = mutate()
         map.objects[i].trainerParty = v
+        S.placeTrainerParty = v
         local label = State.mapLabel(S, map.id)
         local idx = map.objects[i].index or i
         if S.project.trainer_headers[label]
@@ -3887,20 +4005,37 @@ function Maps.draw(S, x, y, w, h, App)
     { id = "object", tip = "Place NPCs / objects" },
     { id = "sign", tip = "Place signs" },
     { id = "trainer", tip = "Place a trainer object" },
+    { id = "wild", tip = "Place a fixed wild encounter (species + level on a cell)" },
   }
   local tx = mainX
   for _, tool in ipairs(tools) do
     local on = (S.mapTool or "paint") == tool.id
     local bw = (tool.id == "trainer" or tool.id == "select"
-        or tool.id == "object" or tool.id == "collision")
+        or tool.id == "object" or tool.id == "collision" or tool.id == "wild")
       and 70 * s or 54 * s
     if Kit.chip(tx, y, bw, 26 * s, tool.id:upper(), on, PAL.blue, nil, tool.tip) then
       S.mapTool = tool.id
-      if tool.id == "object" or tool.id == "trainer" then S.mapSection = "objects" end
+      if tool.id == "object" or tool.id == "trainer" or tool.id == "wild" then
+        S.mapSection = "objects"
+      end
       if tool.id == "collision" then
         S.mapShowCollision = true
         S.mapCollisionMode = S.mapCollisionMode or "solid"
         S.status = "COLLISION: paint walk/solid on cell feet tiles (tileset-wide)"
+      end
+      if tool.id == "wild" then
+        S.placeWildSpecies = S.placeWildSpecies or "ARTICUNO"
+        S.placeWildLevel = S.placeWildLevel or 50
+        S.placeSprite = S.placeSprite or "SPRITE_BIRD"
+        S.status = string.format("WILD tool: %s Lv%d — click a cell",
+          tostring(S.placeWildSpecies), tonumber(S.placeWildLevel) or 50)
+      end
+      if tool.id == "trainer" then
+        S.trainerId = S.trainerId or "OPP_YOUNGSTER"
+        S.placeTrainerParty = S.placeTrainerParty or 1
+        S.placeSprite = S.placeSprite or "SPRITE_YOUNGSTER"
+        S.status = string.format("TRAINER tool: %s party %d — click a cell",
+          tostring(S.trainerId), tonumber(S.placeTrainerParty) or 1)
       end
     end
     tx = tx + bw + 4 * s
@@ -4029,6 +4164,52 @@ function Maps.draw(S, x, y, w, h, App)
     else
       Kit.text("micro", "drag marquee or All", bx + 4 * s, barY + 12 * s, PAL.faint)
     end
+  elseif map and (S.mapTool or "paint") == "wild" then
+    barH = 38 * s
+    local bx = mainX
+    Kit.text("micro", "Species", bx, barY + 2 * s, PAL.caption)
+    Kit.text("micro", "Lv", bx + 150 * s, barY + 2 * s, PAL.caption)
+    local sp = field(App, "mp_wild_sp", bx, barY + 14 * s, 140 * s, 22 * s,
+      S.placeWildSpecies or "ARTICUNO", "ARTICUNO")
+      :upper():gsub("%s+", "_")
+    if sp ~= "" then S.placeWildSpecies = sp end
+    local lv = tonumber(field(App, "mp_wild_lv", bx + 150 * s, barY + 14 * s,
+      48 * s, 22 * s, tostring(S.placeWildLevel or 50), "50")) or 50
+    S.placeWildLevel = math.max(1, math.min(100, lv))
+    local monDef = (S.project.pokemon and S.project.pokemon[S.placeWildSpecies])
+      or (S.data and S.data.pokemon and S.data.pokemon[S.placeWildSpecies])
+    if monDef and monDef.spriteFront then
+      Preview.draw(S, monDef.spriteFront, bx + 210 * s, barY, 34 * s, 34 * s,
+        Preview.monPaletteName(S, monDef, S.placeWildSpecies))
+    end
+    Kit.text("micro", "click cell to place  ·  orange outline = fixed wild",
+      bx + 250 * s, barY + 12 * s, PAL.faint)
+  elseif map and (S.mapTool or "paint") == "trainer" then
+    barH = 38 * s
+    local bx = mainX
+    Kit.text("micro", "Class (OPP_*)", bx, barY + 2 * s, PAL.caption)
+    Kit.text("micro", "Party", bx + 170 * s, barY + 2 * s, PAL.caption)
+    local cls = field(App, "mp_tr_cls", bx, barY + 14 * s, 160 * s, 22 * s,
+      S.trainerId or "OPP_YOUNGSTER", "OPP_YOUNGSTER")
+      :upper():gsub("%s+", "_")
+    if cls ~= "" then S.trainerId = cls end
+    local party = tonumber(field(App, "mp_tr_party", bx + 170 * s, barY + 14 * s,
+      48 * s, 22 * s, tostring(S.placeTrainerParty or 1), "1")) or 1
+    S.placeTrainerParty = math.max(1, party)
+    local trDef = (S.project.trainers and S.project.trainers[S.trainerId])
+      or (S.data and S.data.trainers and S.data.trainers[S.trainerId])
+    if trDef and trDef.pic then
+      Preview.draw(S, trDef.pic, bx + 230 * s, barY, 34 * s, 34 * s)
+    end
+    local tipX = bx + 270 * s
+    if Kit.button(tipX, barY + 6 * s, 88 * s, 26 * s, "Parties", {
+        kind = "ghost",
+        tooltip = "Edit this class on the Trainers tab",
+      }) then
+      S.tab = "trainers"
+    end
+    Kit.text("micro", "click cell to place  ·  red outline = trainer",
+      tipX + 96 * s, barY + 12 * s, PAL.faint)
   elseif map then
     local thumb = 28 * s
     local tsId = map.tileset

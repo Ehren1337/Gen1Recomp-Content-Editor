@@ -36,6 +36,7 @@ local ok, err = pcall(function()
   assert(Encounters.draw)
   assert(ModWriter.emitSpecialEncounters)
   assert(ModWriter.applySpecialEncounterBinds)
+  assert(ModWriter.ensureTrainerHeaders)
   do
     local stubS = { project = { sprites = {} }, data = { sprites = {} } }
     local id, rec = SpriteUtil.createNew(stubS)
@@ -88,6 +89,16 @@ local ok, err = pcall(function()
     moveEffects = {
       FX_RECOIL = { id = "FX_RECOIL", template = "recoil", recoilDiv = 4 },
     },
+    maps = {
+      VIRIDIAN_CITY = {
+        id = "VIRIDIAN_CITY", label = "ViridianCity",
+        width = 1, height = 1, blocks = { 1 }, tileset = "OVERWORLD",
+        objects = {
+          { index = 2, x = 1, y = 1, sprite = "SPRITE_YOUNGSTER",
+            text = "TEXT_VIRIDIANCITY_SIGN" },
+        },
+      },
+    },
     specialEncounters = {
       MAGIKARP_LEGEND = {
         kind = "gift", mapId = "PALLET_TOWN", species = "MAGIKARP",
@@ -131,11 +142,15 @@ local ok, err = pcall(function()
   assert(sample:find("assets/badges/boulder.png") or sample:find("boulder"), sample)
   assert(sample:find("move_effects:register"), sample)
   assert(sample:find('trainers:register%("OPP_SPEC_SPEC_BATTLE"'), sample)
+  assert(sample:find("trainer_headers:patch"), sample)
+  assert(sample:find('trainer_headers:patch%("ViridianCity"'), sample)
+  assert(sample:find("OPP_SPEC_SPEC_BATTLE"), sample)
   assert(sample:find("give_special"), sample)
   assert(sample:find("SPECIALS"), sample)
   assert(sample:find("HYDRO_PUMP"), sample)
   assert(sample:find("TEXT_PALLETTOWN_SIGN"), sample)
-  assert(sample:find('"start_battle"'), sample)
+  -- Bound battle specials use trainer_headers, not a start_battle talk script.
+  assert(not sample:find('"start_battle"'), sample)
   assert(sample:find('"OPP_SPEC_SPEC_BATTLE"'), sample)
   assert(sample:find('"t:give_special"'), sample)
   print("OK modules load")

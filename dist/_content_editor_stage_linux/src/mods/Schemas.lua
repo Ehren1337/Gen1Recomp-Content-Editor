@@ -159,10 +159,16 @@ checkValue = function(t, value, path, patchMode, errors, top)
   if kind == "map" then
     if type(value) ~= "table" then return fail(errors, path, t.desc, value) end
     for k, v in pairs(value) do
-      if not t.key.check(k) then
+      -- patch may carry mod.DELETE under a non-schema key (e.g. ["_"] or
+      -- [0]) to force dictionary merge on deep registries; unsetting a
+      -- missing key is a no-op, so the key type need not match.
+      if v == Merge.DELETE and patchMode then
+        -- ok
+      elseif not t.key.check(k) then
         fail(errors, path .. "." .. tostring(k), "key " .. t.key.desc, k)
+      else
+        checkValue(t.value, v, path .. "." .. tostring(k), patchMode, errors)
       end
-      checkValue(t.value, v, path .. "." .. tostring(k), patchMode, errors)
     end
     return
   end

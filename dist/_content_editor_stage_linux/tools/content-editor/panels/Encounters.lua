@@ -370,7 +370,8 @@ local function drawSpecial(S, App, x, y, w, h)
   Kit.text("micro",
     kind == "gift"
       and "Save emits commands:register(mod:give_special) + SPECIALS table."
-      or ("Save emits trainers:register(OPP_SPEC_" .. id .. ")."),
+      or ("Save emits trainers:register(OPP_SPEC_" .. id
+        .. ") + trainer_headers when Bind text matches a map object."),
     viewX, fy, PAL.muted)
   fy = fy + 24 * s
 

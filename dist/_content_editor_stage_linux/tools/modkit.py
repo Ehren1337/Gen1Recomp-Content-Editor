@@ -929,31 +929,63 @@ def hamming(a, b):
 
 
 class CacheIndex:
-    """Hashes of the player's ROM-derived cache (assets/generated)."""
+    """Hashes of the player's ROM-derived cache (assets/generated).
+
+    Looks at the repo tree first, then POKEPORT_DATA_DIR's sibling
+    assets/generated, then the LÖVE save-directory cache — so content-editor
+    validate (repo often has no rip) still catches near-duplicate sprites.
+    """
 
     def __init__(self, repo):
         self.sha = {}
         self.perceptual = []
-        root = os.path.join(repo, "assets", "generated")
-        if not os.path.isdir(root):
-            return
+        roots = []
+        primary = os.path.join(repo, "assets", "generated")
+        if os.path.isdir(primary):
+            roots.append((primary, repo))
+        data_dir = os.environ.get("POKEPORT_DATA_DIR") or ""
+        if data_dir:
+            # .../data/generated -> .../assets/generated
+            sibling = os.path.normpath(os.path.join(
+                data_dir, os.pardir, os.pardir, "assets", "generated"))
+            if os.path.isdir(sibling):
+                roots.append((sibling, os.path.dirname(os.path.dirname(sibling))))
+        love = os.environ.get("APPDATA") or os.environ.get("HOME") or ""
+        if love:
+            for leaf in ("LOVE/pokemon-love2d/assets/generated",
+                         "love/pokemon-love2d/assets/generated"):
+                candidate = os.path.join(love, leaf.replace("/", os.sep))
+                if os.path.isdir(candidate):
+                    roots.append((candidate,
+                                  os.path.dirname(os.path.dirname(candidate))))
+                    break
         try:
             from PIL import Image
         except ImportError:
             Image = None
-        for base, _dirs, files in os.walk(root):
-            for name in files:
-                path = os.path.join(base, name)
-                rel = os.path.relpath(path, repo).replace(os.sep, "/")
-                body = open(path, "rb").read()
-                self.sha[hashlib.sha256(body).hexdigest()] = rel
-                if Image and os.path.splitext(name)[1].lower() in IMAGE_EXTS:
+        seen = set()
+        for root, rel_base in roots:
+            if root in seen:
+                continue
+            seen.add(root)
+            for base, _dirs, files in os.walk(root):
+                for name in files:
+                    path = os.path.join(base, name)
+                    rel = ("assets/generated/" + os.path.relpath(path, root)
+                           .replace(os.sep, "/"))
                     try:
-                        with Image.open(io.BytesIO(body)) as img:
-                            self.perceptual.append(
-                                (rel, img.size, ahash(img)))
-                    except Exception:
-                        pass
+                        body = open(path, "rb").read()
+                    except OSError:
+                        continue
+                    digest = hashlib.sha256(body).hexdigest()
+                    self.sha.setdefault(digest, rel)
+                    if Image and os.path.splitext(name)[1].lower() in IMAGE_EXTS:
+                        try:
+                            with Image.open(io.BytesIO(body)) as img:
+                                self.perceptual.append(
+                                    (rel, img.size, ahash(img)))
+                        except Exception:
+                            pass
 
 
 def lint_dir(repo, mod_dir, manifest):

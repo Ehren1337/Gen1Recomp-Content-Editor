@@ -349,33 +349,50 @@ local function runShell(cmd)
 end
 
 local function validateDataDir(root)
+  -- Prefer a real ROM/recomp dataset so vanilla id refs (TACKLE, DOJO, …)
+  -- resolve.  Editor "fixtures" mode is only for stub authoring — it must
+  -- not force fixture-base validate when an imported cache exists.
   local sep = package.config:sub(1, 1)
   local source = S and S.dataSource or "fixtures"
-  if source == "fixtures" then return nil, "fixture" end
+
+  local function tryDir(dir)
+    if not dir or dir == "" then return nil end
+    local f = io.open(dir .. sep .. "pokemon.lua", "rb")
+    if not f then return nil end
+    f:close()
+    return dir
+  end
 
   if source == "recomp" then
     local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
       or DataSource.mountedRecompRoot()
     if recomp and recomp ~= "" then
-      local dir = recomp .. sep .. "data" .. sep .. "generated"
-      local poke = dir .. sep .. "pokemon.lua"
-      local f = io.open(poke, "rb")
-      if f then f:close(); return dir, "imported" end
+      local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
+      if dir then return dir, "imported" end
     end
   end
 
   if source == "local" then
-    local dir = root .. sep .. "data" .. sep .. "generated"
-    local f = io.open(dir .. sep .. "pokemon.lua", "rb")
-    if f then f:close(); return dir, "imported" end
+    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
+    if dir then return dir, "imported" end
   end
 
-  -- imported (and recomp/local fallback): LÖVE save-directory ROM cache
   local save = love.filesystem.getSaveDirectory()
   if save and save ~= "" then
-    local dir = save .. sep .. "data" .. sep .. "generated"
-    local f = io.open(dir .. sep .. "pokemon.lua", "rb")
-    if f then f:close(); return dir, "imported" end
+    local dir = tryDir(save .. sep .. "data" .. sep .. "generated")
+    if dir then return dir, "imported" end
+  end
+
+  -- Fallbacks when the active source's path was missing.
+  do
+    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
+    if dir then return dir, "imported" end
+  end
+  local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
+    or DataSource.mountedRecompRoot()
+  if recomp and recomp ~= "" then
+    local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
+    if dir then return dir, "imported" end
   end
 
   return nil, "fixture"
@@ -408,7 +425,7 @@ function App.validateMod()
   if dataDir then
     extraEnv.POKEPORT_DATA_DIR = dataDir
   end
-  if base == "fixture" and (S.dataSource == "imported" or S.dataSource == "recomp") then
+  if base == "fixture" then
     say("No ROM cache on disk for validate — using fixtures (vanilla ids will fail)")
   end
 

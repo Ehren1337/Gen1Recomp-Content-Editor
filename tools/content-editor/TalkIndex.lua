@@ -242,7 +242,8 @@ function TalkIndex.resolveSteps(S, mapId, textId)
     return {
       {
         kind = "raw",
-        note = "Engine gift/static: " .. tostring(obj.pokemon or obj.species),
+        note = "Engine fixed wild: " .. tostring(obj.pokemon or obj.species)
+          .. " Lv" .. tostring(obj.level or "?"),
       },
     }, { owned = false, source = "pokemon", readOnly = true }
   end
