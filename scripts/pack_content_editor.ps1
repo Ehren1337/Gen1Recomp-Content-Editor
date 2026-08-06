@@ -244,6 +244,45 @@ function Pack-Windows {
   Write-Host ("Wrote {0} ({1:N1} MB)" -f $ZipPath, ($size / 1MB))
 }
 
+function Set-LinuxTarExecBits([string]$TarPath) {
+  # Windows tar stores .sh / AppImage as 644. Rewrite modes so extract is +x.
+  $py = @"
+import tarfile, os, tempfile, shutil
+src = r'''$TarPath'''
+fd, tmp = tempfile.mkstemp(suffix='.tar.gz')
+os.close(fd)
+want = ('.sh', '.AppImage')
+with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
+    for m in inn.getmembers():
+        name = m.name.replace('\\', '/')
+        base = os.path.basename(name)
+        if base.endswith(want) or base == 'ContentEditor.sh':
+            m.mode = (m.mode & 0o777) | 0o755
+        f = inn.extractfile(m) if m.isfile() else None
+        out.addfile(m, f)
+shutil.move(tmp, src)
+print('exec bits set on .sh / AppImage')
+"@
+  $pyFile = Join-Path $env:TEMP "ce_fix_linux_tar_exec.py"
+  Set-Content -Path $pyFile -Value $py -Encoding utf8
+  $python = $null
+  foreach ($c in @("python", "py", "python3")) {
+    if (Get-Command $c -ErrorAction SilentlyContinue) { $python = $c; break }
+  }
+  if (-not $python) {
+    Write-Warning "Python not found; tar may need chmod +x on Linux."
+    return
+  }
+  if ($python -eq "py") {
+    & $python -3 $pyFile
+  } else {
+    & $python $pyFile
+  }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Could not set exec bits in tar (exit $LASTEXITCODE)."
+  }
+}
+
 function Pack-Linux {
   $OutDir = Join-Path $Root "dist\linux"
   $Stage = Join-Path $Root "dist\_content_editor_stage_linux"
@@ -271,9 +310,11 @@ function Pack-Linux {
     Rename-Item -LiteralPath $tmpStage -NewName (Split-Path $Stage -Leaf)
   }
 
+  Set-LinuxTarExecBits $TarPath
+
   $size = (Get-Item $TarPath).Length
   Write-Host ("Wrote {0} ({1:N1} MB)" -f $TarPath, ($size / 1MB))
-  Write-Host "On Linux: chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage"
+  Write-Host "On Linux: ./ContentEditor.sh  (chmod auto-applied if needed)"
 }
 
 if ($Platform -eq "windows" -or $Platform -eq "all") { Pack-Windows }

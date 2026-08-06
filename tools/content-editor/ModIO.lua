@@ -43,13 +43,19 @@ local function hasCommand(name)
   return path ~= nil, path
 end
 
+-- LÖVE AppImages set LD_LIBRARY_PATH to bundled libs; host zenity/kdialog
+-- then crash or exit 1 with no window. Strip those vars for dialogs.
+local function hostCmd(cmd)
+  return "env -u LD_LIBRARY_PATH -u LD_PRELOAD " .. cmd
+end
+
 -- Run a dialog command; returns path, status ("ok"|"cancel"|"fail").
 -- Zenity/kdialog use exit 1 for user cancel; other non-zero = failed to show.
 local function runDialog(cmd)
   -- Capture stdout + exit code. Keep stderr quiet.
   local wrapped = string.format(
     "OUT=$(%s 2>/dev/null); EC=$?; printf '%%s\\n' \"$OUT\"; printf '__EC:%%s\\n' \"$EC\"",
-    cmd)
+    hostCmd(cmd))
   local pipe = io.popen(wrapped, "r")
   if not pipe then return nil, "fail" end
   local body = pipe:read("*a") or ""
