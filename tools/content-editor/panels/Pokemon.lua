@@ -167,6 +167,17 @@ local function parseMoveList(str)
   return moves
 end
 
+-- Prefer authored path; fall back to vanilla when project omitted ROM-cache sprites.
+local function monSpritePath(S, mon, field)
+  local p = mon and mon[field]
+  if type(p) == "string" and p ~= "" then return p end
+  local id = (mon and mon.id) or S.pokemonId
+  local vanilla = id and S.data and S.data.pokemon and S.data.pokemon[id]
+  local vp = vanilla and vanilla[field]
+  if type(vp) == "string" and vp ~= "" then return vp end
+  return nil
+end
+
 local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   local prevSize = 96 * s
   local iconSize = 40 * s
@@ -209,9 +220,11 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   Preview.drawPokemonIcon(S, mon, iconX, fy, iconSize, iconSize, S.pokemonId, iconPal)
   if Kit.press(iconX, fy, iconSize, iconSize) then openMonPal() end
   local frontX = formX + formW - prevSize * 2 - gap
+  local frontPath = monSpritePath(S, mon, "spriteFront")
+  local backPath = monSpritePath(S, mon, "spriteBack")
   -- drawPal false = skip SGB remap (trueColor).
-  Preview.draw(S, mon.spriteFront, frontX, fy, prevSize, prevSize, drawPal)
-  Preview.draw(S, mon.spriteBack, formX + formW - prevSize, fy, prevSize, prevSize,
+  Preview.draw(S, frontPath, frontX, fy, prevSize, prevSize, drawPal)
+  Preview.draw(S, backPath, formX + formW - prevSize, fy, prevSize, prevSize,
     drawPal)
   if Kit.press(frontX, fy, prevSize * 2 + gap, prevSize) then openMonPal() end
   if mon.trueColor then
@@ -553,6 +566,10 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   end
   row("Front PNG", function(fx, fy_, fw, fh_)
     local path = mon.spriteFront or ""
+    if path == "" then
+      local vp = monSpritePath(S, mon, "spriteFront")
+      path = vp and ("(vanilla) " .. vp) or ""
+    end
     Kit.text("micro", path ~= "" and path or "(none)", fx, fy_ + 8 * s, PAL.muted)
     if Kit.button(fx + fw - 90 * s, fy_, 90 * s, fh_, "Browse", {
         kind = "ghost",
@@ -572,6 +589,10 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   end)
   row("Back PNG", function(fx, fy_, fw, fh_)
     local path = mon.spriteBack or ""
+    if path == "" then
+      local vp = monSpritePath(S, mon, "spriteBack")
+      path = vp and ("(vanilla) " .. vp) or ""
+    end
     Kit.text("micro", path ~= "" and path or "(none)", fx, fy_ + 8 * s, PAL.muted)
     if Kit.button(fx + fw - 90 * s, fy_, 90 * s, fh_, "Browse", {
         kind = "ghost",

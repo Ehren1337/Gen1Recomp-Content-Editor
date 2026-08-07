@@ -21,6 +21,51 @@ local function escapeStr(s)
   return string.format("%q", tostring(s))
 end
 
+-- MK301: mods must not reference the player's ROM-derived cache.
+local function isRomCachePath(p)
+  return type(p) == "string" and (
+    p:sub(1, #"assets/generated/") == "assets/generated/"
+    or p:sub(1, #"data/generated/") == "data/generated/")
+end
+
+local function deepCopy(v, seen)
+  if type(v) ~= "table" then return v end
+  seen = seen or {}
+  if seen[v] then return seen[v] end
+  local out = {}
+  seen[v] = out
+  for k, val in pairs(v) do
+    out[deepCopy(k, seen)] = deepCopy(val, seen)
+  end
+  return out
+end
+
+-- Drop ROM-cache path strings in place (and icon tables that lost their image).
+local function scrubRomCachePaths(t, seen)
+  if type(t) ~= "table" then return t end
+  seen = seen or {}
+  if seen[t] then return t end
+  seen[t] = true
+  for k, v in pairs(t) do
+    if isRomCachePath(v) then
+      t[k] = nil
+    elseif type(v) == "table" then
+      scrubRomCachePaths(v, seen)
+      if k == "icon" and v.image == nil and v.file == nil then
+        local hasOther = false
+        for ik in pairs(v) do
+          if ik ~= "frames" and ik ~= "trueColor" then
+            hasOther = true
+            break
+          end
+        end
+        if not hasOther then t[k] = nil end
+      end
+    end
+  end
+  return t
+end
+
 local function writeValue(v, indent, lines)
   indent = indent or 0
   local pad = string.rep("  ", indent)
@@ -98,8 +143,10 @@ function ModWriter.serializeProject(project)
     "-- or regenerate main.lua via Save.  Do not hand-merge with carelessness.",
     "return ",
   }
+  -- Never persist ROM-cache paths into editor_project.lua (MK301).
+  local scrubbed = scrubRomCachePaths(deepCopy(project or {}))
   local body = {}
-  writeValue(project, 0, body)
+  writeValue(scrubbed, 0, body)
   lines[#lines + 1] = table.concat(body, "\n")
   lines[#lines + 1] = ""
   return table.concat(lines, "\n")
@@ -140,9 +187,14 @@ local function stripEditorFields(rec)
   local out = {}
   for k, v in pairs(rec) do
     if type(k) == "string" and k:sub(1, 1) ~= "_" and not EDITOR_ONLY[k] then
-      if v ~= "" then out[k] = v end
+      if isRomCachePath(v) then
+        -- omit (MK301)
+      elseif v ~= "" then
+        out[k] = v
+      end
     end
   end
+  scrubRomCachePaths(out)
   return out
 end
 
@@ -777,9 +829,10 @@ function ModWriter.emitMain(project, baseData)
     local raw = project.pokemon[pid]
     local rec = stripEditorFields(raw)
     rec.id = rec.id or pid
-    -- New species need sprite paths for schema; patches keep whatever was
-    -- cloned from vanilla (including assets/generated/...).
-    if emitVerb(raw) == "register" then
+    local verb = emitVerb(raw)
+    -- New species need sprite paths for schema; patches omit ROM-cache paths
+    -- (stripEditorFields) so MAGIKARP-style stat edits stay MK301-clean.
+    if verb == "register" then
       if not rec.spriteFront or rec.spriteFront == "" then
         rec.spriteFront = "assets/" .. pid:lower() .. "_front.png"
       end
@@ -787,7 +840,6 @@ function ModWriter.emitMain(project, baseData)
         rec.spriteBack = "assets/" .. pid:lower() .. "_back.png"
       end
     end
-    local verb = emitVerb(raw)
     local lit = rewriteModPaths(emitTableLiteral(rec, 1))
     out[#out + 1] = string.format("  mod.content.pokemon:%s(%q, %s)",
       verb, pid, lit)

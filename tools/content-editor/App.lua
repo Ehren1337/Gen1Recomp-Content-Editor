@@ -230,6 +230,40 @@ function App.importRomFile(path)
   return false
 end
 
+-- Drop save-directory ROM cache + editor image caches, then reload data.
+function App.clearCache()
+  if S and S._romImporter and S._romImporter.workState == "working" then
+    say("ROM import in progress — wait before clearing cache")
+    return false
+  end
+  local n = DataSource.clearImportedCache() or 0
+  pcall(function() require("Preview").invalidate() end)
+  pcall(function() require("src.render.Assets").invalidate() end)
+  pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  pcall(function() require("src.battle.BattleState").invalidate() end)
+  pcall(function() require("src.render.SpriteRenderer").invalidate() end)
+  if S then
+    S._liveTilesets = nil
+    S._mapNeedsRebuild = S.mapId
+    S._vanillaMapBackup = nil
+    S._vanillaTilesetBackup = nil
+  end
+  -- Imported mode is gone after a wipe; fall back to linked Recomp or fixtures.
+  local prefs = DataSource.loadPrefs()
+  if prefs.mode == "imported" then
+    if prefs.recompRoot and DataSource.isValidRecompRoot(prefs.recompRoot) then
+      DataSource.setMode("recomp", prefs.recompRoot)
+    else
+      DataSource.useFixtures()
+    end
+  end
+  App.reloadData()
+  say(string.format(
+    "Cleared cache (%d entries) — %s",
+    n, DataSource.label(S and S.dataSource)))
+  return true
+end
+
 function App.unload()
   if S and S._romImporter then S._romImporter = nil end
   pcall(function() require("DataSource").unmountLinked() end)

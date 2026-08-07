@@ -243,6 +243,47 @@ function DataSource.clearToAuto()
   return prefs
 end
 
+-- Remove imported ROM cache trees from the LÖVE save directory only.
+-- Never deletes a linked Gen1Recomp install or the game source tree.
+-- Returns how many top-level cache roots were removed.
+function DataSource.clearImportedCache()
+  if not (love and love.filesystem and love.filesystem.getSaveDirectory) then
+    return 0
+  end
+  local saveDir = love.filesystem.getSaveDirectory()
+  local function removeTree(path)
+    local info = love.filesystem.getInfo(path)
+    if not info then return end
+    if love.filesystem.getRealDirectory
+        and love.filesystem.getRealDirectory(path) ~= saveDir then
+      return
+    end
+    if info.type == "directory" then
+      for _, child in ipairs(love.filesystem.getDirectoryItems(path) or {}) do
+        removeTree(path .. "/" .. child)
+      end
+    end
+    pcall(love.filesystem.remove, path)
+  end
+  local GameVersion = require("src.core.GameVersion")
+  local cleared = 0
+  for _, version in ipairs(GameVersion.ORDER or { "red" }) do
+    local prefix = GameVersion.cachePrefix and GameVersion.cachePrefix(version) or ""
+    local roots = {
+      prefix .. "data/generated",
+      prefix .. "assets/generated",
+      prefix .. "rom-cache.complete",
+    }
+    for _, rel in ipairs(roots) do
+      if love.filesystem.getInfo(rel) then
+        removeTree(rel)
+        cleared = cleared + 1
+      end
+    end
+  end
+  return cleared
+end
+
 function DataSource.mountedRecompRoot()
   return mountedRecomp
 end

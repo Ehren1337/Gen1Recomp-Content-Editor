@@ -245,6 +245,15 @@ function Project.draw(S, x, y, w, h, App)
     }) then
     App.useFixturesData()
   end
+  row = row + btnH + 8 * s
+  if Kit.button(x, row, dsW, btnH, "Clear cache", {
+      kind = "danger",
+      tooltip = "Delete save-directory ROM cache (data/generated + assets/generated)\n"
+        .. "and flush editor image caches, then reload data.\n"
+        .. "Does not delete a Linked Gen1Recomp folder.",
+    }) then
+    if App.clearCache then App.clearCache() end
+  end
   row = row + btnH + 20 * s
 
   Kit.caption(x, row, "OVERVIEW")
