@@ -992,6 +992,8 @@ function ModWriter.emitMain(project, baseData)
   local trIds = {}
   for tid in pairs(project.trainers or {}) do trIds[#trIds + 1] = tid end
   table.sort(trIds)
+  local trainerThemes = {}
+  local trainerTrueColor = {}
   for _, tid in ipairs(trIds) do
     local raw = project.trainers[tid]
     local rec = stripEditorFields(raw)
@@ -1000,6 +1002,72 @@ function ModWriter.emitMain(project, baseData)
     local lit = rewriteModPaths(emitTableLiteral(rec, 1))
     out[#out + 1] = string.format("  mod.content.trainers:%s(%q, %s)",
       verb, tid, lit)
+    out[#out + 1] = ""
+    if type(raw.battleTheme) == "string" and raw.battleTheme ~= "" then
+      trainerThemes[#trainerThemes + 1] = { tid, raw.battleTheme }
+    end
+    if raw.trueColor then
+      trainerTrueColor[#trainerTrueColor + 1] = tid
+    end
+  end
+
+  -- Stock Gen1Recomp keeps battleTheme / trainer trueColor in the schema but
+  -- does not apply them yet. Emit hooks so mods work without patching the game.
+  if #trainerThemes > 0 or #trainerTrueColor > 0 then
+    out[#out + 1] = "  -- Trainer Theme / TrueColor (stock Gen1Recomp workarounds)"
+    out[#out + 1] = "  do"
+    out[#out + 1] = "    local themes = {"
+    for _, pair in ipairs(trainerThemes) do
+      out[#out + 1] = string.format("      [%q] = %q,", pair[1], pair[2])
+    end
+    out[#out + 1] = "    }"
+    out[#out + 1] = "    local trueColor = {"
+    for _, tid in ipairs(trainerTrueColor) do
+      out[#out + 1] = string.format("      [%q] = true,", tid)
+    end
+    out[#out + 1] = "    }"
+    out[#out + 1] = "    local pendingClass = nil"
+    out[#out + 1] = "    mod.hooks:wrap(\"trainer.party\", function(next, class, idx, party)"
+    out[#out + 1] = "      pendingClass = class"
+    out[#out + 1] = "      return next(class, idx, party)"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "    mod.hooks:wrap(\"music.select\", function(next, chosen, ctx)"
+    out[#out + 1] = "      if not (ctx and ctx.reason == \"battle\") then"
+    out[#out + 1] = "        return next(chosen, ctx)"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "      if ctx.kind == \"wild\" then"
+    out[#out + 1] = "        pendingClass = nil"
+    out[#out + 1] = "        return next(chosen, ctx)"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "      local song = pendingClass and themes[pendingClass]"
+    out[#out + 1] = "      if song then return next(song, ctx) end"
+    out[#out + 1] = "      return next(chosen, ctx)"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "    mod.events:on(\"battle.started\", function(ev)"
+    out[#out + 1] = "      local class = pendingClass"
+    out[#out + 1] = "      pendingClass = nil"
+    out[#out + 1] = "      local b = ev and ev.battle"
+    out[#out + 1] = "      local id = (ev and ev.trainerId) or class"
+    out[#out + 1] = "      if not (b and id) then return end"
+    out[#out + 1] = "      if trueColor[id] then"
+    out[#out + 1] = "        local tr = b.trainer"
+    out[#out + 1] = "        local path = tr and tr.pic"
+    out[#out + 1] = "        if type(path) == \"string\" and path ~= \"\" then"
+    out[#out + 1] = "          local Assets = require(\"src.render.Assets\")"
+    out[#out + 1] = "          local ok, data = pcall(Assets.imageData, path)"
+    out[#out + 1] = "          if ok and data then"
+    out[#out + 1] = "            b.trainerPic = love.graphics.newImage(data)"
+    out[#out + 1] = "          end"
+    out[#out + 1] = "        end"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "      local song = themes[id]"
+    out[#out + 1] = "      if song and b.data then"
+    out[#out + 1] = "        require(\"src.core.Music\").play(b.data, song, true, {"
+    out[#out + 1] = "          reason = \"battle\", kind = \"trainer\", trainerId = id,"
+    out[#out + 1] = "        })"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "  end"
     out[#out + 1] = ""
   end
 
@@ -1182,6 +1250,27 @@ function ModWriter.emitMain(project, baseData)
   end
   emitAudioBucket("music", audio.songs, false)
   emitAudioBucket("cries", audio.cries, true)
+  -- Pokemon panel Cry field: when a species sets cry = "ABRA" but has no
+  -- audio.cries[species] of its own, emit a derived cry so playCry /
+  -- validators see the species key too (Sound also aliases at runtime).
+  do
+    local authored = audio.cries or {}
+    local aliases = {}
+    for pid, mon in pairs(project.pokemon or {}) do
+      if type(pid) == "string" and type(mon) == "table"
+          and type(mon.cry) == "string" and mon.cry ~= ""
+          and mon.cry ~= pid and authored[pid] == nil then
+        aliases[#aliases + 1] = pid
+      end
+    end
+    table.sort(aliases)
+    for _, pid in ipairs(aliases) do
+      local base = project.pokemon[pid].cry
+      out[#out + 1] = string.format(
+        "  mod.content.cries:register(%q, { base = %q })", pid, base)
+      out[#out + 1] = ""
+    end
+  end
   emitAudioBucket("sfx", audio.sfx, false)
   emitAudioBucket("map_songs", audio.mapSongs, true)
 
@@ -1460,6 +1549,50 @@ function ModWriter.emitMain(project, baseData)
       out[#out + 1] = "      if not hit then return end"
       out[#out + 1] = "      gift.species = hit.species"
       out[#out + 1] = "      gift.level = hit.level"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+  end
+
+  -- Stock Gen1Recomp: map index >= firstIndoorMap (37) rolls wilds on EVERY
+  -- tile (terrain "indoor"), unless the tileset is FOREST.  Content-editor
+  -- Outside maps often use index 1000+.  Suppress those indoor rolls from the
+  -- mod so grass/water-only behavior works without patching the game install.
+  do
+    local outsideIds = {}
+    for _, mid in ipairs(mIds) do
+      local m = project.maps[mid]
+      if type(m) == "table" then
+        local env = m.environment
+        local outside = false
+        if env == "outside" then
+          outside = true
+        elseif env ~= "inside" and env ~= "cave" then
+          if m.outdoor == true then
+            outside = true
+          elseif m.outdoor ~= false then
+            local ts = m.tileset
+            outside = (ts == "OVERWORLD" or ts == "PLATEAU")
+          end
+        end
+        if outside then outsideIds[#outsideIds + 1] = mid end
+      end
+    end
+    if #outsideIds > 0 then
+      out[#out + 1] = "  -- Outside maps: block stock every-tile indoor wilds (index >= 37)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local outsideMaps = {"
+      for _, mid in ipairs(outsideIds) do
+        out[#out + 1] = string.format("      [%q] = true,", mid)
+      end
+      out[#out + 1] = "    }"
+      out[#out + 1] = "    mod.hooks:wrap(\"encounter.roll\", function(next, encDef, ctx)"
+      out[#out + 1] = "      if ctx and ctx.terrain == \"indoor\" and ctx.mapId"
+      out[#out + 1] = "         and outsideMaps[ctx.mapId] then"
+      out[#out + 1] = "        return nil"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "      return next(encDef, ctx)"
       out[#out + 1] = "    end)"
       out[#out + 1] = "  end"
       out[#out + 1] = ""

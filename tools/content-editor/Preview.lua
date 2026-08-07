@@ -202,6 +202,42 @@ function Preview.paletteColors(S, name)
   return nil
 end
 
+local DEFAULT_PAL_COLORS = {
+  { 248, 248, 248 }, { 168, 168, 168 }, { 88, 88, 88 }, { 16, 16, 16 },
+}
+
+-- Clone a named palette into project.palettes so its four colors can be edited.
+-- Returns the owned record (with .colors), or nil if name is empty.
+function Preview.ensureProjectPalette(S, name)
+  if type(name) ~= "string" or name == "" or not S or not S.project then
+    return nil
+  end
+  S.project.palettes = S.project.palettes or {}
+  local owned = S.project.palettes[name]
+  if owned then
+    local cols = normalizeColors(owned)
+    if not cols then
+      cols = Preview.paletteColors(S, name) or DEFAULT_PAL_COLORS
+      owned.colors = {}
+      for i = 1, 4 do
+        local c = cols[i] or DEFAULT_PAL_COLORS[i]
+        owned.colors[i] = { c[1] or 0, c[2] or 0, c[3] or 0 }
+      end
+    end
+    return owned
+  end
+  local src = Preview.paletteColors(S, name) or DEFAULT_PAL_COLORS
+  local colors = {}
+  for i = 1, 4 do
+    local c = src[i] or DEFAULT_PAL_COLORS[i]
+    colors[i] = { c[1] or 0, c[2] or 0, c[3] or 0 }
+  end
+  local vanilla = S.data and S.data.palettes and S.data.palettes.palettes
+    and S.data.palettes.palettes[name]
+  S.project.palettes[name] = { colors = colors, _isNew = not vanilla }
+  return S.project.palettes[name]
+end
+
 -- Effective map palette name (map.palette or FieldDefaults cascade).
 function Preview.mapPaletteName(S, map)
   if type(map) ~= "table" then return "ROUTE" end
@@ -364,7 +400,8 @@ function Preview.imageWithPalette(S, path, colorsOrName)
 end
 
 -- Draw image fitted into maxW x maxH.  Optional paletteNameOrColors tints
--- DMG grayscale PNGs with an SGB 4-color palette.  Returns height consumed.
+-- DMG grayscale PNGs with an SGB 4-color palette.
+-- Pass false/nil to skip remap (trueColor art).  Returns height consumed.
 function Preview.draw(S, path, x, y, maxW, maxH, paletteNameOrColors)
   local s = 1
   local KitOk, Kit = pcall(require, "Kit")
@@ -372,14 +409,28 @@ function Preview.draw(S, path, x, y, maxW, maxH, paletteNameOrColors)
   maxW = maxW or (96 * s)
   maxH = maxH or (96 * s)
 
-  local img
-  if paletteNameOrColors then
-    img = Preview.imageWithPalette(S, path, paletteNameOrColors)
-  else
-    img = Preview.image(S, path)
-  end
+  -- false = explicit trueColor opt-out (same as nil).
+  if paletteNameOrColors == false then paletteNameOrColors = nil end
+
   Theme.col(PAL.bgBot or { 10, 10, 20 }, 1)
   love.graphics.rectangle("fill", x, y, maxW, maxH, 8 * s, 8 * s)
+
+  -- Prefer live shader tint so TrueColor toggles update immediately on the
+  -- same base image; fall back to a CPU bake when the shader is unavailable
+  -- (headless / ADVANCED pack skips the shade remap).
+  local img = Preview.image(S, path)
+  local shaded = false
+  if paletteNameOrColors then
+    shaded = Preview.pushPaletteShader(S, paletteNameOrColors)
+    if not shaded then
+      img = Preview.imageWithPalette(S, path, paletteNameOrColors) or img
+    end
+  else
+    -- Clear a leaked zone shader so raw trueColor pixels are not remapped.
+    if love and love.graphics and love.graphics.setShader then
+      love.graphics.setShader()
+    end
+  end
 
   if not img then
     love.graphics.setColor(1, 1, 1, 1)
@@ -387,6 +438,7 @@ function Preview.draw(S, path, x, y, maxW, maxH, paletteNameOrColors)
     if KitOk then
       Kit.text("micro", msg, x + 8 * s, y + maxH / 2 - 6 * s, PAL.faint)
     end
+    Preview.popPaletteShader(shaded)
     return maxH
   end
 
@@ -397,6 +449,7 @@ function Preview.draw(S, path, x, y, maxW, maxH, paletteNameOrColors)
   local dy = y + (maxH - dh) / 2
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(img, dx, dy, 0, scale, scale)
+  Preview.popPaletteShader(shaded)
   return maxH
 end
 
@@ -500,8 +553,20 @@ function Preview.itemPaletteName(S, item)
   return (sid and spritePalette(S, sid)) or "MEWMON"
 end
 
+-- paletteName: nil = item default; false = no remap (trueColor); string = id.
 function Preview.drawItemIcon(S, item, x, y, maxW, maxH, paletteName)
-  local pal = paletteName or Preview.itemPaletteName(S, item)
+  local pal
+  if paletteName == false then
+    pal = false
+  elseif paletteName ~= nil then
+    pal = paletteName
+  elseif item and item.trueColor then
+    pal = false
+  elseif type(item and item.icon) == "table" and item.icon.trueColor then
+    pal = false
+  else
+    pal = Preview.itemPaletteName(S, item)
+  end
   return Preview.draw(S, Preview.itemIconPath(S, item), x, y, maxW, maxH, pal)
 end
 
@@ -567,9 +632,22 @@ local function loadObpIcon(S, path)
   return okImg and baked or nil
 end
 
+-- True when species / custom icon table opts out of SGB remap.
+function Preview.pokemonIconTrueColor(S, mon, speciesId)
+  if mon and mon.trueColor then return true end
+  local entry = mon and mon.icon
+  if type(entry) ~= "table" then
+    local id = speciesId or (mon and (mon.id or mon.species))
+    local icons = S and S.data and S.data.icons
+    entry = icons and icons.bySpecies and id and icons.bySpecies[id]
+  end
+  return type(entry) == "table" and entry.trueColor and true or false
+end
+
 -- Draw party icon. Built-in class names get the OBP0 shade bake, then an
 -- optional SGB palette tint (species palette). Custom PNG icons remap
 -- directly through the palette when one is provided.
+-- paletteName: nil = species default; false = no remap (trueColor); string = that id.
 function Preview.drawPokemonIcon(S, mon, x, y, maxW, maxH, speciesId, paletteName)
   local s = 1
   local KitOk, Kit = pcall(require, "Kit")
@@ -577,9 +655,17 @@ function Preview.drawPokemonIcon(S, mon, x, y, maxW, maxH, speciesId, paletteNam
   maxW = maxW or (24 * s)
   maxH = maxH or (24 * s)
   local path, name = Preview.pokemonIcon(S, mon, speciesId)
-  local pal = paletteName
-  if pal == nil then
-    pal = Preview.monPaletteName(S, mon, speciesId)
+  local pal
+  if paletteName == false then
+    pal = nil
+  elseif paletteName == nil then
+    if Preview.pokemonIconTrueColor(S, mon, speciesId) then
+      pal = nil
+    else
+      pal = Preview.monPaletteName(S, mon, speciesId)
+    end
+  else
+    pal = paletteName
   end
   Theme.col(PAL.bgBot or { 10, 10, 20 }, 1)
   love.graphics.rectangle("fill", x, y, maxW, maxH, 6 * s, 6 * s)
@@ -590,38 +676,43 @@ function Preview.drawPokemonIcon(S, mon, x, y, maxW, maxH, speciesId, paletteNam
     end
     return maxH, nil
   end
-  -- Custom icons: full SGB remap. Built-in OBP icons: shade-bake then tint.
-  if not name and pal then
-    return Preview.draw(S, path, x, y, maxW, maxH, pal), name
+  -- Custom PNG icons go through Preview.draw (shader / CPU palette).
+  if not name then
+    return Preview.draw(S, path, x, y, maxW, maxH, pal or false), name
   end
-  local key = (S and S.path or "") .. "|icon|" .. path
-    .. (name and "#obp" or "") .. (pal and ("#pal:" .. pal) or "")
+  -- Built-in class icons: OBP0 shade-bake, then optional live SGB tint.
+  local key = (S and S.path or "") .. "|icon|" .. path .. "#obp"
   if cache[key] == nil then
-    if name then
-      -- Remap OBP grayscale through the species palette when available.
-      if pal and Preview.paletteColors(S, pal) then
-        cache[key] = Preview.imageWithPalette(S, path, pal) or loadObpIcon(S, path) or false
-      else
-        cache[key] = loadObpIcon(S, path) or false
-      end
-    else
-      cache[key] = Preview.image(S, path) or false
-    end
+    cache[key] = loadObpIcon(S, path) or false
   end
   local img = cache[key]
   if not img then
-    return Preview.draw(S, path, x, y, maxW, maxH, pal), name
+    return Preview.draw(S, path, x, y, maxW, maxH, pal or false), name
   end
   local iw, ih = img:getWidth(), img:getHeight()
   -- Built-in icons are often 16x32 two-frame strips; show frame 1 (top).
   local srcH = ih
-  if name and ih >= iw * 2 then srcH = math.floor(ih / 2) end
+  if ih >= iw * 2 then srcH = math.floor(ih / 2) end
   local scale = math.min(maxW / iw, maxH / srcH)
   local dw, dh = iw * scale, srcH * scale
   local dx = x + (maxW - dw) / 2
   local dy = y + (maxH - dh) / 2
   love.graphics.setColor(1, 1, 1, 1)
-  if name and srcH < ih then
+  local shaded = false
+  if pal then
+    shaded = Preview.pushPaletteShader(S, pal)
+    if not shaded then
+      -- ADVANCED / no shader: CPU-bake a paletted variant.
+      local ckey = key .. "#pal:" .. tostring(pal)
+      if cache[ckey] == nil then
+        cache[ckey] = Preview.imageWithPalette(S, path, pal) or img or false
+      end
+      img = cache[ckey] or img
+    end
+  elseif love and love.graphics and love.graphics.setShader then
+    love.graphics.setShader()
+  end
+  if srcH < ih then
     local qkey = key .. "|q"
     if cache[qkey] == nil then
       local ok, q = pcall(love.graphics.newQuad, 0, 0, iw, srcH, iw, ih)
@@ -635,6 +726,7 @@ function Preview.drawPokemonIcon(S, mon, x, y, maxW, maxH, speciesId, paletteNam
   else
     love.graphics.draw(img, dx, dy, 0, scale, scale)
   end
+  Preview.popPaletteShader(shaded)
   return maxH, name
 end
 

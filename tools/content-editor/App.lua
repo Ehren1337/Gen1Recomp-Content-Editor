@@ -35,6 +35,8 @@ local Player = require("Player")
 local Ui = require("Ui")
 local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
+local ColorWheel = require("ColorWheel")
+local PaletteEdit = require("PaletteEdit")
 local RegList = require("RegList")
 
 local App = {}
@@ -1045,8 +1047,8 @@ function App.draw()
   local contentH = H - contentY - 44 * s
   History.beginFrame(S)
   -- Block underlying panel hits while a modal is up.
-  if PalettePicker.isOpen(S) or BattleAnims.isPickerOpen(S)
-      or S._pathPrompt or S.mapTilesetPicker then
+  if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
+      or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker then
     Kit.blockClicks = true
   end
   RegList.clearNav(S)
@@ -1067,8 +1069,9 @@ function App.draw()
     W - 20 * s, statusTy, PAL.faint)
 
   -- Re-enable hits so modals themselves can receive clicks.
+  -- Upper modals (color wheel / custom-palette ask) block the ones below.
   if PalettePicker.isOpen(S) then
-    Kit.blockClicks = false
+    Kit.blockClicks = ColorWheel.isOpen(S) or PaletteEdit.isOpen(S)
     PalettePicker.draw(S, 0, 0, W, H)
   end
   if BattleAnims.isPickerOpen(S) then
@@ -1082,6 +1085,14 @@ function App.draw()
   if S._pathPrompt then
     Kit.blockClicks = false
     drawPathPrompt(W, H, s)
+  end
+  if ColorWheel.isOpen(S) then
+    Kit.blockClicks = PaletteEdit.isOpen(S)
+    ColorWheel.draw(S, 0, 0, W, H)
+  end
+  if PaletteEdit.isOpen(S) then
+    Kit.blockClicks = false
+    PaletteEdit.draw(S, 0, 0, W, H)
   end
 
   Kit.endFrame()
@@ -1111,6 +1122,8 @@ function App.keypressed(key)
       return
     end
   end
+  if PaletteEdit.isOpen(S) and PaletteEdit.keypressed(S, key) then return end
+  if ColorWheel.isOpen(S) and ColorWheel.keypressed(S, key) then return end
   if Kit.keypressed(key) then return end
   if key == "escape" then
     if PalettePicker.keypressed(S, key) then return end
@@ -1133,8 +1146,8 @@ function App.keypressed(key)
   if key == "]" or key == "tab" then return cycleTab(1) end
   if key == "[" then return cycleTab(-1) end
   -- Modals own keyboard (except Kit textfields / Esc above).
-  if PalettePicker.isOpen(S) or BattleAnims.isPickerOpen(S)
-      or S.mapTilesetPicker or S._pathPrompt then
+  if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
+      or BattleAnims.isPickerOpen(S) or S.mapTilesetPicker or S._pathPrompt then
     return
   end
   -- Hovered scrollbar first; otherwise list selection / panel keys.
@@ -1162,7 +1175,8 @@ function App.mousereleased() end
 
 function App.wheelmoved(_, y)
   -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.
-  if S and (S.mapTilesetPicker or PalettePicker.isOpen(S) or S._pathPrompt) then
+  if S and (S.mapTilesetPicker or PalettePicker.isOpen(S) or ColorWheel.isOpen(S)
+      or PaletteEdit.isOpen(S) or S._pathPrompt) then
     wheelY = wheelY + (y or 0)
     return
   end

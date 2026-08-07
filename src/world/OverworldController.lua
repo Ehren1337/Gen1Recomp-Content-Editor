@@ -757,8 +757,12 @@ function OverworldState:pushBattle(battle)
   local enemyLevel = battle.enemy and battle.enemy.mon and battle.enemy.mon.level or 0
   -- the battle theme starts with the wipe, not after it
   -- (audio/play_battle_music.asm runs before the transition)
-  if battle.computeMusicKind then
-    require("src.core.Music").playBattle(Game.data, battle:computeMusicKind())
+  if battle.playBattleMusic then
+    battle.musicKind = battle:computeMusicKind()
+    battle:playBattleMusic()
+  elseif battle.computeMusicKind then
+    require("src.core.Music").playBattle(Game.data, battle:computeMusicKind(),
+      battle.trainer and battle.trainer.id)
   end
 
   -- The fade back in from white on the way out is BattleState:finish()'s

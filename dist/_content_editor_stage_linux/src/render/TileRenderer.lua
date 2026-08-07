@@ -500,8 +500,11 @@ function TileRenderer.new(map, data)
     end
   end
   -- a full-color atlas colors everything it paints, ring and border fill
-  -- included, so every draw entry point claims its rect out of the pass
-  self.trueColor = map.tileset.trueColor or nil
+  -- included, so every draw entry point claims its rect out of the pass.
+  -- map.def.trueColor wins so a map can opt out of SGB remap without
+  -- forcing every other map that shares the tileset sheet.
+  self.trueColor = (map.def and map.def.trueColor)
+    or map.tileset.trueColor or nil
 
   self.quads = {}
   for t = 0, (iw / 8) * (ih / 8) - 1 do

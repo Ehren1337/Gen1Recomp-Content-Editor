@@ -3,6 +3,8 @@
 local Kit = require("Kit")
 local Theme = require("Theme")
 local Preview = require("Preview")
+local ColorWheel = require("ColorWheel")
+local PaletteEdit = require("PaletteEdit")
 local PAL = Theme.PAL
 
 local PalettePicker = {}
@@ -17,7 +19,8 @@ function PalettePicker.close(S)
   Kit.blur()
 end
 
--- opts: current, allowClear, clearLabel, title, onPick(id|nil)
+-- opts: current, allowClear, clearLabel, title, onPick(id|nil),
+--       owner = { kind, entityId, entityLabel, assign(id) } for custom-palette ask
 function PalettePicker.open(S, opts)
   opts = opts or {}
   local cur = opts.current
@@ -32,6 +35,7 @@ function PalettePicker.open(S, opts)
     clearLabel = opts.clearLabel or "(default)",
     title = opts.title or "CHOOSE PALETTE",
     onPick = opts.onPick,
+    owner = opts.owner,
   }
 end
 
@@ -66,6 +70,7 @@ function PalettePicker.row(S, opts)
       clearLabel = opts.clearLabel or opts.emptyLabel,
       title = opts.title,
       onPick = opts.onPick,
+      owner = opts.owner,
     })
   end
   if effective then
@@ -200,14 +205,86 @@ function PalettePicker.draw(S, x, y, w, h)
   local swH = 28 * s
   if focusId then
     Preview.drawNamedSwatches(S, focusId, prevX, swY, prevW, swH)
-    local colors = Preview.paletteColors(S, focusId) or {}
-    local cy2 = swY + swH + 12 * s
+    local colors = Preview.paletteColors(S, focusId) or {
+      { 248, 248, 248 }, { 168, 168, 168 }, { 88, 88, 88 }, { 16, 16, 16 },
+    }
+    local cy2 = swY + swH + 10 * s
+    local owned = S.project and S.project.palettes and S.project.palettes[focusId]
+    Kit.text("micro", owned and "edit colors (mod)" or "edit colors (clones into mod)",
+      prevX, cy2, PAL.faint)
+    cy2 = cy2 + 16 * s
+    local fieldH = 26 * s
+    local owner = p.owner
+    local function writeSlot(pal, slot, rgb)
+      local rec = Preview.ensureProjectPalette(S, pal)
+      if not rec then return end
+      rec.colors = rec.colors or {}
+      rec.colors[slot] = {
+        math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+        math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+        math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+      }
+      Preview.invalidate()
+      local okApp, App = pcall(require, "App")
+      if okApp and App.markDirty then App.markDirty() end
+    end
+    local function editSlot(slot, rgbOrOpenWheel)
+      local function go(resolved)
+        focusId = resolved
+        p.focus = resolved
+        p.current = resolved
+        if rgbOrOpenWheel == true then
+          local cols = Preview.paletteColors(S, resolved) or colors
+          ColorWheel.open(S, {
+            title = "C" .. slot .. " · " .. tostring(resolved),
+            color = cols[slot] or colors[slot],
+            onChange = function(rgb) writeSlot(resolved, slot, rgb) end,
+            onApply = function(rgb) writeSlot(resolved, slot, rgb) end,
+          })
+        else
+          writeSlot(resolved, slot, rgbOrOpenWheel)
+        end
+      end
+      if owner and owner.kind and owner.entityId then
+        PaletteEdit.request(S, {
+          kind = owner.kind,
+          entityId = owner.entityId,
+          entityLabel = owner.entityLabel or owner.entityId,
+          paletteId = focusId,
+          assign = function(id)
+            if owner.assign then owner.assign(id) end
+            p.current = id
+            p.focus = id
+          end,
+          thenFn = go,
+        })
+      else
+        go(focusId)
+      end
+    end
     for i = 1, 4 do
       local c = colors[i] or { 40, 40, 40 }
-      Kit.text("micro", string.format("C%d  %d,%d,%d", i,
-          c[1] or 0, c[2] or 0, c[3] or 0),
-        prevX, cy2, PAL.muted)
-      cy2 = cy2 + 16 * s
+      local cur = string.format("%d,%d,%d", c[1] or 0, c[2] or 0, c[3] or 0)
+      Kit.text("micro", "C" .. i, prevX, cy2 + 6 * s, PAL.caption)
+      local sw = 20 * s
+      love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+        (c[3] or 0) / 255, 1)
+      love.graphics.rectangle("fill", prevX + 20 * s, cy2 + 3 * s, sw, fieldH - 6 * s,
+        3 * s, 3 * s)
+      love.graphics.setColor(1, 1, 1, 0.4)
+      love.graphics.rectangle("line", prevX + 20 * s, cy2 + 3 * s, sw, fieldH - 6 * s,
+        3 * s, 3 * s)
+      love.graphics.setColor(1, 1, 1, 1)
+      if Kit.press(prevX + 20 * s, cy2 + 3 * s, sw, fieldH - 6 * s) then
+        editSlot(i, true)
+      end
+      local v = Kit.textfield("pal_pick_c" .. i, prevX + 20 * s + sw + 6 * s, cy2,
+        prevW - 20 * s - sw - 6 * s, fieldH, cur, "r,g,b")
+      if v ~= cur then
+        local r, g, b = tostring(v):match("(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
+        if r then editSlot(i, { tonumber(r), tonumber(g), tonumber(b) }) end
+      end
+      cy2 = cy2 + fieldH + 4 * s
     end
     if Kit.button(prevX, py + ph - pad - 32 * s, prevW, 30 * s, "Use palette", {
         kind = "primary",

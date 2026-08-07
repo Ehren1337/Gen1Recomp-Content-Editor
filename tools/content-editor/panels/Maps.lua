@@ -1125,7 +1125,42 @@ local function mapPaletteName(S, mapDef)
   return Preview.mapPaletteName(S, mapDef or resolveMapDef(S, S.mapId))
 end
 
-local function drawBlockThumb(S, tilesetId, blockId, x, y, size)
+-- TrueColor: map flag or the tileset's own trueColor (GFX / stock engine).
+local function mapUsesTrueColor(S, mapDef)
+  mapDef = mapDef or resolveMapDef(S, S.mapId)
+  if not mapDef then return false end
+  if mapDef.trueColor then return true end
+  local ts = tilesetDef(S, mapDef.tileset)
+  return ts and ts.trueColor and true or false
+end
+
+-- Palette id for SGB remap, or nil when TrueColor (skip remap).
+local function mapPreviewPalette(S, mapDef)
+  mapDef = mapDef or resolveMapDef(S, S.mapId)
+  if mapUsesTrueColor(S, mapDef) then return nil end
+  return mapPaletteName(S, mapDef)
+end
+
+-- Stamp tileset.trueColor so stock Gen1Recomp (tileset-only) matches the map flag.
+local function syncTilesetTrueColor(S, map, on, App)
+  if not map then return end
+  local ts
+  if on then
+    -- Prefer a map-local slot so enabling TrueColor does not recolor every
+    -- outdoor map that still shares OVERWORLD.
+    ts = ensureTerrainTileset(S, map, App)
+  else
+    local tid = map.tileset or ""
+    ts = S.project.tilesets and S.project.tilesets[tid]
+    if not ts then return end
+  end
+  if not ts then return end
+  ts.trueColor = on and true or nil
+  S._liveTilesets = nil
+  MapLoader.invalidateAll()
+end
+
+local function drawBlockThumb(S, tilesetId, blockId, x, y, size, mapDef)
   local ts = tilesetDef(S, tilesetId)
   love.graphics.setColor(1, 1, 1, 1)
   if not (ts and ts.blocks and ts.image) then
@@ -1147,7 +1182,8 @@ local function drawBlockThumb(S, tilesetId, blockId, x, y, size)
   local iw, ih = img:getDimensions()
   local tileDraw = size / 4
   local scale = tileDraw / 8
-  local shaded = Preview.pushPaletteShader(S, mapPaletteName(S))
+  local pal = mapPreviewPalette(S, mapDef)
+  local shaded = pal and Preview.pushPaletteShader(S, pal)
   for row = 0, 3 do
     for col = 0, 3 do
       local tid = block[row * 4 + col + 1] or 0
@@ -1184,7 +1220,7 @@ local function drawTilesetPreview(S, tilesetId, x, y, w, h)
 
   local blankAtlas = false
   if ts.image then
-    Preview.draw(S, ts.image, sx, sy, sheetW, sheetH, mapPaletteName(S))
+    Preview.draw(S, ts.image, sx, sy, sheetW, sheetH, mapPreviewPalette(S))
     -- Old TMX imports wrote a fully transparent atlas (~hundreds of bytes for
     -- a large sheet). Hint that Replace PNG / re-Import TMX is needed.
     local resolved = select(1, Preview.resolve(S, ts.image))
@@ -1462,8 +1498,8 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
       if ok and loaded and loaded.renderer and loaded.renderer.drawMapOnly then
         love.graphics.push()
         love.graphics.translate(p.x, p.y)
-        local pal = mapPaletteName(S, def)
-        local shaded = Preview.pushPaletteShader(S, pal)
+        local pal = mapPreviewPalette(S, def)
+        local shaded = pal and Preview.pushPaletteShader(S, pal)
         love.graphics.setColor(1, 1, 1, sel and 1 or 0.92)
         -- Full map body in local space; cam 0,0 shows the whole sheet.
         loaded.renderer:drawMapOnly(0, 0, p.w, p.h)
@@ -2409,8 +2445,8 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         prepareLiveMap(S, nb.id, nb.def)
         local nok, nmap = pcall(MapLoader.load, S.data, nb.id)
         if nok and nmap and nmap.renderer and nmap.renderer.drawMapOnly then
-          local nPal = mapPaletteName(S, nb.def)
-          local nShaded = Preview.pushPaletteShader(S, nPal)
+          local nPal = mapPreviewPalette(S, nb.def)
+          local nShaded = nPal and Preview.pushPaletteShader(S, nPal)
           love.graphics.setColor(1, 1, 1, 0.75)
           nmap.renderer:drawMapOnly(camX - nb.ox, camY - nb.oy, worldW, worldH)
           Preview.popPaletteShader(nShaded)
@@ -2423,8 +2459,8 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       end
     end
 
-    local palName = mapPaletteName(S, mapDef)
-    local shaded = Preview.pushPaletteShader(S, palName)
+    local palName = mapPreviewPalette(S, mapDef)
+    local shaded = palName and Preview.pushPaletteShader(S, palName)
     love.graphics.setColor(1, 1, 1, 1)
     map.renderer:draw(camX, camY, worldW, worldH)
     Preview.popPaletteShader(shaded)
@@ -2588,25 +2624,42 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     S._lastPaintCell = nil
   end
 
-  local palName = mapPaletteName(S, mapDef)
   local swH = 12 * s
   local swX, swY = vx + 6 * s, vy + vh - 34 * s
-  Preview.drawNamedSwatches(S, palName, swX, swY, 72 * s, swH)
-  Kit.text("micro", palName, vx + 84 * s, swY + 1 * s, PAL.faint)
-  if Kit.press(swX, swY, 160 * s, swH + 2 * s) then
-    PalettePicker.open(S, {
-      current = mapDef.palette,
-      allowClear = true,
-      clearLabel = "(inherit FieldDefaults)",
-      title = "MAP SGB PALETTE",
-      onPick = function(id)
-        local owned = ensureOwned(S, mapDef.id or S.mapId)
-        if owned then
-          owned.palette = id
-          App.markDirty()
-        end
-      end,
-    })
+  if mapUsesTrueColor(S, mapDef) then
+    Kit.text("micro", "true color", swX, swY + 1 * s, PAL.yellow)
+  else
+    local palName = mapPaletteName(S, mapDef)
+    Preview.drawNamedSwatches(S, palName, swX, swY, 72 * s, swH)
+    Kit.text("micro", palName, vx + 84 * s, swY + 1 * s, PAL.faint)
+    if Kit.press(swX, swY, 160 * s, swH + 2 * s) then
+      local mid = mapDef.id or S.mapId
+      PalettePicker.open(S, {
+        current = mapDef.palette,
+        allowClear = true,
+        clearLabel = "(inherit FieldDefaults)",
+        title = "MAP SGB PALETTE",
+        onPick = function(id)
+          local owned = ensureOwned(S, mid)
+          if owned then
+            owned.palette = id
+            App.markDirty()
+          end
+        end,
+        owner = {
+          kind = "map",
+          entityId = mid,
+          entityLabel = mid,
+          assign = function(id)
+            local owned = ensureOwned(S, mid)
+            if owned then
+              owned.palette = id
+              App.markDirty()
+            end
+          end,
+        },
+      })
+    end
   end
   local hint
   local ts = tostring(mapDef.tileset or "?")
@@ -3179,7 +3232,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     local indoor = S.data and S.data.field and S.data.field.indoorEncounters
     if indoor and indoor.firstIndoorMap then firstIndoor = indoor.firstIndoorMap end
     if (map.index or 0) >= firstIndoor and Map.isOutside(map) then
-      Kit.text("micro", "outside: grass/water only",
+      Kit.text("micro", "outside: grass/water (mod hook on Save)",
         fx + 88 * s, fy + 6 * s, PAL.faint)
     elseif (map.index or 0) >= firstIndoor then
       Kit.text("micro", "indoor index: wilds on EVERY tile",
@@ -3299,26 +3352,66 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end) then return py end
 
-  if prow("SGB palette", function(fx, fy, fw, fh_)
-    PalettePicker.row(S, {
-      x = fx, y = fy, w = fw, h = fh_,
-      current = map.palette or "",
-      effective = mapPaletteName(S, map),
-      emptyLabel = "(inherit)",
-      clearLabel = "(inherit FieldDefaults)",
-      allowClear = true,
-      title = "MAP SGB PALETTE",
-      tooltip = "Choose this map's SGB background palette",
-      onPick = function(id)
-        map = mutate()
-        map.palette = id
-        App.markDirty()
-      end,
-    })
+  if prow("TrueColor", function(fx, fy, fw, fh_)
+    local on = mapUsesTrueColor(S, map)
+    if Kit.chip(fx, fy, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+      map = mutate()
+      local newOn = not on
+      map.trueColor = newOn and true or nil
+      syncTilesetTrueColor(S, map, newOn, App)
+      Preview.invalidate()
+      App.markDirty()
+      S.status = newOn
+        and "TrueColor ON — raw tileset PNG (SGB palette ignored)"
+        or "TrueColor OFF — SGB palette remap"
+    end
   end) then return py end
-  Kit.text("micro", "effective: " .. mapPaletteName(S, map),
-    px + 10 * s, py, PAL.faint)
-  py = py + 14 * s
+  do
+    local on = mapUsesTrueColor(S, map)
+    Kit.text("micro",
+      on and "full-color tileset — skips 4-shade palette remap"
+        or "OFF = grayscale tiles remapped through SGB palette",
+      px + 10 * s, py, PAL.faint)
+    py = py + 14 * s
+  end
+
+  if mapUsesTrueColor(S, map) then
+    if prow("SGB palette", function(fx, fy, fw, fh_)
+      Kit.text("small", "(ignored — TrueColor)", fx, fy + 6 * s, PAL.faint)
+    end) then return py end
+  else
+    if prow("SGB palette", function(fx, fy, fw, fh_)
+      local mid = map.id or S.mapId
+      PalettePicker.row(S, {
+        x = fx, y = fy, w = fw, h = fh_,
+        current = map.palette or "",
+        effective = mapPaletteName(S, map),
+        emptyLabel = "(inherit)",
+        clearLabel = "(inherit FieldDefaults)",
+        allowClear = true,
+        title = "MAP SGB PALETTE",
+        tooltip = "Choose this map's SGB background palette",
+        onPick = function(id)
+          map = mutate()
+          map.palette = id
+          App.markDirty()
+        end,
+        owner = {
+          kind = "map",
+          entityId = mid,
+          entityLabel = mid,
+          assign = function(id)
+            map = mutate()
+            map.palette = id
+            App.markDirty()
+          end,
+        },
+      })
+    end) then return py end
+    Kit.text("micro", "effective: " .. mapPaletteName(S, map),
+      px + 10 * s, py, PAL.faint)
+    py = py + 14 * s
+  end
 
   if prow("Music", function(fx, fy, fw, fh_)
     local cur, ownedSong = mapSongFor(S, map.id)

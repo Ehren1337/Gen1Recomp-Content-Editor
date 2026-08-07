@@ -6,6 +6,7 @@ local State = require("State")
 local Search = require("Search")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local PaletteEdit = require("PaletteEdit")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
 local RegList = require("RegList")
@@ -227,6 +228,7 @@ local function deepCloneTrainer(tr, id)
     pic = tr.pic,
     basePic = tr.basePic,
     paletteSource = tr.paletteSource,
+    trueColor = tr.trueColor,
     source = tr.source,
     aiMods = tr.aiMods and { unpack(tr.aiMods) } or nil,
     aiClass = tr.aiClass,
@@ -395,9 +397,10 @@ function Trainers.draw(S, x, y, w, h, App)
       S.trainerId = id
       S.trainerPartyIndex = 1
     end
+    local rowPal = Preview.trainerPaletteName(S, rowTr)
+    if rowTr and rowTr.trueColor then rowPal = false end
     Preview.draw(S, Preview.trainerPicPath(S, rowTr),
-      x + 10 * s, ry + (rowH - thumb) / 2, thumb, thumb,
-      Preview.trainerPaletteName(S, rowTr))
+      x + 10 * s, ry + (rowH - thumb) / 2, thumb, thumb, rowPal)
     local textX = x + 14 * s + thumb
     Kit.text("micro",
       Kit.ellipsize("micro", id, math.max(8, rowW - (textX - scrollX) - 6 * s)),
@@ -492,12 +495,20 @@ function Trainers.draw(S, x, y, w, h, App)
 
   if S.trainerSection == "basics" then
     local prevW = 112 * s
-    local trPal = Preview.trainerPaletteName(S, tr)
+    -- false = skip SGB remap (trueColor); string = palette id.
+    -- Do not use `x and false or y` — in Lua that always yields y.
+    local trPal = false
+    if not tr.trueColor then trPal = Preview.trainerPaletteName(S, tr) end
     local picX = viewX + viewW - prevW
     Preview.draw(S, Preview.trainerPicPath(S, tr),
       picX, fy, prevW, prevW, trPal)
-    Preview.drawNamedSwatches(S, trPal, picX, fy + prevW + 4 * s, prevW, 12 * s)
+    if tr.trueColor then
+      Kit.text("micro", "true color", picX, fy + prevW + 4 * s, PAL.yellow)
+    else
+      Preview.drawNamedSwatches(S, trPal, picX, fy + prevW + 4 * s, prevW, 12 * s)
+    end
     local function openTrPal()
+      local eid = S.trainerId or tr.id
       PalettePicker.open(S, {
         current = tr.paletteSource,
         allowClear = true,
@@ -509,9 +520,22 @@ function Trainers.draw(S, x, y, w, h, App)
           Preview.invalidate()
           App.markDirty()
         end,
+        owner = {
+          kind = "trainer",
+          entityId = eid,
+          entityLabel = tr.name or eid,
+          assign = function(id)
+            tr = mutate()
+            tr.paletteSource = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+        },
       })
     end
-    if Kit.press(picX, fy, prevW, prevW + 18 * s) then openTrPal() end
+    if not tr.trueColor and Kit.press(picX, fy, prevW, prevW + 18 * s) then
+      openTrPal()
+    end
     local textW = viewW - prevW - 16 * s
 
     row("ID", function(fx, fy_, fw, fh_)
@@ -628,35 +652,78 @@ function Trainers.draw(S, x, y, w, h, App)
     end
 
     do
+      Kit.text("small", "TrueColor", viewX, fy + 6 * s, PAL.caption)
+      local fx = viewX + labelW
+      local on = tr.trueColor and true or false
+      if Kit.chip(fx, fy, 80 * s, fh, on and "YES" or "NO", on, PAL.yellow) then
+        tr = mutate()
+        tr.trueColor = not on
+        if not tr.trueColor then tr.trueColor = nil end
+        Preview.invalidate()
+        App.markDirty()
+      end
+      fy = fy + fh + 2 * s
+      Kit.text("micro",
+        on and "full-color PNG — skips 4-shade palette remap"
+          or "OFF = grayscale pic remapped through Palette",
+        viewX, fy, PAL.faint)
+      fy = fy + 16 * s
+    end
+
+    do
       Kit.text("small", "Palette", viewX, fy + 6 * s, PAL.caption)
       local fx = viewX + labelW
       local fw = math.min(viewW - labelW - 12 * s, textW - labelW)
-      PalettePicker.row(S, {
-        x = fx, y = fy, w = fw, h = fh,
-        current = tr.paletteSource or "",
-        effective = Preview.trainerPaletteName(S, tr),
-        emptyLabel = "(MEWMON)",
-        clearLabel = "(MEWMON default)",
-        allowClear = true,
-        title = "TRAINER PIC PALETTE",
-        tooltip = "SGB palette for this trainer's battle pic",
-        onPick = function(id)
-          tr = mutate()
-          tr.paletteSource = id
-          Preview.invalidate()
-          App.markDirty()
-        end,
-      })
-      fy = fy + fh + 2 * s
-      local hint = (tr.paletteSource and tr.paletteSource ~= "")
-        and ("OBJ / pic palette: " .. tr.paletteSource)
-        or "empty = MEWMON battle portrait palette"
-      if tr.source and not tr.paletteSource then
-        hint = hint .. "  (ROM " .. tostring(tr.source) .. ")"
+      if tr.trueColor then
+        Kit.text("small", "(ignored — TrueColor)", fx, fy + 6 * s, PAL.faint)
+        fy = fy + fh + 8 * s
+      else
+        local eid = S.trainerId or tr.id
+        PalettePicker.row(S, {
+          x = fx, y = fy, w = fw, h = fh,
+          current = tr.paletteSource or "",
+          effective = Preview.trainerPaletteName(S, tr),
+          emptyLabel = "(MEWMON)",
+          clearLabel = "(MEWMON default)",
+          allowClear = true,
+          title = "TRAINER PIC PALETTE",
+          tooltip = "SGB palette for this trainer's battle pic",
+          onPick = function(id)
+            tr = mutate()
+            tr.paletteSource = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+          owner = {
+            kind = "trainer",
+            entityId = eid,
+            entityLabel = tr.name or eid,
+            assign = function(id)
+              tr = mutate()
+              tr.paletteSource = id
+              Preview.invalidate()
+              App.markDirty()
+            end,
+          },
+        })
+        fy = fy + fh + 8 * s
+        fy = PaletteEdit.drawColorRows(S, {
+          kind = "trainer",
+          entityId = eid,
+          entityLabel = tr.name or eid,
+          paletteId = Preview.trainerPaletteName(S, tr),
+          assign = function(id)
+            tr = mutate()
+            tr.paletteSource = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+          App = App,
+          x = viewX, y = fy, labelW = labelW,
+          fieldW = fw, fh = fh,
+          fieldPrefix = "tr_pal_c",
+        })
       end
-      Kit.text("micro", Kit.ellipsize("micro", hint, fw + labelW),
-        viewX, fy, PAL.faint)
-      fy = fy + 16 * s
     end
 
     Kit.text("micro",
@@ -862,8 +929,10 @@ function Trainers.draw(S, x, y, w, h, App)
       local speciesDef = (S.project.pokemon and S.project.pokemon[mon.species])
         or (S.data and S.data.pokemon and S.data.pokemon[mon.species])
       if speciesDef and speciesDef.spriteFront then
+        local spPal = Preview.monPaletteName(S, speciesDef, mon.species)
+        if speciesDef.trueColor then spPal = false end
         Preview.draw(S, speciesDef.spriteFront, viewX, fy, prevSize, prevSize,
-          Preview.monPaletteName(S, speciesDef, mon.species))
+          spPal)
       else
         Preview.draw(S, nil, viewX, fy, prevSize, prevSize)
       end

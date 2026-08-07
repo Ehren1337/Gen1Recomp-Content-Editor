@@ -7,6 +7,7 @@ local Search = require("Search")
 local TypeIds = require("TypeIds")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local PaletteEdit = require("PaletteEdit")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
 local PAL = Theme.PAL
@@ -173,7 +174,14 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   local previewBottom = fy + prevSize + 30 * s
   local iconX = formX + formW - prevSize * 2 - gap - iconSize - gap
   local palName = Preview.monPaletteName(S, mon, S.pokemonId)
+  -- false = skip SGB remap. Avoid `x and false or y` (always yields y in Lua).
+  local drawPal = palName
+  if mon.trueColor then drawPal = false end
+  local iconPal = palName
+  if Preview.pokemonIconTrueColor(S, mon, S.pokemonId) then iconPal = false end
   local function openMonPal()
+    if mon.trueColor then return end
+    local eid = S.pokemonId or mon.id
     PalettePicker.open(S, {
       current = mon.palette,
       allowClear = true,
@@ -185,18 +193,35 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
         Preview.invalidate()
         App.markDirty()
       end,
+      owner = {
+        kind = "pokemon",
+        entityId = eid,
+        entityLabel = mon.name or eid,
+        assign = function(id)
+          mon = mutate()
+          mon.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+      },
     })
   end
-  Preview.drawPokemonIcon(S, mon, iconX, fy, iconSize, iconSize, S.pokemonId, palName)
+  Preview.drawPokemonIcon(S, mon, iconX, fy, iconSize, iconSize, S.pokemonId, iconPal)
   if Kit.press(iconX, fy, iconSize, iconSize) then openMonPal() end
   local frontX = formX + formW - prevSize * 2 - gap
-  Preview.draw(S, mon.spriteFront, frontX, fy, prevSize, prevSize, palName)
-  Preview.draw(S, mon.spriteBack, formX + formW - prevSize, fy, prevSize, prevSize, palName)
+  -- drawPal false = skip SGB remap (trueColor).
+  Preview.draw(S, mon.spriteFront, frontX, fy, prevSize, prevSize, drawPal)
+  Preview.draw(S, mon.spriteBack, formX + formW - prevSize, fy, prevSize, prevSize,
+    drawPal)
   if Kit.press(frontX, fy, prevSize * 2 + gap, prevSize) then openMonPal() end
-  Preview.drawNamedSwatches(S, palName, frontX, fy + prevSize + 2 * s,
-    prevSize * 2 + gap, 10 * s)
-  if Kit.press(frontX, fy + prevSize + 2 * s, prevSize * 2 + gap, 12 * s) then
-    openMonPal()
+  if mon.trueColor then
+    Kit.text("micro", "true color", frontX, fy + prevSize + 2 * s, PAL.yellow)
+  else
+    Preview.drawNamedSwatches(S, palName, frontX, fy + prevSize + 2 * s,
+      prevSize * 2 + gap, 10 * s)
+    if Kit.press(frontX, fy + prevSize + 2 * s, prevSize * 2 + gap, 12 * s) then
+      openMonPal()
+    end
   end
   Kit.text("micro", "icon", iconX + 4 * s, fy + iconSize + 2 * s, PAL.faint)
   Kit.text("micro", "front", frontX + 4 * s, fy + prevSize + 14 * s, PAL.faint)
@@ -334,6 +359,7 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
       mon = mutate()
       mon.trueColor = not on
       if not mon.trueColor then mon.trueColor = nil end
+      Preview.invalidate()
       App.markDirty()
     end
   end)
@@ -343,53 +369,131 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     if v ~= joined then mon = mutate(); mon.level1Moves = parseMoveList(v) end
   end)
   row("Cry", function(fx, fy_, fw, fh_)
+    -- Prefer a custom file under audio.cries[species]; else mon.cry alias.
+    local sid = S.pokemonId or mon.id
+    local projCry = S.project and S.project.audio and S.project.audio.cries
+      and S.project.audio.cries[sid]
+    local filePath = (type(projCry) == "table" and type(projCry.file) == "string"
+      and projCry.file) or ""
     local cur = mon.cry or ""
-    local cries = {}
-    if S.project and S.project.audio and S.project.audio.cries then
-      for id in pairs(S.project.audio.cries) do cries[#cries + 1] = id end
-    end
-    if S.data and S.data.audio and S.data.audio.cries then
-      local seen = {}
-      for _, id in ipairs(cries) do seen[id] = true end
-      for id in pairs(S.data.audio.cries) do
-        if not seen[id] then cries[#cries + 1] = id end
+    local label = (filePath ~= "" and filePath)
+      or (cur ~= "" and ("alias " .. cur))
+      or "(species / pick)"
+    local browseW = 90 * s
+    local aliasW = 70 * s
+    local gap = 4 * s
+    local pathW = math.max(60 * s, fw - browseW - aliasW - gap * 2)
+    Kit.text("micro", Kit.ellipsize("micro", label, pathW - 4 * s),
+      fx, fy_ + 8 * s, PAL.muted)
+    if Kit.button(fx + pathW + gap, fy_, aliasW, fh_, "Alias", {
+        kind = "ghost", font = "small",
+        tooltip = "Cycle a vanilla cry id (ABRA, …) for this species",
+      }) then
+      local cries = {}
+      if S.project and S.project.audio and S.project.audio.cries then
+        for id in pairs(S.project.audio.cries) do cries[#cries + 1] = id end
+      end
+      if S.data and S.data.audio and S.data.audio.cries then
+        local seen = {}
+        for _, id in ipairs(cries) do seen[id] = true end
+        for id in pairs(S.data.audio.cries) do
+          if not seen[id] then cries[#cries + 1] = id end
+        end
+      end
+      table.sort(cries)
+      if #cries > 0 then
+        mon = mutate()
+        mon.cry = cycle(cries, cur)
+        if mon.cry == "" then mon.cry = nil end
+        -- Drop custom file so the alias is what plays.
+        if S.project.audio and S.project.audio.cries then
+          S.project.audio.cries[sid] = nil
+        end
+        App.markDirty()
       end
     end
-    table.sort(cries)
-    local bw = math.max(80 * s, fw - 88 * s)
-    if Kit.button(fx, fy_, bw, fh_,
-        Kit.ellipsize("small", cur ~= "" and cur or "(species)", bw - 8 * s),
-        { kind = "ghost" }) and #cries > 0 then
+    if Kit.button(fx + pathW + gap + aliasW + gap, fy_, browseW, fh_, "Browse", {
+        kind = "ghost", font = "small",
+        tooltip = "Import a .wav / .ogg / .mp3 from your PC as this species' cry",
+      }) then
       mon = mutate()
-      mon.cry = cycle(cries, cur)
-      if mon.cry == "" then mon.cry = nil end
-      App.markDirty()
-    end
-    local typed = field(S, App, "pk_cry", fx + bw + 6 * s, fy_,
-      math.max(60 * s, fw - bw - 6 * s), fh_, cur, "CRY_ID")
-    if typed ~= cur then
-      mon = mutate()
-      mon.cry = (typed ~= "" and typed) or nil
+      local id = sid
+      App.pickFile("Cry audio", "Audio|*.ogg;*.wav;*.mp3|All|*.*",
+        function(picked)
+          if not picked or picked == "" then return end
+          local m = S.project.pokemon[id]
+          if not m then return end
+          S.project.audio = S.project.audio or {}
+          S.project.audio.cries = S.project.audio.cries or {}
+          App.importToMod(picked, nil, function(rel)
+            local hadVanilla = S.data and S.data.audio and S.data.audio.cries
+              and S.data.audio.cries[id] ~= nil
+            S.project.audio.cries[id] = {
+              file = rel,
+              _isNew = not hadVanilla,
+            }
+            -- Species-keyed file is enough for Sound.playCry; clear alias.
+            m.cry = nil
+            App.markDirty()
+            S.status = "Cry -> " .. tostring(rel)
+          end)
+        end)
     end
   end)
-  row("Palette", function(fx, fy_, fw, fh_)
-    PalettePicker.row(S, {
-      x = fx, y = fy_, w = fw, h = fh_,
-      current = mon.palette or "",
-      effective = Preview.monPaletteName(S, mon, S.pokemonId),
-      emptyLabel = "(pack default)",
-      clearLabel = "(pack default / MEWMON)",
-      allowClear = true,
-      title = "POKEMON SPRITE / ICON PALETTE",
-      tooltip = "SGB palette for battle sprites and icon preview",
-      onPick = function(id)
-        mon = mutate()
-        mon.palette = id
-        Preview.invalidate()
-        App.markDirty()
-      end,
-    })
-  end)
+  if mon.trueColor then
+    row("Palette", function(fx, fy_, fw, fh_)
+      Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+    end)
+  else
+    row("Palette", function(fx, fy_, fw, fh_)
+      local eid = S.pokemonId or mon.id
+      PalettePicker.row(S, {
+        x = fx, y = fy_, w = fw, h = fh_,
+        current = mon.palette or "",
+        effective = Preview.monPaletteName(S, mon, eid),
+        emptyLabel = "(pack default)",
+        clearLabel = "(pack default / MEWMON)",
+        allowClear = true,
+        title = "POKEMON SPRITE / ICON PALETTE",
+        tooltip = "SGB palette for battle sprites and icon preview",
+        onPick = function(id)
+          mon = mutate()
+          mon.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+        owner = {
+          kind = "pokemon",
+          entityId = eid,
+          entityLabel = mon.name or eid,
+          assign = function(id)
+            mon = mutate()
+            mon.palette = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+        },
+      })
+    end)
+    do
+      local entityId = S.pokemonId or mon.id
+      fy = PaletteEdit.drawColorRows(S, {
+        kind = "pokemon",
+        entityId = entityId,
+        entityLabel = mon.name or entityId,
+        paletteId = Preview.monPaletteName(S, mon, entityId),
+        assign = function(id)
+          mon = mutate()
+          mon.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+        App = App,
+        x = formX, y = fy, labelW = labelW, fieldW = fieldW, fh = fh,
+        fieldPrefix = "pk_pal_c",
+      })
+    end
+  end
   row("Icon", function(fx, fy_, fw, fh_)
     local _, resolvedName = Preview.pokemonIcon(S, mon, S.pokemonId)
     local cur = iconNameOf(mon)
@@ -428,6 +532,25 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
         end)
     end
   end)
+  do
+    -- Custom PNG icons can opt out of SGB remap independently of battle TrueColor.
+    local customIcon = type(mon.icon) == "table" and type(mon.icon.image) == "string"
+    if customIcon then
+      row("Icon TrueColor", function(fx, fy_, fw, fh_)
+        local on = mon.icon.trueColor and true or false
+        if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+          mon = mutate()
+          if type(mon.icon) ~= "table" then
+            mon.icon = { image = "", frames = 2 }
+          end
+          mon.icon.trueColor = not on
+          if not mon.icon.trueColor then mon.icon.trueColor = nil end
+          Preview.invalidate()
+          App.markDirty()
+        end
+      end)
+    end
+  end
   row("Front PNG", function(fx, fy_, fw, fh_)
     local path = mon.spriteFront or ""
     Kit.text("micro", path ~= "" and path or "(none)", fx, fy_ + 8 * s, PAL.muted)

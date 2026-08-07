@@ -6,6 +6,7 @@ local State = require("State")
 local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
+local ColorWheel = require("ColorWheel")
 local ModIO = require("ModIO")
 local SpriteUtil = require("SpriteUtil")
 local MapLoader = require("src.world.MapLoader")
@@ -297,8 +298,45 @@ function Gfx.draw(S, x, y, w, h, App)
     end
     for i = 1, 4 do
       Kit.text("small", "C" .. i, viewX, fy + 6 * s, PAL.caption)
-      local v = RegList.field(App, "pal_c_" .. i, viewX + 40 * s, fy, viewW - 40 * s, 28 * s,
-        fmtRgb(colors[i]), "r,g,b")
+      local sw = 28 * s
+      local c = colors[i] or { 40, 40, 40 }
+      love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+        (c[3] or 0) / 255, 1)
+      love.graphics.rectangle("fill", viewX + 36 * s, fy + 2 * s, sw, 24 * s, 4 * s, 4 * s)
+      love.graphics.setColor(1, 1, 1, 0.35)
+      love.graphics.rectangle("line", viewX + 36 * s, fy + 2 * s, sw, 24 * s, 4 * s, 4 * s)
+      love.graphics.setColor(1, 1, 1, 1)
+      if Kit.press(viewX + 36 * s, fy + 2 * s, sw, 24 * s) then
+        local slot = i
+        ColorWheel.open(S, {
+          title = "C" .. slot .. " · " .. tostring(id),
+          color = c,
+          onChange = function(rgb)
+            local e = ensure()
+            e.colors = e.colors or colors
+            e.colors[slot] = {
+              math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+              math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+              math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+            }
+            colors[slot] = e.colors[slot]
+            Preview.invalidate()
+          end,
+          onApply = function(rgb)
+            local e = ensure()
+            e.colors = e.colors or colors
+            e.colors[slot] = {
+              math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+              math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+              math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+            }
+            colors[slot] = e.colors[slot]
+            Preview.invalidate()
+          end,
+        })
+      end
+      local v = RegList.field(App, "pal_c_" .. i, viewX + 36 * s + sw + 8 * s, fy,
+        viewW - 36 * s - sw - 8 * s, 28 * s, fmtRgb(colors[i]), "r,g,b")
       local parsed = parseRgb(v, colors[i])
       if fmtRgb(parsed) ~= fmtRgb(colors[i]) then
         local e = ensure()
@@ -424,6 +462,7 @@ function Gfx.draw(S, x, y, w, h, App)
         local e = ensure()
         e.trueColor = not on
         if not e.trueColor then e.trueColor = nil end
+        Preview.invalidate()
         App.markDirty()
       end
     end)

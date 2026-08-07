@@ -302,6 +302,23 @@ function Sound.playPikaCry(data, n)
   return src
 end
 
+-- Resolve which cries-table key to play for a species.  Prefer an explicit
+-- audio.cries[species] entry; otherwise honor pokemon[species].cry as an
+-- alias into that table (content-editor "Cry" field for custom mons).
+local function cryLookup(data, species)
+  local cries = data and data.audio and data.audio.cries
+  if not cries then return nil, nil end
+  local def = cries[species]
+  if def then return species, def end
+  local mon = data.pokemon and data.pokemon[species]
+  local alias = mon and mon.cry
+  if type(alias) == "string" and alias ~= "" and alias ~= species then
+    def = cries[alias]
+    if def then return alias, def end
+  end
+  return nil, nil
+end
+
 -- returns the source (nil headless) so callers that block on the cry
 -- like the original's PlayCry -> WaitForSoundToFinish can poll it
 function Sound.playCry(data, species)
@@ -312,18 +329,19 @@ function Sound.playCry(data, species)
     local src = Sound.playPikaCry(data, 1)
     if src then return src end
   end
-  local cries = data.audio and data.audio.cries
-  local def = cries and cries[species]
+  local cryId, def = cryLookup(data, species)
   if not def then return nil end
+  -- Cache under the species asked for so a mon that aliases ABRA keeps its
+  -- own Source handle; program data still comes from cryId's def.
   local key = "cry:" .. tostring(species)
   local src = cache[key]
   if src == false then return nil end
   if not src then
-    local s, err = newCrySource(data, species, def)
+    local s, err = newCrySource(data, cryId, def)
     if not s then
       cache[key] = false
       reportBadDef("cry", tostring(species),
-        owner(data, "cries", species), err)
+        owner(data, "cries", cryId) or owner(data, "cries", species), err)
       return nil
     end
     s:setVolume(volumeFor(key))
@@ -332,7 +350,7 @@ function Sound.playCry(data, species)
   end
   src:stop()
   src:play()
-  played("cry", species, species)
+  played("cry", cryId, species)
   return src
 end
 

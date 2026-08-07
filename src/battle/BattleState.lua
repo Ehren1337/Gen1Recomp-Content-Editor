@@ -723,9 +723,11 @@ function BattleState.newTrainer(game, oppClass, partyIndex)
   -- MonsterPalettes[0] = PAL_MEWMON -- InitBattleCommon zeroes
   -- wEnemyMonSpecies2 before the intro's SET_PAL_BATTLE
   -- (engine/battle/core.asm:6682, engine/gfx/palettes.asm SetPal_Battle)
+  local trainerTrueColor = self.trainer and self.trainer.trueColor and true or false
   self.trainerPic = getImage(
     BattleState.trainerPicPath(game.data, self.trainer, oppClass, partyIndex),
-    BattleState.trainerPalette(game.data, self.trainer))
+    trainerTrueColor and nil or BattleState.trainerPalette(game.data, self.trainer),
+    trainerTrueColor)
   self.introText = Strings("%s wants\nto fight!", self.trainer.name)
   return self
 end
@@ -1366,6 +1368,31 @@ function BattleState:computeMusicKind()
   return "wild"
 end
 
+-- Per-trainer song from trainers.battleTheme (content editor Theme field).
+-- Nil means use the generic wild/trainer/gym/final kind via Music.playBattle.
+function BattleState:battleThemeSong()
+  local tr = self.trainer
+  if self.kind ~= "trainer" or type(tr) ~= "table" then return nil end
+  local theme = tr.battleTheme
+  if type(theme) == "string" and theme ~= "" then return theme end
+  return nil
+end
+
+-- Start the battle cue: custom trainer theme when set, else kind playlist.
+function BattleState:playBattleMusic()
+  local Music = require("src.core.Music")
+  local kind = self.musicKind or self:computeMusicKind()
+  local trainerId = self.trainer and self.trainer.id
+  local theme = self:battleThemeSong()
+  if theme then
+    Music.play(self.data, theme, true, {
+      reason = "battle", kind = kind, trainerId = trainerId,
+    })
+  else
+    Music.playBattle(self.data, kind, trainerId)
+  end
+end
+
 -- side tables mirror the singles battlers; called before every
 -- battler-switch notification so sides[i].battlers[1] stays honest
 function BattleState:syncSides()
@@ -1417,7 +1444,6 @@ function BattleState:enter()
       .. Strings("%s blacked\nout!", name), blackedOut))
     return
   end
-  local Music = require("src.core.Music")
   self.musicKind = self:computeMusicKind()
   if self.isGymLeader then
     require("src.world.PikachuFollower")
@@ -1427,7 +1453,7 @@ function BattleState:enter()
   -- (audio/play_battle_music.asm runs before the transition, and
   -- Music.play no-ops on the same song); this covers battles pushed
   -- without a transition (link battles, scripted pushes)
-  Music.playBattle(self.data, self.musicKind)
+  self:playBattleMusic()
   -- intro presentation (SlidePlayerAndEnemySilhouettesOnScreen): both
   -- sides slide in; the trainer pics stay up until the send-outs
   -- BATTLE BG "world" drops this battle's opacity so StateStack keeps drawing

@@ -490,6 +490,7 @@ local function drawOverworld(S, x, y, w, h, App)
       e.trueColor = not on
       if not e.trueColor then e.trueColor = nil end
       rec = e
+      Preview.invalidate()
       App.markDirty()
     end
   end)
@@ -510,6 +511,17 @@ local function drawOverworld(S, x, y, w, h, App)
         Preview.invalidate()
         App.markDirty()
       end,
+      owner = {
+        kind = "sprite",
+        entityId = spriteId,
+        entityLabel = spriteId,
+        assign = function(id)
+          local e = ensure()
+          e.paletteSource = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+      },
     })
   end)
 

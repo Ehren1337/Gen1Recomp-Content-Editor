@@ -437,7 +437,8 @@ R.pokemon = {
                             heightM = f.opt(f.num), weightKg = f.opt(f.num),
                             text = f.str }),
     icon = f.opt(f.union{ f.str, f.rec{ image = f.path,
-                                        frames = f.opt(f.int(1)) } }),
+                                        frames = f.opt(f.int(1)),
+                                        trueColor = f.opt(f.bool) } }),
     cry = f.opt(f.id("cries")), palette = f.opt(f.id("palettes")),
     trueColor = f.opt(f.bool),
     -- battle-pic scale overrides for this species' own pics: front is the
@@ -489,11 +490,15 @@ R.items = {
     -- Optional bag/editor art. Gen1 has no per-item icons in ROM; omit it
     -- and UIs fall back to a category sprite (ball / TM clipboard / etc.).
     icon = f.opt(f.union{ f.path, f.rec{ image = f.path,
-                                         frames = f.opt(f.int(1)) } }),
+                                         frames = f.opt(f.int(1)),
+                                         trueColor = f.opt(f.bool) } }),
     -- Optional SGB palette for the item icon preview / custom PNG.
     -- Plain string (same rationale as maps.palette) so ROM-free fixtures
     -- without a palettes table still validate.
     palette = f.opt(f.str),
+    -- Full-color icon PNG: skip the 4-shade SGB remap (same contract as
+    -- pokemon / trainers / maps).
+    trueColor = f.opt(f.bool),
   },
   example = 'mod.content.items:patch("POTION", { price = 100 })',
 }
@@ -514,6 +519,11 @@ R.maps = {
     -- carries no palettes at all, so an id reference would fail validation for
     -- a perfectly good mod wherever there is no imported dataset.
     palette = f.opt(f.str),
+    -- Full-color tileset art: skip the 4-shade SGB remap for this map
+    -- (same contract as pokemon / trainers / tilesets.trueColor).  The
+    -- content editor also stamps tileset.trueColor so stock Gen1Recomp
+    -- TileRenderer (which only reads the tileset flag) honors it in-game.
+    trueColor = f.opt(f.bool),
     -- Content-editor locale: outside / inside / cave (Map.isOutdoor / isOutside).
     environment = f.opt(f.enum{ "outside", "inside", "cave" }),
     outdoor = f.opt(f.bool),
@@ -589,6 +599,10 @@ R.trainers = {
     -- Optional Advanced-mode OBJ palette source for a custom trainer portrait.
     -- It follows the same ROM crosswalk form as sprites.paletteSource.
     paletteSource = f.opt(f.str),
+    -- Full-color PNG: skip the 4-shade SGB remap (same contract as pokemon /
+    -- sprites / tilesets). Stock Gen1Recomp may need the content-editor mod
+    -- hook emit to honor this until the engine reads the field natively.
+    trueColor = f.opt(f.bool),
     -- Reuse a base trainer class's portrait without redistributing its asset.
     basePic = f.opt(f.id("trainers")),
     baseMoney = f.opt(f.int(0)),
@@ -1087,7 +1101,8 @@ R.palettes = {
 -- { image = <bundled file path>, frames? } table of your own art.
 R.icons = {
   semantics = "record", target = "icons.bySpecies",
-  value = f.union{ f.str, f.rec{ image = f.path, frames = f.opt(f.int(1)) } },
+  value = f.union{ f.str, f.rec{ image = f.path, frames = f.opt(f.int(1)),
+                                 trueColor = f.opt(f.bool) } },
   example = 'mod.content.icons:register("MODMON", "QUADRUPED")  -- a built-in name, or { image = mod.assets:path("icon.png"), frames = 2 }',
 }
 

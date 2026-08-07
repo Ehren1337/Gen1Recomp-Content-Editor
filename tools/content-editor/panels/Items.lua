@@ -7,6 +7,7 @@ local Search = require("Search")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local PaletteEdit = require("PaletteEdit")
 local ModIO = require("ModIO")
 local RegList = require("RegList")
 local PAL = Theme.PAL
@@ -428,7 +429,12 @@ function Items.draw(S, x, y, w, h, App)
 
   local prevSize = 72 * s
   local itemPal = Preview.itemPaletteName(S, item)
+  -- false = skip SGB remap. Avoid `x and false or y` (always yields y in Lua).
+  local drawPal = itemPal
+  if item.trueColor then drawPal = false end
   local function openItemPal()
+    if item.trueColor then return end
+    local eid = S.itemId or item.id
     PalettePicker.open(S, {
       current = item.palette,
       allowClear = true,
@@ -440,14 +446,30 @@ function Items.draw(S, x, y, w, h, App)
         Preview.invalidate()
         App.markDirty()
       end,
+      owner = {
+        kind = "item",
+        entityId = eid,
+        entityLabel = item.name or eid,
+        assign = function(id)
+          item = mutate()
+          item.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+      },
     })
   end
-  Preview.drawItemIcon(S, item, formX + formW - prevSize, fy, prevSize, prevSize, itemPal)
+  Preview.drawItemIcon(S, item, formX + formW - prevSize, fy, prevSize, prevSize, drawPal)
   if Kit.press(formX + formW - prevSize, fy, prevSize, prevSize) then
     openItemPal()
   end
-  Preview.drawNamedSwatches(S, itemPal,
-    formX + formW - prevSize, fy + prevSize + 2 * s, prevSize, 10 * s)
+  if item.trueColor then
+    Kit.text("micro", "true color",
+      formX + formW - prevSize, fy + prevSize + 2 * s, PAL.yellow)
+  else
+    Preview.drawNamedSwatches(S, itemPal,
+      formX + formW - prevSize, fy + prevSize + 2 * s, prevSize, 10 * s)
+  end
   Kit.text("micro", "icon", formX + formW - prevSize + 4 * s,
     fy + prevSize + 14 * s, PAL.faint)
   local fieldW = formW - labelW - prevSize - 16 * s
@@ -511,24 +533,71 @@ function Items.draw(S, x, y, w, h, App)
         end)
     end
   end)
-  row("Palette", function(fx, fy_, fw, fh_)
-    PalettePicker.row(S, {
-      x = fx, y = fy_, w = fw, h = fh_,
-      current = item.palette or "",
-      effective = Preview.itemPaletteName(S, item),
-      emptyLabel = "(default)",
-      clearLabel = "(sprite / MEWMON default)",
-      allowClear = true,
-      title = "ITEM ICON PALETTE",
-      tooltip = "SGB palette for this item's icon preview",
-      onPick = function(id)
-        item = mutate()
-        item.palette = id
-        Preview.invalidate()
-        App.markDirty()
-      end,
-    })
+  row("TrueColor", function(fx, fy_, fw, fh_)
+    local on = item.trueColor and true or false
+    if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+      item = mutate()
+      item.trueColor = not on
+      if not item.trueColor then item.trueColor = nil end
+      Preview.invalidate()
+      App.markDirty()
+    end
   end)
+  if item.trueColor then
+    row("Palette", function(fx, fy_, fw, fh_)
+      Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+    end)
+  else
+    row("Palette", function(fx, fy_, fw, fh_)
+      local eid = S.itemId or item.id
+      PalettePicker.row(S, {
+        x = fx, y = fy_, w = fw, h = fh_,
+        current = item.palette or "",
+        effective = Preview.itemPaletteName(S, item),
+        emptyLabel = "(default)",
+        clearLabel = "(sprite / MEWMON default)",
+        allowClear = true,
+        title = "ITEM ICON PALETTE",
+        tooltip = "SGB palette for this item's icon preview",
+        onPick = function(id)
+          item = mutate()
+          item.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+        owner = {
+          kind = "item",
+          entityId = eid,
+          entityLabel = item.name or eid,
+          assign = function(id)
+            item = mutate()
+            item.palette = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+        },
+      })
+    end)
+    do
+      local eid = S.itemId or item.id
+      fy = PaletteEdit.drawColorRows(S, {
+        kind = "item",
+        entityId = eid,
+        entityLabel = item.name or eid,
+        paletteId = Preview.itemPaletteName(S, item),
+        assign = function(id)
+          item = mutate()
+          item.palette = id
+          Preview.invalidate()
+          App.markDirty()
+        end,
+        App = App,
+        x = formX, y = fy, labelW = labelW,
+        fieldW = formW - labelW - 20 * s, fh = fh,
+        fieldPrefix = "it_pal_c",
+      })
+    end
+  end
 
   Kit.text("small", "Effect", formX, fy + 6 * s, PAL.caption)
   fy = fy + 18 * s
