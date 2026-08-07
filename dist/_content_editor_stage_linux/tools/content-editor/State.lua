@@ -68,11 +68,17 @@ function State.blankProject(id, name)
     trainers = {},  -- OPP_* -> record
     trainer_headers = {}, -- mapLabel -> { [objIndex] = header }
     map_scripts = {}, -- mapId -> { talk = { TEXT_* = scriptRows } }
+    mapHooks = {}, -- mapId -> { onEnter={steps}, onVictory={steps},
+                   --   onStepCells={{x,y,steps}}, scripts={ name={steps} } }
     eventFlags = {}, -- shortName -> true (emitted as MOD_<id>_SHORT)
     talkScripts = {}, -- "MAP/TEXT_*" -> { mapId, textId, steps = {...} }
     fishing = {},   -- OLD_ROD / GOOD_ROD overrides (field.fishing)
     hiddenItems = {}, -- mapId -> { { x, y, item }, ... } (field.hiddenItems)
     badgeGates = {},  -- mapId -> gate record (field.badgeGates)
+    darkMaps = nil,   -- { maps = { id, ... } } when authored (field.darkMaps)
+    trades = nil,     -- { { give, get, dialogset, nickname }, ... } field.trades
+    flyOrder = nil,   -- { mapId, ... } field.flyOrder
+    flyWarps = {},    -- mapId -> { x, y } field.flyWarps
     ledges = {},      -- added field.ledges hop rules (appended on emit)
     boot = {},        -- field.boot overrides
     constants = {},   -- constants patches (levelCap, badges, …)
@@ -112,6 +118,7 @@ function State.ensureProjectFields(project)
   project.trainers = project.trainers or {}
   project.trainer_headers = project.trainer_headers or {}
   project.map_scripts = project.map_scripts or {}
+  project.mapHooks = project.mapHooks or {}
   project.eventFlags = project.eventFlags or {}
   project.talkScripts = project.talkScripts or {}
   project.fishing = project.fishing or {}
@@ -132,6 +139,7 @@ function State.ensureProjectFields(project)
   project.townMap = project.townMap or {}
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
+  project.flyWarps = project.flyWarps or {}
   project.ledges = project.ledges or {}
   project.starterRemap = project.starterRemap or {}
   project.specialEncounters = project.specialEncounters or {}

@@ -713,19 +713,34 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- tilesets (maps may reference them)
+  -- tilesets (maps may reference them). Patch only fields that differ from
+  -- vanilla — a full OVERWORLD clone (terrain paint) must not dump animation /
+  -- water tile sheets into the mod (ROM-cache / water-anim side effects).
   local tsIds = {}
   for tid in pairs(project.tilesets or {}) do tsIds[#tsIds + 1] = tid end
   table.sort(tsIds)
+  local baseTilesets = baseData.tilesets or {}
   for _, tid in ipairs(tsIds) do
     local raw = project.tilesets[tid]
     local rec = stripEditorFields(raw)
     rec.id = rec.id or tid
     local verb = emitVerb(raw)
-    local lit = rewriteModPaths(emitTableLiteral(rec, 1))
-    out[#out + 1] = string.format("  mod.content.tilesets:%s(%q, %s)",
-      verb, tid, lit)
-    out[#out + 1] = ""
+    local payload = rec
+    local skip = false
+    if verb == "patch" then
+      local diff = diffAgainstBase(baseTilesets[tid], rec)
+      if not diff then
+        skip = true
+      else
+        payload = diff
+      end
+    end
+    if not skip then
+      local lit = rewriteModPaths(emitTableLiteral(payload, 1))
+      out[#out + 1] = string.format("  mod.content.tilesets:%s(%q, %s)",
+        verb, tid, lit)
+      out[#out + 1] = ""
+    end
   end
 
   -- types before pokemon/moves so f.id("type_chart") resolves
@@ -1054,32 +1069,78 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- Compile talkScripts (editor steps) into map_scripts.talk rows, then emit.
+  -- Compile talkScripts + mapHooks into map_scripts registers (talk / scripts /
+  -- onEnter / onVictory / onStep), then emit.
   local scripts = ModWriter.compileTalkScripts(project)
   ModWriter.applySpecialEncounterBinds(project, scripts)
-  local msIds = {}
-  for mid in pairs(scripts) do msIds[#msIds + 1] = mid end
-  -- also include any hand-authored project.map_scripts
-  for mid in pairs(project.map_scripts or {}) do
-    if not scripts[mid] then msIds[#msIds + 1] = mid end
+  local hooksByMap = ModWriter.compileMapHooks(project)
+  local msSeen, msIds = {}, {}
+  local function addMs(mid)
+    if mid and not msSeen[mid] then
+      msSeen[mid] = true
+      msIds[#msIds + 1] = mid
+    end
   end
+  for mid in pairs(scripts) do addMs(mid) end
+  for mid in pairs(hooksByMap) do addMs(mid) end
+  for mid in pairs(project.map_scripts or {}) do addMs(mid) end
   table.sort(msIds)
   for _, mid in ipairs(msIds) do
-    local bundled = scripts[mid] or { talk = {} }
+    local talk = (scripts[mid] and scripts[mid].talk) or {}
     local hand = project.map_scripts and project.map_scripts[mid]
-    if hand and hand.talk then
-      bundled.talk = bundled.talk or {}
+    if hand and type(hand.talk) == "table" then
       for textId, rows in pairs(hand.talk) do
-        if not bundled.talk[textId] then
-          bundled.talk[textId] = rows
-        end
+        if not talk[textId] then talk[textId] = rows end
       end
     end
-    if bundled.talk and next(bundled.talk) then
-      local lit = rewriteModPaths(emitTableLiteral({ talk = bundled.talk }, 1))
+    local hooks = hooksByMap[mid] or {}
+    if hand and type(hand.scripts) == "table" then
+      hooks.scripts = hooks.scripts or {}
+      for name, rows in pairs(hand.scripts) do
+        if not hooks.scripts[name] then hooks.scripts[name] = rows end
+      end
+    end
+    local hasTalk = next(talk) ~= nil
+    local hasScripts = type(hooks.scripts) == "table" and next(hooks.scripts) ~= nil
+    local hasEnter = type(hooks.onEnterRows) == "table" and #hooks.onEnterRows > 0
+    local hasVictory = type(hooks.onVictoryRows) == "table" and #hooks.onVictoryRows > 0
+    local hasStep = type(hooks.onStepCells) == "table" and #hooks.onStepCells > 0
+    if hasTalk or hasScripts or hasEnter or hasVictory or hasStep then
       out[#out + 1] = string.format(
-        "  mod.content.map_scripts:register(%q, %s)",
-        mid, lit)
+        "  mod.content.map_scripts:register(%q, {", mid)
+      if hasTalk then
+        out[#out + 1] = "    talk = "
+          .. rewriteModPaths(emitTableLiteral(talk, 2)) .. ","
+      end
+      if hasScripts then
+        out[#out + 1] = "    scripts = "
+          .. rewriteModPaths(emitTableLiteral(hooks.scripts, 2)) .. ","
+      end
+      if hasEnter then
+        out[#out + 1] = "    onEnter = function(game, ow)"
+        out[#out + 1] = "      ow:queueScript("
+          .. rewriteModPaths(emitTableLiteral(hooks.onEnterRows, 3)) .. ")"
+        out[#out + 1] = "    end,"
+      end
+      if hasVictory then
+        out[#out + 1] = "    onVictory = function(game, ow)"
+        out[#out + 1] = "      ow:queueScript("
+          .. rewriteModPaths(emitTableLiteral(hooks.onVictoryRows, 3)) .. ")"
+        out[#out + 1] = "    end,"
+      end
+      if hasStep then
+        out[#out + 1] = "    onStep = function(game, ow, x, y)"
+        out[#out + 1] = "      local cells = "
+          .. rewriteModPaths(emitTableLiteral(hooks.onStepCells, 3))
+        out[#out + 1] = "      for _, c in ipairs(cells) do"
+        out[#out + 1] = "        if c.x == x and c.y == y then"
+        out[#out + 1] = "          ow:queueScript(c.rows)"
+        out[#out + 1] = "          return true"
+        out[#out + 1] = "        end"
+        out[#out + 1] = "      end"
+        out[#out + 1] = "    end,"
+      end
+      out[#out + 1] = "  })"
       out[#out + 1] = ""
     end
   end
@@ -1289,6 +1350,76 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
+  -- field.darkMaps (maps that need FLASH until lit)
+  if type(project.darkMaps) == "table" and type(project.darkMaps.maps) == "table" then
+    local dm = { maps = {} }
+    for i, mid in ipairs(project.darkMaps.maps) do
+      if type(mid) == "string" and mid ~= "" then
+        dm.maps[#dm.maps + 1] = mid
+      end
+    end
+    if type(project.darkMaps.palOffset) == "number" then
+      dm.palOffset = project.darkMaps.palOffset
+    end
+    out[#out + 1] = string.format(
+      "  mod.content.field:patch(%q, %s)",
+      "darkMaps", emitTableLiteral(dm, 1))
+    out[#out + 1] = ""
+  end
+
+  -- field.trades (in-game trade table; indices match Events "trade" step)
+  if type(project.trades) == "table" and #project.trades > 0 then
+    local rows = {}
+    for _, t in ipairs(project.trades) do
+      if type(t) == "table" and t.give and t.get then
+        rows[#rows + 1] = {
+          give = t.give, get = t.get,
+          dialogset = tonumber(t.dialogset) or 1,
+          nickname = t.nickname,
+        }
+      end
+    end
+    if #rows > 0 then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "trades", emitTableLiteral(rows, 1))
+      out[#out + 1] = ""
+    end
+  end
+
+  -- field.flyOrder / field.flyWarps (Town Map + Fly destinations)
+  if type(project.flyOrder) == "table" and #project.flyOrder > 0 then
+    local order = {}
+    for _, mid in ipairs(project.flyOrder) do
+      if type(mid) == "string" and mid ~= "" then
+        order[#order + 1] = mid
+      end
+    end
+    if #order > 0 then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "flyOrder", emitTableLiteral(order, 1))
+      out[#out + 1] = ""
+    end
+  end
+  if type(project.flyWarps) == "table" and next(project.flyWarps) then
+    local warps = {}
+    for mid, spot in pairs(project.flyWarps) do
+      if type(mid) == "string" and type(spot) == "table" then
+        warps[mid] = {
+          x = tonumber(spot.x) or 0,
+          y = tonumber(spot.y) or 0,
+        }
+      end
+    end
+    if next(warps) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "flyWarps", emitTableLiteral(warps, 1))
+      out[#out + 1] = ""
+    end
+  end
+
   -- Oak's Lab starter remap (pokemon.before_give), same seam as
   -- mods/example_mew_starter.
   local remap = project.starterRemap
@@ -1432,6 +1563,48 @@ function ModWriter.ensureTrainerHeaders(project)
             }
           end
         end
+      end
+    end
+  end
+
+  -- Drop headers / battle text / beat flags for object indices that no longer
+  -- exist (delete-object used to leave them in main.lua).
+  local live = {}
+  for mapId, map in pairs(project.maps or {}) do
+    if type(map) == "table" then
+      local label = projectMapLabel(project, mapId)
+      live[label] = live[label] or {}
+      for i, obj in ipairs(map.objects or {}) do
+        if type(obj) == "table" and obj.trainerClass and obj.trainerClass ~= "" then
+          live[label][obj.index or i] = true
+        end
+      end
+    end
+  end
+  for label, bucket in pairs(project.trainer_headers) do
+    if type(bucket) == "table" then
+      local drop = {}
+      for idx, hdr in pairs(bucket) do
+        if type(idx) == "number" and type(hdr) == "table"
+            and not (live[label] and live[label][idx]) then
+          drop[#drop + 1] = idx
+        end
+      end
+      for _, idx in ipairs(drop) do
+        local hdr = bucket[idx]
+        for _, key in ipairs({ "battle", "won", "after" }) do
+          local tid = hdr[key]
+          if type(tid) == "string" and tid ~= "" then
+            project.text[tid] = nil
+          end
+        end
+        if type(hdr.event) == "string" and hdr.event ~= "" then
+          project.eventFlags[hdr.event] = nil
+        end
+        bucket[idx] = nil
+      end
+      if not next(bucket) then
+        project.trainer_headers[label] = nil
       end
     end
   end
@@ -1710,6 +1883,53 @@ function ModWriter.compileTalkScripts(project)
   return byMap
 end
 
+-- Compile map lifecycle hooks (onEnter / onVictory / onStep / named scripts).
+function ModWriter.compileMapHooks(project)
+  local byMap = {}
+  for mapId, hooks in pairs(project.mapHooks or {}) do
+    if type(mapId) == "string" and type(hooks) == "table" then
+      local entry = {}
+      if type(hooks.onEnter) == "table" and type(hooks.onEnter.steps) == "table" then
+        local rows = ModWriter.stepsToRows(project, hooks.onEnter.steps)
+        if #rows > 0 then entry.onEnterRows = rows end
+      end
+      if type(hooks.onVictory) == "table" and type(hooks.onVictory.steps) == "table" then
+        local rows = ModWriter.stepsToRows(project, hooks.onVictory.steps)
+        if #rows > 0 then entry.onVictoryRows = rows end
+      end
+      if type(hooks.onStepCells) == "table" then
+        local cells = {}
+        for _, cell in ipairs(hooks.onStepCells) do
+          if type(cell) == "table" and type(cell.steps) == "table" then
+            local rows = ModWriter.stepsToRows(project, cell.steps)
+            if #rows > 0 then
+              cells[#cells + 1] = {
+                x = tonumber(cell.x) or 0,
+                y = tonumber(cell.y) or 0,
+                rows = rows,
+              }
+            end
+          end
+        end
+        if #cells > 0 then entry.onStepCells = cells end
+      end
+      if type(hooks.scripts) == "table" then
+        local scripts = {}
+        for name, scr in pairs(hooks.scripts) do
+          if type(name) == "string" and type(scr) == "table"
+              and type(scr.steps) == "table" then
+            local rows = ModWriter.stepsToRows(project, scr.steps)
+            if #rows > 0 then scripts[name] = rows end
+          end
+        end
+        if next(scripts) then entry.scripts = scripts end
+      end
+      if next(entry) then byMap[mapId] = entry end
+    end
+  end
+  return byMap
+end
+
 function ModWriter.stepsToRows(project, steps)
   local rows = {}
   local function flagName(short)
@@ -1869,6 +2089,12 @@ function ModWriter.stepsToRows(project, steps)
         val = (tostring(val) == "true" or val == true)
       end
       rows[#rows + 1] = { "set_field", key, val }
+    elseif kind == "trade" then
+      rows[#rows + 1] = {
+        "trade",
+        tonumber(step.index) or 1,
+        flagName(step.flag or "TRADED"),
+      }
     elseif kind == "oneshot_gift" then
       local done = flagName(step.flag or "DONE")
       local intro = step.text or "Here you go!"

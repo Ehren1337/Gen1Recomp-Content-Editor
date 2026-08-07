@@ -24,6 +24,8 @@ local Encounters = require("Encounters")
 local Dialog = require("Dialog")
 local Trainers = require("Trainers")
 local Events = require("Events")
+local Trades = require("Trades")
+local Shops = require("Shops")
 local Audio = require("Audio")
 local Gfx = require("Gfx")
 local AiClasses = require("AiClasses")
@@ -56,6 +58,10 @@ local TABS = {
     tip = "Wild tables and Special gifts/battles (DVs, moves)" },
   { id = "dialog",   label = "DIALOG",
     tip = "NPC / sign TEXT_* strings and bindings" },
+  { id = "shops",    label = "SHOPS",
+    tip = "Poké Mart inventories (text_pointers.mart)" },
+  { id = "trades",   label = "TRADES",
+    tip = "In-game trades (field.trades)" },
   { id = "trainers", label = "TRAINERS",
     tip = "Trainer classes, parties, and battle headers" },
   { id = "ai",       label = "AI",
@@ -97,6 +103,8 @@ local PANELS = {
   maps = Maps,
   encounters = Encounters,
   dialog = Dialog,
+  shops = Shops,
+  trades = Trades,
   trainers = Trainers,
   ai = AiClasses,
   player = Player,
@@ -318,8 +326,24 @@ function App.save()
   if not S or not S.path or not S.project then
     return say("No mod open")
   end
-  -- Base ROM data so move/item patches emit diffs + prefer :patch over :register.
-  ModIO._emitBaseData = S.data
+  -- Base ROM data so move/item/tileset patches emit diffs + prefer :patch.
+  -- Terrain paint aliases project.tilesets into S.data.tilesets, so diff must
+  -- compare against the pristine clone in _vanillaTilesetBackup.
+  local base = S.data
+  local vts = S._vanillaTilesetBackup
+  if type(vts) == "table" and next(vts) and type(S.data) == "table" then
+    base = {}
+    for k, v in pairs(S.data) do base[k] = v end
+    local tilesets = {}
+    for tid, rec in pairs(S.data.tilesets or {}) do
+      tilesets[tid] = vts[tid] or rec
+    end
+    for tid, rec in pairs(vts) do
+      if tilesets[tid] == nil then tilesets[tid] = rec end
+    end
+    base.tilesets = tilesets
+  end
+  ModIO._emitBaseData = base
   local ok, err = ModIO.save(S.path, S.project)
   ModIO._emitBaseData = nil
   if ok then
@@ -1117,7 +1141,7 @@ function App.keypressed(key)
   if Kit.scrollKeypressed and Kit.scrollKeypressed(key) then return end
   if RegList.keypressed(S, key) then return end
   if S.tab == "maps" and Maps.keypressed then
-    Maps.keypressed(S, key)
+    Maps.keypressed(S, key, App)
   elseif S.tab == "code" and Code.keypressed then
     Code.keypressed(S, key)
   end

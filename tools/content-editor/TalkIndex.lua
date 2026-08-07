@@ -311,9 +311,59 @@ function TalkIndex.sourceLabel(src)
     nurse = "NURSE",
     pc = "PC",
     cable = "CABLE",
-    empty = "—",
+    empty = "-",
   }
   return labels[src] or tostring(src or "?")
+end
+
+-- Vanilla / composed map_scripts hooks for a map (onEnter, onStep, scripts…).
+-- Used by Events > HOOKS so engine handlers are visible, not only mod drafts.
+local _hookInfoCache = {}
+
+function TalkIndex.mapHookInfo(mapId)
+  if not mapId then return {} end
+  local cached = _hookInfoCache[mapId]
+  if cached then return cached end
+  TalkIndex.ensureScripts()
+  local ok, MapScripts = pcall(require, "src.script.MapScripts")
+  if not ok or not MapScripts then
+    _hookInfoCache[mapId] = { hooks = {}, scripts = {} }
+    return _hookInfoCache[mapId]
+  end
+  local view = MapScripts.get(mapId)
+  local info = { hooks = {}, scripts = {} }
+  if type(view) == "table" then
+    for _, name in ipairs({
+      "onEnter", "onVictory", "onStep", "onBoulderMoved", "onInteract",
+    }) do
+      local h = view[name]
+      if type(h) == "function" then
+        info.hooks[name] = { form = "lua" }
+      elseif type(h) == "table" and #h > 0 and type(h[1]) == "table" then
+        info.hooks[name] = { form = "rows", rows = h }
+      end
+    end
+    if type(view.scripts) == "table" then
+      for name, rows in pairs(view.scripts) do
+        if type(name) == "string" then
+          if type(rows) == "function" then
+            info.scripts[name] = { form = "lua" }
+          elseif type(rows) == "table" and #rows > 0 then
+            info.scripts[name] = { form = "rows", rows = rows }
+          end
+        end
+      end
+    end
+  end
+  _hookInfoCache[mapId] = info
+  return info
+end
+
+function TalkIndex.mapHasHooks(mapId)
+  local info = TalkIndex.mapHookInfo(mapId)
+  if next(info.hooks or {}) then return true end
+  if next(info.scripts or {}) then return true end
+  return false
 end
 
 return TalkIndex

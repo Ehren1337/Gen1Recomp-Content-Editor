@@ -3382,7 +3382,10 @@ function OverworldState:onStepComplete()
 
   -- wild encounters in grass, on water while surfing, or -- on indoor
   -- maps whose tileset is not FOREST -- on EVERY tile
-  -- (wild_encounters.asm: caves, towers, the Mansion, Power Plant)
+  -- (wild_encounters.asm: caves, towers, the Mansion, Power Plant).
+  -- Mod outdoor maps often use index >= firstIndoorMap (content editor
+  -- defaults to 1000+); those must still only encounter in grass, not
+  -- on every walkable tile.
   local encDef = Game.data.encounters[self.map.id]
   local enc
   local indoor = Game.data.field.indoorEncounters
@@ -3391,7 +3394,8 @@ function OverworldState:onStepComplete()
   elseif self.map:isGrassCell(p.cellX, p.cellY) then
     enc = self:rollEncounter(encDef, "grass")
   elseif indoor and self.map.def.index >= indoor.firstIndoorMap
-         and self.map.def.tileset ~= indoor.excludedTileset then
+         and self.map.def.tileset ~= indoor.excludedTileset
+         and not Map.isOutside(self.map.def) then
     enc = self:rollEncounter(encDef, "indoor")
   end
   if enc then

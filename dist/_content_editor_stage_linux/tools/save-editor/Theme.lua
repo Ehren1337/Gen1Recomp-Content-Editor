@@ -335,33 +335,120 @@ function Theme.meter(x, y, w, h, pct, c)
   end
 end
 
+-- LOVE's built-in Vera face is ASCII-heavy: Unicode arrows / em-dashes /
+-- ellipsis draw as tofu (□). Prefer a system UI font with real coverage.
+local _uiFontPath -- string | false | nil (nil = not probed yet)
+local _monoFontPath
+
+local function fileExists(path)
+  local f = io.open(path, "rb")
+  if not f then return false end
+  f:close()
+  return true
+end
+
+local function resolveSystemFont(kind)
+  local osName = (love and love.system and love.system.getOS
+    and love.system.getOS()) or ""
+  local candidates
+  if kind == "mono" then
+    if osName == "Windows" then
+      candidates = {
+        "C:/Windows/Fonts/consola.ttf",
+        "C:/Windows/Fonts/cascadiamono.ttf",
+        "C:/Windows/Fonts/cour.ttf",
+      }
+    elseif osName == "OS X" then
+      candidates = {
+        "/System/Library/Fonts/Menlo.ttc",
+        "/Library/Fonts/Courier New.ttf",
+        "/System/Library/Fonts/Supplemental/Courier New.ttf",
+      }
+    else
+      candidates = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+      }
+    end
+  else
+    if osName == "Windows" then
+      candidates = {
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+      }
+    elseif osName == "OS X" then
+      candidates = {
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+      }
+    else
+      candidates = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+      }
+    end
+  end
+  for _, path in ipairs(candidates) do
+    if fileExists(path) then return path end
+  end
+  return nil
+end
+
+local function uiFontFile()
+  if _uiFontPath == nil then
+    _uiFontPath = resolveSystemFont("ui") or false
+  end
+  return _uiFontPath ~= false and _uiFontPath or nil
+end
+
+local function monoFontFile()
+  if _monoFontPath == nil then
+    _monoFontPath = resolveSystemFont("mono") or uiFontFile() or false
+  end
+  return _monoFontPath ~= false and _monoFontPath or nil
+end
+
 -- Font set, rebuilt only when the window size changes.  `s` is the same
 -- height/768 scale the launcher derives, so both windows step together.
--- Chrome is the default UI face; save DATA is drawn in the mono face, which
--- LOVE only ships as the default vector font -- so "mono" here means the
--- same face at a tighter size, and the distinction is carried by size and
--- colour.  A stub with no newFont returns nil fonts and every draw no-ops.
+-- Chrome uses a Unicode-capable system face when available; mono prefers a
+-- system monospace.  Falls back to LOVE's default vector font.
+-- A stub with no newFont returns nil fonts and every draw no-ops.
 function Theme.fonts(s)
   if not probe("newFont") then return {} end
-  local function f(px) return G.newFont(math.max(8, math.floor(px + 0.5))) end
+  local uiPath = uiFontFile()
+  local monoPath = monoFontFile()
+  local function f(px, path)
+    local size = math.max(8, math.floor(px + 0.5))
+    if path then
+      local ok, font = pcall(G.newFont, path, size)
+      if ok and font then return font end
+    end
+    return G.newFont(size)
+  end
   return {
     scale     = s,
-    wordmark  = f(14 * s),
-    brand     = f(11 * s),
-    chip      = f(11 * s),   -- RED / BLUE version chip
-    tile      = f(13 * s),   -- 2-letter tab glyph
-    tab       = f(13 * s),   -- tab label
-    button    = f(14 * s),
-    small     = f(12 * s),
-    tiny      = f(11 * s),
-    micro     = f(10 * s),
-    caption   = f(12 * s),   -- letterspaced section captions
-    mono      = f(12 * s),
-    monoRow   = f(13 * s),
-    monoBig   = f(18 * s),
-    title     = f(24 * s),   -- inspector species name
-    headline  = f(26 * s),   -- dex completion / money
-    stat      = f(19 * s),
+    wordmark  = f(14 * s, uiPath),
+    brand     = f(11 * s, uiPath),
+    chip      = f(11 * s, uiPath),   -- RED / BLUE version chip
+    tile      = f(13 * s, uiPath),   -- 2-letter tab glyph
+    tab       = f(13 * s, uiPath),   -- tab label
+    button    = f(14 * s, uiPath),
+    small     = f(12 * s, uiPath),
+    tiny      = f(11 * s, uiPath),
+    micro     = f(10 * s, uiPath),
+    caption   = f(12 * s, uiPath),   -- letterspaced section captions
+    mono      = f(12 * s, monoPath),
+    monoRow   = f(13 * s, monoPath),
+    monoBig   = f(18 * s, monoPath),
+    title     = f(24 * s, uiPath),   -- inspector species name
+    headline  = f(26 * s, uiPath),   -- dex completion / money
+    stat      = f(19 * s, uiPath),
   }
 end
 

@@ -183,12 +183,19 @@ function Preview.paletteIds(S)
   return ids
 end
 
--- Resolve named SGB palette colors (project override wins).
+-- Resolve named palette colors (project override wins). Prefer GBC pack in
+-- the editor — clearer tile contrast than SGB for map painting.
 function Preview.paletteColors(S, name)
   if type(name) ~= "string" or name == "" then return nil end
   if S and S.project and S.project.palettes and S.project.palettes[name] then
     local cols = normalizeColors(S.project.palettes[name])
     if cols then return cols end
+  end
+  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  if ok and PaletteFX and PaletteFX.gbcPack then
+    local pack = PaletteFX.gbcPack()
+    local g = pack and pack.palettes and pack.palettes[name]
+    if g then return normalizeColors(g) end
   end
   local data = S and S.data and S.data.palettes and S.data.palettes.palettes
   if data and data[name] then return normalizeColors(data[name]) end

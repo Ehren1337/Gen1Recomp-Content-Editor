@@ -392,6 +392,94 @@ function Dialog.draw(S, x, y, w, h, App)
     App.markDirty()
   end
 
+  -- Mart / shop stock on this TEXT_* (same pointer.mart Maps Shop role uses).
+  local ptrEntry = nil
+  do
+    local lbl = State.mapLabel(S, S.dialogMapId)
+    local proj = S.project.text_pointers and S.project.text_pointers[lbl]
+    if proj and proj[S.dialogTextId] then
+      ptrEntry = proj[S.dialogTextId]
+    else
+      local base = S.data and S.data.text_pointers and S.data.text_pointers[lbl]
+      ptrEntry = base and base[S.dialogTextId]
+    end
+  end
+  local martY = by + 72 * s
+  local isShop = ptrEntry and type(ptrEntry.mart) == "table"
+  if isShop then
+    Kit.text("micro", string.format("Shop stock (%d)", #ptrEntry.mart),
+      ex + 12 * s, martY, PAL.caption)
+    martY = martY + 16 * s
+    local items = {}
+    local seen = {}
+    for id in pairs(S.project.items or {}) do
+      seen[id] = true; items[#items + 1] = id
+    end
+    if S.data and S.data.items then
+      for id in pairs(S.data.items) do
+        if not seen[id] then seen[id] = true; items[#items + 1] = id end
+      end
+    end
+    table.sort(items)
+    local function cycleItem(cur)
+      if #items == 0 then return cur or "POKE_BALL" end
+      for i, id in ipairs(items) do
+        if id == cur then return items[(i % #items) + 1] end
+      end
+      return items[1]
+    end
+    local rowH = 26 * s
+    local maxRows = math.max(1, math.floor(
+      (listY + listH - 36 * s - martY) / (rowH + 4 * s)) - 1)
+    for mi = 1, math.min(#ptrEntry.mart, maxRows) do
+      local itemId = ptrEntry.mart[mi]
+      if Kit.button(ex + 12 * s, martY, fieldW - 44 * s, rowH, itemId or "?",
+          { kind = "accent", font = "small" }) then
+        ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
+        local lbl = State.mapLabel(S, S.dialogMapId)
+        local e = S.project.text_pointers[lbl][S.dialogTextId]
+        e.mart = e.mart or {}
+        e.mart[mi] = cycleItem(itemId)
+        App.markDirty()
+      end
+      if Kit.button(ex + fieldW - 24 * s, martY, 28 * s, rowH, "X",
+          { kind = "danger", font = "small" }) then
+        ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
+        local lbl = State.mapLabel(S, S.dialogMapId)
+        local e = S.project.text_pointers[lbl][S.dialogTextId]
+        if e.mart then table.remove(e.mart, mi) end
+        App.markDirty()
+      end
+      martY = martY + rowH + 4 * s
+    end
+    if Kit.button(ex + 12 * s, martY, 120 * s, 26 * s, "+ Add item",
+        { kind = "good", font = "small" }) then
+      ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
+      local lbl = State.mapLabel(S, S.dialogMapId)
+      local e = S.project.text_pointers[lbl][S.dialogTextId]
+      e.mart = e.mart or {}
+      e.mart[#e.mart + 1] = (#items > 0 and items[1]) or "POKE_BALL"
+      App.markDirty()
+    end
+    if Kit.button(ex + 140 * s, martY, 130 * s, 26 * s, "Clear shop",
+        { kind = "ghost", font = "small" }) then
+      ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
+      local lbl = State.mapLabel(S, S.dialogMapId)
+      local e = S.project.text_pointers[lbl][S.dialogTextId]
+      e.mart = nil
+      App.markDirty()
+    end
+  elseif Kit.button(ex + 12 * s, martY, 160 * s, 28 * s, "Mark as Shop",
+      { kind = "accent", font = "small",
+        tooltip = "Attach a mart inventory to this TEXT_* (Poké Mart clerk)" }) then
+    ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
+    local lbl = State.mapLabel(S, S.dialogMapId)
+    local e = S.project.text_pointers[lbl][S.dialogTextId]
+    e.mart = {}
+    e.nurse, e.pc, e.cableClub = nil, nil, nil
+    App.markDirty()
+  end
+
   Kit.text("micro",
     "Shows vanilla dialog. First edit clones into the mod (Save = text:override).",
     ex + 12 * s, listY + listH - 28 * s, PAL.faint)

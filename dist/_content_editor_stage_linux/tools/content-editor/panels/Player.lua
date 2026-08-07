@@ -38,14 +38,15 @@ local PIC_SLOTS = {
 }
 
 local FRAME_LABELS = {
-  "Stand ↓", "Stand ↑", "Stand ←", "Walk ↓", "Walk ↑", "Walk ←",
+  "Stand v", "Stand ^", "Stand <", "Walk v", "Walk ^", "Walk <",
 }
 
 -- Same layout as SpriteRenderer (data/sprites/facings.asm).
 local STAND = { down = 0, up = 1, left = 2, right = 2 }
 local WALK = { down = 3, up = 4, left = 5, right = 5 }
 local FACINGS = { "down", "up", "left", "right" }
-local FACING_LABEL = { down = "↓", up = "↑", left = "←", right = "→" }
+-- ASCII only — editor fonts often lack Unicode arrows (tofu □).
+local FACING_LABEL = { down = "v", up = "^", left = "<", right = ">" }
 
 local function defaults()
   local ok, FieldDefaults = pcall(require, "src.world.FieldDefaults")

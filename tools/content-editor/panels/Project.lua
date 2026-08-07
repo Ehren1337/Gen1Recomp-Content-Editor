@@ -483,7 +483,100 @@ function Project.draw(S, x, y, w, h, App)
     rows[#rows + 1] = { id = "NEW_BADGE", name = "Badge" }
     App.markDirty()
   end
-  fy = fy + fh + 8 * s
+  fy = fy + fh + secGap
+
+  Kit.caption(viewX, fy, "TRADES / SHOPS")
+  fy = fy + 24 * s
+  Kit.text("micro",
+    "Use the TRADES and SHOPS tabs to edit in-game trades and mart stock.",
+    viewX, fy, PAL.muted)
+  fy = fy + 20 * s
+  if Kit.button(viewX, fy, 100 * s, fh, "Trades", { kind = "accent" }) then
+    S.tab = "trades"
+  end
+  if Kit.button(viewX + 110 * s, fy, 100 * s, fh, "Shops", { kind = "accent" }) then
+    S.tab = "shops"
+  end
+  fy = fy + fh + secGap
+
+  Kit.caption(viewX, fy, "FLY ORDER")
+  fy = fy + 24 * s
+  Kit.text("micro",
+    "field.flyOrder (Town Map / Fly menu) and landing spots in field.flyWarps.",
+    viewX, fy, PAL.muted)
+  fy = fy + 20 * s
+
+  local function ensureFlyOrder()
+    if type(S.project.flyOrder) == "table" then return S.project.flyOrder end
+    local base = (S.data and S.data.field and S.data.field.flyOrder) or {}
+    local copy = {}
+    for i, mid in ipairs(base) do copy[i] = mid end
+    S.project.flyOrder = copy
+    if next(S.project.flyWarps or {}) == nil then
+      local fw = (S.data and S.data.field and S.data.field.flyWarps) or {}
+      S.project.flyWarps = {}
+      for mid, spot in pairs(fw) do
+        if type(spot) == "table" then
+          S.project.flyWarps[mid] = { x = spot.x or 0, y = spot.y or 0 }
+        end
+      end
+    end
+    App.markDirty()
+    return copy
+  end
+
+  if type(S.project.flyOrder) ~= "table" then
+    if Kit.button(viewX, fy, 160 * s, fh, "Edit fly order…", { kind = "accent" }) then
+      ensureFlyOrder()
+    end
+    fy = fy + fh + 8 * s
+  else
+    local order = S.project.flyOrder
+    S.project.flyWarps = S.project.flyWarps or {}
+    for i, mid in ipairs(order) do
+      local midV = RegList.field(App, "pr_fly_" .. i, viewX, fy,
+        160 * s, fh, tostring(mid or ""), "PALLET_TOWN"):upper():gsub("%s+", "_")
+      if midV ~= mid then
+        order[i] = midV
+        if S.project.flyWarps[mid] and not S.project.flyWarps[midV] then
+          S.project.flyWarps[midV] = S.project.flyWarps[mid]
+          S.project.flyWarps[mid] = nil
+        end
+        App.markDirty()
+        mid = midV
+      end
+      local spot = S.project.flyWarps[mid]
+      if not spot then
+        local base = S.data and S.data.field and S.data.field.flyWarps
+          and S.data.field.flyWarps[mid]
+        spot = { x = (base and base.x) or 0, y = (base and base.y) or 0 }
+        S.project.flyWarps[mid] = spot
+      end
+      local xV = tonumber(RegList.num(App, "pr_flyx_" .. i,
+        viewX + 170 * s, fy, 50 * s, fh, tonumber(spot.x) or 0)) or 0
+      local yV = tonumber(RegList.num(App, "pr_flyy_" .. i,
+        viewX + 228 * s, fy, 50 * s, fh, tonumber(spot.y) or 0)) or 0
+      if xV ~= (spot.x or 0) or yV ~= (spot.y or 0) then
+        spot.x, spot.y = xV, yV
+        App.markDirty()
+      end
+      Kit.text("micro", "land x,y", viewX + 286 * s, fy + 8 * s, PAL.faint)
+      if Kit.button(viewX + viewW - 36 * s, fy, 32 * s, fh, "X",
+          { kind = "danger" }) then
+        S.project.flyWarps[mid] = nil
+        table.remove(order, i)
+        App.markDirty()
+        break
+      end
+      fy = fy + fh + 6 * s
+    end
+    if Kit.button(viewX, fy, 120 * s, fh, "+ Fly spot", { kind = "good" }) then
+      order[#order + 1] = "NEW_TOWN"
+      S.project.flyWarps["NEW_TOWN"] = { x = 0, y = 0 }
+      App.markDirty()
+    end
+    fy = fy + fh + 8 * s
+  end
 
   FormPane.finish(S, "projectFormScroll", contentTop, fy, view)
 end

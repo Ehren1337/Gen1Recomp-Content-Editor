@@ -788,7 +788,7 @@ function Trainers.draw(S, x, y, w, h, App)
       S.trainerBulkDvs.hp = S.trainerBulkDvs.hp or deriveHpDv(S.trainerBulkDvs)
       fy = fy + 12 * s + fh + 4 * s
       local btnW = 120 * s
-      if Kit.button(viewX, fy, btnW, 26 * s, "DVs → party", {
+      if Kit.button(viewX, fy, btnW, 26 * s, "DVs -> party", {
           kind = "accent",
           tooltip = "Copy these DVs onto every mon in the current party",
         }) then
@@ -801,7 +801,7 @@ function Trainers.draw(S, x, y, w, h, App)
           n, S.trainerPartyIndex or 1)
       end
       if Kit.button(viewX + btnW + 8 * s, fy, btnW + 24 * s, 26 * s,
-          "DVs → all parties", {
+          "DVs -> all parties", {
             kind = "ghost",
             tooltip = "Copy these DVs onto every mon in every party of this trainer",
           }) then
@@ -828,7 +828,7 @@ function Trainers.draw(S, x, y, w, h, App)
         S.trainerBulkSe[key] = Theme.clamp(tonumber(raw) or 0, 0, 65535)
       end
       fy = fy + 12 * s + fh + 4 * s
-      if Kit.button(viewX, fy, btnW, 26 * s, "EVs → party", {
+      if Kit.button(viewX, fy, btnW, 26 * s, "EVs -> party", {
           kind = "accent",
           tooltip = "Copy these Stat Exp values onto every mon in the current party",
         }) then
@@ -841,7 +841,7 @@ function Trainers.draw(S, x, y, w, h, App)
           n, S.trainerPartyIndex or 1)
       end
       if Kit.button(viewX + btnW + 8 * s, fy, btnW + 24 * s, 26 * s,
-          "EVs → all parties", {
+          "EVs -> all parties", {
             kind = "ghost",
             tooltip = "Copy these Stat Exp values onto every mon in every party",
           }) then

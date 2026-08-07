@@ -17,15 +17,15 @@ local MODES = {
   { id = "palettes", label = "Palettes", tip = "SGB/GBC color palettes (4 colors)" },
   { id = "sprites", label = "Sprites", tip = "Overworld sprite sheets" },
   { id = "tilesets", label = "Tilesets",
-    tip = "Sheet flags (walk/solid/water). Paint map blocks on the Maps tab." },
+    tip = "Passage flags (walk/solid/water) per tileset slot — like RPG Maker" },
 }
 
 local TILE_PX = 8  -- Gen1 tileset sheet cells are 8x8
 local FLAG_MODES = {
-  { id = "walk", label = "Walk", tip = "Passable (in walkable list)" },
-  { id = "solid", label = "Solid", tip = "Collision / blocked (not walkable)" },
+  { id = "walk", label = "Walk", tip = "Passage O — passable (in walkable list)" },
+  { id = "solid", label = "Solid", tip = "Passage X — blocked (not walkable)" },
   { id = "water", label = "Water", tip = "Surfable water tile" },
-  { id = "grass", label = "Grass", tip = "Tall grass (wild encounters)" },
+  { id = "grass", label = "Grass", tip = "Tall grass / bush (wild encounters)" },
   { id = "shore", label = "Shore", tip = "Shore / beach (surf edge)" },
 }
 
@@ -147,7 +147,7 @@ local function drawTileFlagPainter(S, App, rec, ensureFn, id, x, y, w, s, palNam
   end
   y = y + 28 * s
   Kit.text("micro",
-    "green=walk  red=solid  blue=water  cyan=shore  magenta=grass",
+    "Passage: green=walk  red=solid  blue=water  cyan=shore  magenta=grass",
     x, y, PAL.faint)
   y = y + 14 * s
 

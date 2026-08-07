@@ -514,6 +514,9 @@ R.maps = {
     -- carries no palettes at all, so an id reference would fail validation for
     -- a perfectly good mod wherever there is no imported dataset.
     palette = f.opt(f.str),
+    -- Content-editor locale: outside / inside / cave (Map.isOutdoor / isOutside).
+    environment = f.opt(f.enum{ "outside", "inside", "cave" }),
+    outdoor = f.opt(f.bool),
     warps = f.opt(f.list(f.rec{ x = f.int(0), y = f.int(0),
                                 destMap = f.str, destWarp = f.int(0) })),
     objects = f.opt(f.list(f.any)),
@@ -1220,6 +1223,16 @@ R.field = {
                                             name = f.opt(f.str) })),
       nest = f.opt(f.any) },
     flyOrder = f.list(f.str),
+    flyWarps = f.opt(f.map(f.str, f.rec{ x = f.int(0), y = f.int(0) })),
+    darkMaps = f.opt(f.rec{
+      maps = f.opt(f.list(f.str)),
+      palOffset = f.opt(f.int(0)),
+    }),
+    trades = f.opt(f.list(f.rec{
+      give = f.str, get = f.str,
+      dialogset = f.opt(f.int(1, 3)),
+      nickname = f.opt(f.str),
+    })),
     -- the player's own trainer art (FieldDefaults.PLAYER_PICS): the battle
     -- back pic, the catch tutorial's old man, Yellow's PROF.OAK variant of
     -- it (#557), and the front pic the intro, trainer card and Hall of Fame

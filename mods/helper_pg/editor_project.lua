@@ -57,6 +57,7 @@ return
   id = "helper_pg",
   intro = {},
   items = {},
+  ledges = {},
   map_scripts = {},
   maps = {
     AXWORTHY_RESIDENCE = {
@@ -6046,16 +6047,15 @@ HOUSEHOLD",
             },
     },
     Route4 = {
-      nil,
-      {
-              after = "_ROUTE_4Trainer2After",
-              battle = "_ROUTE_4Trainer2Battle",
-              event = "MOD_HELPER_PG_BEAT_ROUTE_4_2",
-              opponent = "OPP_LASS",
-              party = 4,
-              range = 2,
-              won = "_ROUTE_4Trainer2Won",
-            },
+      [2] = {
+        after = "_ROUTE_4Trainer2After",
+        battle = "_ROUTE_4Trainer2Battle",
+        event = "MOD_HELPER_PG_BEAT_ROUTE_4_2",
+        opponent = "OPP_LASS",
+        party = 4,
+        range = 2,
+        won = "_ROUTE_4Trainer2Won",
+      },
     },
   },
   trainers = {},

@@ -137,15 +137,26 @@ end
 -- ------- map record properties (authored maps set them; vanilla falls back)
 
 -- town/route surface: door SFX, the walk-out step, the Fly menu and the
--- town map all mean this one
+-- town map all mean this one.
+-- Content editor "Outside / Inside / Cave" writes def.environment
+-- (and keeps def.outdoor in sync for older mods).
 function Map.isOutdoor(def)
+  if type(def) ~= "table" then return false end
+  local env = def.environment
+  if env == "outside" then return true end
+  if env == "inside" or env == "cave" then return false end
   if def.outdoor ~= nil then return def.outdoor end
   return def.tileset == "OVERWORLD"
 end
 
 -- CheckIfInOutsideMap, a strictly wider set: Route 23 / Indigo Plateau are
--- outside for the wLastMap memory without being outdoor for the door SFX
+-- outside for the wLastMap memory without being outdoor for the door SFX.
+-- Cave / Inside maps are never "outside" (indoor wilds, LAST_MAP, etc.).
 function Map.isOutside(def, tilesets)
+  if type(def) ~= "table" then return false end
+  local env = def.environment
+  if env == "outside" then return true end
+  if env == "inside" or env == "cave" then return false end
   if Map.isOutdoor(def) then return true end
   for _, ts in ipairs(tilesets or OUTSIDE_TILESETS) do
     if ts == def.tileset then return true end

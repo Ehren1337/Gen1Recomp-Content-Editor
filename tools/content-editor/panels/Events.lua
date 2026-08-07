@@ -42,6 +42,7 @@ local STEP_KINDS = {
   { id = "trainer_battle", label = "Trainer battle" },
   { id = "oneshot_trainer", label = "One-shot trainer" },
   { id = "set_field", label = "Set save field" },
+  { id = "trade", label = "In-game trade" },
   { id = "raw", label = "Engine cmd" },
 }
 
@@ -55,11 +56,19 @@ local OAK_BALLS = {
 local function shortcutDefs(S)
   return {
     { label = "+ Text", kind = "good",
-      tip = "Show a dialog line",
-      make = function() return { kind = "show_text", text = "..." } end },
+      tip = "Show this NPC's Dialog TEXT_* (or a literal)",
+      make = function()
+        local key = S.eventScriptKey or ""
+        local tid = key:match("/(.+)$")
+        return { kind = "show_text", text = tid or "..." }
+      end },
     { label = "+ Ask", kind = "accent",
       tip = "Yes/No prompt (skips rest on NO by default)",
-      make = function() return { kind = "ask", text = "OK?", skipOnNo = true } end },
+      make = function()
+        local key = S.eventScriptKey or ""
+        local tid = key:match("/(.+)$")
+        return { kind = "ask", text = tid or "OK?", skipOnNo = true }
+      end },
     { label = "+ Image", kind = "accent",
       tip = "Framed PNG (PicBox); Browse to import",
       make = function()
@@ -180,6 +189,11 @@ local function shortcutDefs(S)
           flag = "BEAT_TRAINER",
         }
       end },
+    { label = "+ Trade", kind = "accent",
+      tip = "In-game trade (field.trades index + done flag)",
+      make = function()
+        return { kind = "trade", index = 1, flag = "TRADED" }
+      end },
   }
 end
 
@@ -210,10 +224,11 @@ local function ensureEmptyScript(S, key)
   if not mapId then return nil end
   local script = S.project.talkScripts[key]
   if not script then
+    -- Default show_text to this pin's TEXT_* so Dialog bodies connect.
     script = {
       mapId = mapId,
       textId = textId,
-      steps = { { kind = "show_text", text = "Hello!" } },
+      steps = { { kind = "show_text", text = textId or "Hello!" } },
     }
     S.project.talkScripts[key] = script
   end
@@ -249,17 +264,31 @@ local function fitIn(fontName, text, maxW)
   return shown
 end
 
--- Script rows often pass a string-table id (_FooText); runtime looks that up.
-local function isTextId(S, value)
-  if type(value) ~= "string" or value == "" then return false end
-  if value:find("[%s\\]") then return false end
+-- Resolve TEXT_* / _FooText to a string-table id for project.text lookup.
+local function resolveStringIdForText(S, value, mapId)
+  if type(value) ~= "string" or value == "" then return nil end
+  if value:find("[%s\\]") then return nil end
   if S.project and S.project.text and S.project.text[value] ~= nil then
-    return true
+    return value
   end
   if S.data and S.data.text and S.data.text[value] ~= nil then
-    return true
+    return value
   end
-  return value:match("^_[%w_]+Text%d*$") ~= nil
+  if value:match("^TEXT_") then
+    local mid = mapId or S.eventMapId or S.dialogMapId
+    if mid then
+      local label = State.mapLabel(S, mid)
+      local function from(ptrs)
+        local e = ptrs and label and ptrs[label] and ptrs[label][value]
+        if type(e) == "table" and type(e.text) == "string" then return e.text end
+      end
+      return from(S.project and S.project.text_pointers)
+        or from(S.data and S.data.text_pointers)
+        or ("_" .. value:gsub("^TEXT_", ""))
+    end
+  end
+  if value:match("^_[%w_]+") then return value end
+  return nil
 end
 
 local function resolveTextBody(S, strId)
@@ -278,34 +307,56 @@ local function encodeTextBody(body)
 end
 
 local function decodeTextBody(display)
-  return tostring(display or ""):gsub("\\n", "\n"):gsub("\\f", "\f"):gsub("\\v", "\v")
+  return tostring(display or "")
+    :gsub("\\n", "\n"):gsub("\\f", "\f"):gsub("\\v", "\v"):gsub("\\/", "/")
 end
 
--- Edit show_text / ask: literals edit the step; _FooText ids edit project.text.
+-- Edit show_text / ask: TEXT_* / _FooText edit project.text; literals decode \n.
 local function drawDialogTextFields(S, App, step, i, fx, fw, fh, s, row)
   local y = row()
   local value = step.text or ""
-  if isTextId(S, value) then
-    local body = resolveTextBody(S, value)
+  local mapId = S.eventMapId or select(1, parseKey(S.eventScriptKey))
+  local strId = resolveStringIdForText(S, value, mapId)
+  if strId then
+    local body = resolveTextBody(S, strId)
     local display = encodeTextBody(body)
     local edited = field(App, "ev_tbody_" .. i, fx, y, fw, fh, display,
-      "dialog text (\\n = line)")
+      "dialog text (\\n = line, \\f = page)")
     if edited ~= display then
       State.ensureProjectFields(S.project)
-      S.project.text[value] = decodeTextBody(edited)
+      S.project.text[strId] = decodeTextBody(edited)
+      if value:match("^TEXT_") and mapId then
+        local label = State.mapLabel(S, mapId)
+        if label then
+          S.project.text_pointers[label] = S.project.text_pointers[label] or {}
+          local ptr = S.project.text_pointers[label][value]
+          if type(ptr) ~= "table" then
+            S.project.text_pointers[label][value] = { text = strId }
+          elseif not ptr.text then
+            ptr.text = strId
+          end
+        end
+      end
     end
     local yKey = row()
     Kit.text("micro", "key", fx, yKey + 8 * s, PAL.faint)
     step.text = field(App, "ev_t_" .. i, fx + 34 * s, yKey, fw - 34 * s, fh,
-      value, "_FooText")
+      value, "TEXT_* or _FooText")
   else
-    step.text = field(App, "ev_t_" .. i, fx, y, fw, fh, value, "Hello!")
+    local display = encodeTextBody(value)
+    local edited = field(App, "ev_t_" .. i, fx, y, fw, fh, display,
+      "literal (\\n = line, \\f = page)")
+    if edited ~= display then
+      step.text = decodeTextBody(edited)
+    end
   end
 end
 
 local function previewDialogText(S, value, maxW)
-  if isTextId(S, value) then
-    local body = resolveTextBody(S, value)
+  local mapId = S.eventMapId or select(1, parseKey(S.eventScriptKey))
+  local strId = resolveStringIdForText(S, value, mapId)
+  if strId then
+    local body = resolveTextBody(S, strId)
     if body ~= "" then
       return fitIn("micro", body, maxW)
     end
@@ -472,6 +523,16 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.valueType = order[(idx % #order) + 1]
       App.markDirty()
     end
+  elseif kind == "trade" then
+    local y = row()
+    step.index = tonumber(field(App, "ev_trd_" .. i, fx, y, 50 * s, fh,
+      tostring(step.index or 1), "1")) or 1
+    Kit.text("micro", "trade #", fx + 56 * s, y + 8 * s, PAL.faint)
+    step.flag = field(App, "ev_trdf_" .. i, fx + 110 * s, y, 140 * s, fh,
+      step.flag or "TRADED", "TRADED")
+    local full = State.modFlag(S.project, step.flag)
+    S.project.eventFlags[full] = true
+    Kit.text("micro", full, fx + 260 * s, y + 8 * s, PAL.faint)
   elseif kind == "raw" then
     local y = row()
     if not step.note or step.note == "" then
@@ -841,10 +902,25 @@ local function scrapeFlags(S)
     if n and not seen[n] then seen[n] = true; names[#names + 1] = n end
   end
   for n in pairs(S.project.eventFlags or {}) do add(n) end
-  for _, script in pairs(S.project.talkScripts or {}) do
-    for _, step in ipairs(script.steps or {}) do
+  local function scrapeSteps(steps)
+    for _, step in ipairs(steps or {}) do
       if step.flag then add(State.modFlag(S.project, step.flag)) end
       if step.choseFlag then add(State.modFlag(S.project, step.choseFlag)) end
+    end
+  end
+  for _, script in pairs(S.project.talkScripts or {}) do
+    scrapeSteps(script.steps)
+  end
+  for _, hooks in pairs(S.project.mapHooks or {}) do
+    if type(hooks) == "table" then
+      if hooks.onEnter then scrapeSteps(hooks.onEnter.steps) end
+      if hooks.onVictory then scrapeSteps(hooks.onVictory.steps) end
+      for _, cell in ipairs(hooks.onStepCells or {}) do
+        scrapeSteps(cell.steps)
+      end
+      for _, scr in pairs(hooks.scripts or {}) do
+        scrapeSteps(scr.steps)
+      end
     end
   end
   if S.events then
@@ -921,6 +997,398 @@ local function drawSaveFlags(S, x, y, w, h, App)
   end
 end
 
+local HOOK_KINDS = {
+  { id = "onEnter", label = "onEnter" },
+  { id = "onVictory", label = "onVictory" },
+  { id = "onStep", label = "onStep cells" },
+  { id = "script", label = "Named scripts" },
+}
+
+local function ensureMapHooks(S, mapId)
+  S.project.mapHooks = S.project.mapHooks or {}
+  S.project.mapHooks[mapId] = S.project.mapHooks[mapId] or {}
+  return S.project.mapHooks[mapId]
+end
+
+-- create=false: browse without inventing empty mod bags.
+local function resolveHookSteps(hooks, kind, cellIdx, scriptName, create)
+  if kind == "onEnter" then
+    if not hooks.onEnter then
+      if not create then return nil end
+      hooks.onEnter = { steps = {} }
+    end
+    hooks.onEnter.steps = hooks.onEnter.steps or {}
+    return hooks.onEnter.steps
+  elseif kind == "onVictory" then
+    if not hooks.onVictory then
+      if not create then return nil end
+      hooks.onVictory = { steps = {} }
+    end
+    hooks.onVictory.steps = hooks.onVictory.steps or {}
+    return hooks.onVictory.steps
+  elseif kind == "onStep" then
+    if not hooks.onStepCells then
+      if not create then return nil end
+      hooks.onStepCells = { { x = 0, y = 0, steps = {} } }
+    end
+    cellIdx = tonumber(cellIdx) or 1
+    if cellIdx < 1 then cellIdx = 1 end
+    if not hooks.onStepCells[cellIdx] then
+      if not create then return nil end
+      hooks.onStepCells[cellIdx] = { x = 0, y = 0, steps = {} }
+    end
+    local cell = hooks.onStepCells[cellIdx]
+    cell.steps = cell.steps or {}
+    return cell.steps, cell
+  elseif kind == "script" then
+    hooks.scripts = hooks.scripts or {}
+    scriptName = scriptName or "script"
+    if not hooks.scripts[scriptName] then
+      if not create then return nil end
+      hooks.scripts[scriptName] = { steps = {} }
+    end
+    hooks.scripts[scriptName].steps = hooks.scripts[scriptName].steps or {}
+    return hooks.scripts[scriptName].steps
+  end
+  return nil
+end
+
+local function vanillaHookLabel(info, kind)
+  if kind == "script" then
+    local n = 0
+    for _ in pairs(info.scripts or {}) do n = n + 1 end
+    if n > 0 then return string.format(" (%d)", n) end
+    return ""
+  end
+  local h = info.hooks and info.hooks[kind]
+  if not h then return "" end
+  return h.form == "lua" and " *" or " +"
+end
+
+local function drawHooks(S, x, y, w, h, App)
+  local s = Kit.scale
+  State.ensureProjectFields(S.project)
+  TalkIndex.ensureScripts()
+
+  local mapColW = math.min(160 * s, w * 0.18)
+  local listW = math.min(220 * s, w * 0.28)
+  local qh = 28 * s
+  local qy = y + 22 * s
+  local listY = qy + qh + 6 * s
+  local listH = h - (listY - y)
+
+  Kit.caption(x, y, "MAP")
+  local mapQ, mapQCh = Search.field(S, "hookMapQuery", x, qy, mapColW, qh, "maps...")
+  if mapQCh then S.hookMapOffset = 0 end
+  Kit.card(x, listY, mapColW, listH, 12 * s)
+  local maps = Search.filterIds(TalkIndex.allMapIds(S), mapQ)
+  if not S.eventMapId then
+    S.eventMapId = S.dialogMapId or S.mapId or maps[1]
+  end
+  local mapRowH = 26 * s
+  local perMap = math.max(1, math.floor((listH - 16 * s) / (mapRowH + 2 * s)))
+  local mapScrollX = x + 6 * s
+  local mapScrollW = mapColW - 12 * s
+  local mapScrollH = listH - 16 * s
+  local mapRowW = Kit.scrollInnerWidth(mapScrollW)
+  S.hookMapOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.hookMapOffset or 0, #maps, perMap)
+  local ry = listY + 8 * s
+  for i = (S.hookMapOffset or 0) + 1,
+      math.min(#maps, (S.hookMapOffset or 0) + perMap) do
+    local id = maps[i]
+    if Kit.row(mapScrollX, ry, mapRowW, mapRowH, S.eventMapId == id, PAL.blue) then
+      S.eventMapId = id
+      S.hookFormScroll = nil
+    end
+    local hasV = TalkIndex.mapHasHooks(id)
+    local mark = hasV and " *" or ""
+    Kit.pushClip(mapScrollX, ry, mapRowW, mapRowH)
+    Kit.text("micro",
+      fitIn("micro", id .. mark, math.max(8, mapRowW - 12 * s)),
+      mapScrollX + 6 * s, ry + 6 * s, hasV and PAL.yellow or PAL.text)
+    Kit.popClip()
+    ry = ry + mapRowH + 2 * s
+  end
+  S.hookMapOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
+    mapScrollH, S.hookMapOffset or 0, #maps, perMap)
+
+  local pinX = x + mapColW + 10 * s
+  Kit.caption(pinX, y, "HOOK")
+  Kit.card(pinX, listY, listW, listH, 12 * s)
+  S.eventHookKind = S.eventHookKind or "onEnter"
+  local vanillaInfo = TalkIndex.mapHookInfo(S.eventMapId)
+  ry = listY + 10 * s
+  for _, hk in ipairs(HOOK_KINDS) do
+    local on = S.eventHookKind == hk.id
+    local label = hk.label .. vanillaHookLabel(vanillaInfo, hk.id)
+    if Kit.chip(pinX + 10 * s, ry, listW - 20 * s, 28 * s, label, on, PAL.yellow) then
+      S.eventHookKind = hk.id
+    end
+    ry = ry + 34 * s
+  end
+  local tipW = listW - 20 * s
+  Kit.pushClip(pinX + 10 * s, ry + 4 * s, tipW,
+    math.max(8, listY + listH - (ry + 8 * s)))
+  local tips = {
+    onEnter = "* = engine Lua hook. Mod steps also run.",
+    onVictory = "* = engine hook. Mod steps compose.",
+    onStep = "* = engine onStep (Lua cell logic).",
+    script = "Named scripts from data/scripts + mod.",
+  }
+  Kit.text("micro",
+    Kit.ellipsize("micro", tips[S.eventHookKind] or "", tipW),
+    pinX + 10 * s, ry + 8 * s, PAL.faint)
+  Kit.popClip()
+
+  local formX = pinX + listW + 12 * s
+  local formW = w - (formX - x)
+  Kit.caption(formX, y, "STEPS")
+  Kit.card(formX, listY, formW, listH, 12 * s)
+
+  local mapId = S.eventMapId
+  if not mapId then
+    Kit.emptyBox(formX + 8 * s, listY + 8 * s, formW - 16 * s, listH - 16 * s,
+      "Select a map")
+    return
+  end
+
+  local hooks = ensureMapHooks(S, mapId)
+  local kind = S.eventHookKind or "onEnter"
+  local footerH = 100 * s
+  local pad = 12 * s
+  local metaH = 40 * s
+  if kind == "onStep" or kind == "script" then metaH = 70 * s end
+  local viewX = formX + pad
+  local viewY = listY + pad + metaH
+  local viewW = formW - 2 * pad
+  local viewH = math.max(40 * s, listH - pad - footerH - metaH)
+
+  Kit.text("micro",
+    Kit.ellipsize("micro", mapId .. " / " .. kind, formW - 24 * s),
+    formX + 12 * s, listY + 10 * s, PAL.faint)
+
+  -- Named scripts: pick from vanilla list + mod drafts.
+  if kind == "script" then
+    local names, seen = {}, {}
+    for name in pairs(vanillaInfo.scripts or {}) do
+      if not seen[name] then seen[name] = true; names[#names + 1] = name end
+    end
+    for name in pairs(hooks.scripts or {}) do
+      if not seen[name] then seen[name] = true; names[#names + 1] = name end
+    end
+    table.sort(names)
+    if not S.eventHookScriptName or S.eventHookScriptName == "" then
+      S.eventHookScriptName = names[1] or "script"
+    end
+    local nx = formX + 12 * s
+    for _, name in ipairs(names) do
+      local on = S.eventHookScriptName == name
+      local lab = name
+      if vanillaInfo.scripts and vanillaInfo.scripts[name] then
+        lab = lab .. " *"
+      end
+      local bw = Kit.textWidth("micro", lab) + 14 * s
+      if Kit.chip(nx, listY + 28 * s, bw, 24 * s, lab, on, PAL.blue) then
+        S.eventHookScriptName = name
+      end
+      nx = nx + bw + 4 * s
+    end
+    local name = field(App, "hk_sn", formX + 12 * s, listY + 54 * s,
+      160 * s, 24 * s, S.eventHookScriptName or "script", "script_name")
+    name = tostring(name or "script"):gsub("%s+", "_")
+    if name ~= S.eventHookScriptName then
+      if hooks.scripts and hooks.scripts[S.eventHookScriptName]
+          and not hooks.scripts[name] then
+        hooks.scripts[name] = hooks.scripts[S.eventHookScriptName]
+        hooks.scripts[S.eventHookScriptName] = nil
+      end
+      S.eventHookScriptName = name
+      App.markDirty()
+    end
+    metaH = 86 * s
+    viewY = listY + pad + metaH
+    viewH = math.max(40 * s, listH - pad - footerH - metaH)
+  elseif kind == "onStep" and hooks.onStepCells and #hooks.onStepCells > 0 then
+    S.eventHookCellIdx = math.max(1, math.min(
+      S.eventHookCellIdx or 1, #hooks.onStepCells))
+    local idx = S.eventHookCellIdx
+    local cell = hooks.onStepCells[idx]
+    Kit.text("micro", "Mod cell #" .. idx, formX + 12 * s, listY + 28 * s, PAL.caption)
+    cell.x = tonumber(field(App, "hk_cx", formX + 90 * s, listY + 24 * s,
+      50 * s, 26 * s, tostring(cell.x or 0), "0")) or 0
+    cell.y = tonumber(field(App, "hk_cy", formX + 150 * s, listY + 24 * s,
+      50 * s, 26 * s, tostring(cell.y or 0), "0")) or 0
+    if Kit.button(formX + 210 * s, listY + 24 * s, 60 * s, 26 * s, "Prev",
+        { kind = "ghost", font = "small" }) and idx > 1 then
+      S.eventHookCellIdx = idx - 1
+    end
+    if Kit.button(formX + 276 * s, listY + 24 * s, 60 * s, 26 * s, "Next",
+        { kind = "ghost", font = "small" }) and idx < #hooks.onStepCells then
+      S.eventHookCellIdx = idx + 1
+    end
+    if Kit.button(formX + 342 * s, listY + 24 * s, 70 * s, 26 * s, "+ Cell",
+        { kind = "good", font = "small" }) then
+      hooks.onStepCells[#hooks.onStepCells + 1] = { x = 0, y = 0, steps = {} }
+      S.eventHookCellIdx = #hooks.onStepCells
+      App.markDirty()
+    end
+  end
+
+  local steps = resolveHookSteps(hooks, kind, S.eventHookCellIdx,
+    S.eventHookScriptName, false)
+  local editing = type(steps) == "table"
+
+  local function ensureSteps()
+    if editing then return steps end
+    steps = resolveHookSteps(hooks, kind, S.eventHookCellIdx,
+      S.eventHookScriptName, true)
+    editing = true
+    return steps
+  end
+
+  local function addStep(step)
+    local bag = ensureSteps()
+    bag[#bag + 1] = step
+    App.markDirty()
+  end
+
+  local track = mapId .. "/" .. kind .. "/"
+    .. tostring(S.eventHookCellIdx or 0) .. "/"
+    .. tostring(S.eventHookScriptName or "")
+    .. (editing and ":m" or ":v")
+  FormPane.track(S, "hookFormScroll", track)
+  local fy, view = FormPane.begin(S, "hookFormScroll", viewX, viewY, viewW, viewH)
+  local contentTop = fy
+  local fh = 28 * s
+  local kindW = 150 * s
+  local innerW = view.contentW or view.w
+
+  -- Show engine hook summary when this kind exists in data/scripts.
+  local vHook = (kind ~= "script") and vanillaInfo.hooks and vanillaInfo.hooks[kind]
+  local vScript = (kind == "script") and vanillaInfo.scripts
+    and vanillaInfo.scripts[S.eventHookScriptName or ""]
+  if vHook or vScript then
+    local form = (vHook and vHook.form) or (vScript and vScript.form)
+    Kit.text("micro", "ENGINE", viewX, fy + 6 * s, PAL.yellow)
+    if form == "lua" then
+      Kit.text("micro",
+        fitIn("micro",
+          "Lua handler in data/scripts (not step rows). "
+            .. "Edit there, or add mod steps below (onEnter composes).",
+          innerW - 70 * s),
+        viewX + 60 * s, fy + 6 * s, PAL.muted)
+      fy = fy + fh + 4 * s
+    elseif form == "rows" then
+      local rows = (vHook and vHook.rows) or (vScript and vScript.rows) or {}
+      Kit.text("micro",
+        string.format("%d engine row(s) - read-only", #rows),
+        viewX + 60 * s, fy + 6 * s, PAL.muted)
+      fy = fy + fh + 4 * s
+      local show = ModWriter.rowsToSteps(rows)
+      for _, step in ipairs(show) do
+        local sk = step.kind or "raw"
+        Kit.text("micro", stepLabel(sk), viewX, fy + 6 * s, PAL.caption)
+        local detail = step.note or step.text or step.flag or step.name or ""
+        Kit.text("micro",
+          fitIn("micro", tostring(detail), innerW - kindW - 8 * s),
+          viewX + kindW + 8 * s, fy + 6 * s, PAL.faint)
+        fy = fy + fh + 4 * s
+        if fy > viewY + viewH + 200 * s then break end
+      end
+    end
+    fy = fy + 8 * s
+  end
+
+  if not editing or #(steps or {}) == 0 then
+    if not vHook and not vScript then
+      Kit.text("small", "No engine hook and no mod steps yet.", viewX, fy, PAL.muted)
+      fy = fy + 24 * s
+    else
+      Kit.text("small", "Mod steps (extra / override draft):", viewX, fy, PAL.muted)
+      fy = fy + 24 * s
+    end
+    if Kit.button(viewX, fy, 110 * s, fh, "+ Text", {
+        kind = "good", font = "small",
+      }) then
+      addStep({ kind = "show_text", text = "..." })
+    end
+    if Kit.button(viewX + 118 * s, fy, 110 * s, fh, "+ Engine", {
+        kind = "accent", font = "small",
+      }) then
+      addStep({
+        kind = "raw",
+        note = "check_flag EVENT_FLAG",
+        row = { "check_flag", "EVENT_FLAG" },
+      })
+    end
+    if Kit.button(viewX + 236 * s, fy, 110 * s, fh, "+ Set flag", {
+        kind = "ghost", font = "small",
+      }) then
+      addStep({ kind = "set_flag", flag = "DONE" })
+    end
+    if kind == "onStep" and Kit.button(viewX + 354 * s, fy, 100 * s, fh, "+ Cell", {
+        kind = "ghost", font = "small",
+        tooltip = "Add a mod onStep cell (x,y)",
+      }) then
+      ensureSteps()
+      hooks.onStepCells = hooks.onStepCells or {}
+      if #hooks.onStepCells == 0 then
+        -- ensureSteps already created cell 1
+      else
+        hooks.onStepCells[#hooks.onStepCells + 1] = { x = 0, y = 0, steps = {} }
+        S.eventHookCellIdx = #hooks.onStepCells
+      end
+      App.markDirty()
+    end
+    fy = fy + fh + 12 * s
+  end
+
+  if editing then
+    for i, step in ipairs(steps) do
+      local sk = step.kind or "show_text"
+      if Kit.button(viewX, fy, kindW, fh, stepLabel(sk),
+          { kind = "accent", font = "small" }) then
+        step.kind = cycleKind(sk)
+        App.markDirty()
+      end
+      local rowsN = drawStepFields(S, App, step, i, step.kind or sk,
+        viewX + kindW + 8 * s, fy, innerW - kindW - 48 * s, fh, s)
+      local blockH = math.max(1, rowsN) * (fh + 4 * s)
+      if Kit.button(viewX + innerW - 32 * s, fy, 28 * s, fh, "X",
+          { kind = "danger", font = "small" }) then
+        table.remove(steps, i)
+        App.markDirty()
+      end
+      fy = fy + blockH + 8 * s
+    end
+  end
+  FormPane.finish(S, "hookFormScroll", contentTop, fy, view)
+
+  local shortcuts = shortcutDefs(S)
+  local bh = 26 * s
+  local gap = 4 * s
+  local bx = formX + 12 * s
+  local by = listY + listH - footerH + 6 * s
+  local maxX = formX + formW - 12 * s
+  local maxY = listY + listH - 8 * s
+  Kit.pushClip(formX + 4 * s, listY + listH - footerH, formW - 8 * s, footerH)
+  for _, sc in ipairs(shortcuts) do
+    local bw = Kit.textWidth("small", sc.label) + 16 * s
+    if bx + bw > maxX then
+      bx = formX + 12 * s
+      by = by + bh + gap
+    end
+    if by + bh > maxY then break end
+    if Kit.button(bx, by, bw, bh, sc.label,
+        { kind = sc.kind or "ghost", font = "small", tooltip = sc.tip }) then
+      addStep(sc.make())
+    end
+    bx = bx + bw + gap
+  end
+  Kit.popClip()
+end
+
 function Events.draw(S, x, y, w, h, App)
   local s = Kit.scale
   if not S.project then
@@ -929,15 +1397,20 @@ function Events.draw(S, x, y, w, h, App)
   end
   State.ensureProjectFields(S.project)
 
-  if Kit.chip(x, y, 100 * s, 26 * s, "SCRIPTS",
-      S.eventsMode ~= "starters" and S.eventsMode ~= "saveflags", PAL.yellow) then
+  if Kit.chip(x, y, 90 * s, 26 * s, "SCRIPTS",
+      S.eventsMode ~= "starters" and S.eventsMode ~= "saveflags"
+        and S.eventsMode ~= "hooks", PAL.yellow) then
     S.eventsMode = "scripts"
   end
-  if Kit.chip(x + 108 * s, y, 110 * s, 26 * s, "STARTERS",
+  if Kit.chip(x + 96 * s, y, 90 * s, 26 * s, "HOOKS",
+      S.eventsMode == "hooks", PAL.yellow) then
+    S.eventsMode = "hooks"
+  end
+  if Kit.chip(x + 192 * s, y, 100 * s, 26 * s, "STARTERS",
       S.eventsMode == "starters", PAL.green) then
     S.eventsMode = "starters"
   end
-  if Kit.chip(x + 226 * s, y, 130 * s, 26 * s, "SAVE FLAGS",
+  if Kit.chip(x + 298 * s, y, 120 * s, 26 * s, "SAVE FLAGS",
       S.eventsMode == "saveflags", PAL.blue) then
     S.eventsMode = "saveflags"
   end
@@ -948,6 +1421,8 @@ function Events.draw(S, x, y, w, h, App)
     drawSaveFlags(S, x, bodyY, w, bodyH, App)
   elseif S.eventsMode == "starters" then
     drawStarters(S, x, bodyY, w, bodyH, App)
+  elseif S.eventsMode == "hooks" then
+    drawHooks(S, x, bodyY, w, bodyH, App)
   else
     drawScripts(S, x, bodyY, w, bodyH, App)
   end

@@ -31,6 +31,33 @@ local SECTIONS = {
   { id = "hidden", label = "Hidden" },
   { id = "gates", label = "Gates" },
 }
+
+-- RPG Maker XP–style edit modes (Map = tiles / Passage; Events = NPCs & transfers).
+local MAP_MODE_SECTIONS = {
+  basics = true, encounters = true, hidden = true, gates = true,
+}
+local EVENT_MODE_SECTIONS = {
+  objects = true, warps = true, signs = true,
+}
+local EVENT_TOOLS = {
+  object = true, warp = true, sign = true, trainer = true, wild = true,
+}
+
+local function syncMapEditMode(S, mode)
+  S.mapEditMode = mode or S.mapEditMode or "map"
+  local tool = S.mapTool or "paint"
+  if S.mapEditMode == "events" then
+    if not EVENT_TOOLS[tool] then S.mapTool = "object" end
+    if not EVENT_MODE_SECTIONS[S.mapSection or ""] then
+      S.mapSection = "objects"
+    end
+  else
+    if EVENT_TOOLS[tool] then S.mapTool = "paint" end
+    if not MAP_MODE_SECTIONS[S.mapSection or ""] then
+      S.mapSection = "basics"
+    end
+  end
+end
 local MOVEMENTS = { "STAY", "WALK" }
 local RANGES = {
   "NONE", "DOWN", "UP", "LEFT", "RIGHT", "UP_DOWN", "LEFT_RIGHT", "ANY_DIR",
@@ -363,6 +390,8 @@ local function cloneTilesetRecord(rec)
 end
 
 -- Clone vanilla tileset into the mod so collision / terrain flag edits persist.
+-- Prefer cloneTilesetForMap / ensureTerrainTileset for RPG Maker–style local
+-- Passage slots; this keeps patching a shared id (GFX tab / advanced).
 local function ensureOwnedTileset(S, tilesetId, App)
   if not tilesetId or tilesetId == "" then return nil end
   S.project.tilesets = S.project.tilesets or {}
@@ -382,6 +411,69 @@ local function ensureOwnedTileset(S, tilesetId, App)
   MapLoader.invalidateAll()
   if App and App.markDirty then App.markDirty() end
   return copy
+end
+
+local function uniqueTilesetId(S, base)
+  local id = base
+  local n = 1
+  while (S.project.tilesets and S.project.tilesets[id])
+      or (S.data and S.data.tilesets and S.data.tilesets[id]) do
+    n = n + 1
+    id = base .. "_" .. n
+  end
+  return id
+end
+
+-- RPG Maker XP style: duplicate a tileset into a new slot (same graphics,
+-- independent Passage / walkable / grass / water). Assign to this map.
+local function cloneTilesetForMap(S, map, App)
+  if not (S and map) then return nil, nil, "no map" end
+  State.ensureProjectFields(S.project)
+  local srcId = map.tileset or "OVERWORLD"
+  local src = (S.project.tilesets and S.project.tilesets[srcId])
+    or (S.data and S.data.tilesets and S.data.tilesets[srcId])
+  if type(src) ~= "table" then
+    return nil, nil, "no tileset " .. tostring(srcId)
+  end
+  local mapKey = tostring(map.id or S.mapId or "MAP"):upper():gsub("%W+", "_")
+  if mapKey == "" then mapKey = "MAP" end
+  local newId = uniqueTilesetId(S, mapKey .. "_TILESET")
+  local copy = cloneTilesetRecord(src)
+  copy.id = newId
+  copy._isNew = true
+  copy._mapLocal = true
+  copy._clonedFrom = srcId
+  S.project.tilesets[newId] = copy
+  if S.data and S.data.tilesets then S.data.tilesets[newId] = copy end
+  map.tileset = newId
+  S.mapPaletteTileset = newId
+  S._liveTilesets = nil
+  MapLoader.invalidate(map.id)
+  MapLoader.invalidateAll()
+  if App and App.markDirty then App.markDirty() end
+  return copy, newId, nil
+end
+
+-- TERRAIN / Passage: use a map-local tileset slot so edits don't rewrite
+-- shared OVERWORLD for every outdoor map (RPG Maker mental model).
+local function ensureTerrainTileset(S, map, App)
+  if not map then return nil end
+  local tid = map.tileset or "OVERWORLD"
+  local owned = S.project.tilesets and S.project.tilesets[tid]
+  -- New / already-cloned slots are map-safe. Re-stamp _mapLocal after reload.
+  if owned and (owned._mapLocal or owned._isNew) then
+    owned._mapLocal = true
+    return owned
+  end
+  local copy, newId, err = cloneTilesetForMap(S, map, App)
+  if copy then
+    S.status = string.format(
+      "Tileset slot %s (from %s) — Passage edits affect this map only",
+      tostring(newId), tostring(copy._clonedFrom or tid))
+    return copy
+  end
+  if err then S.status = "Tileset clone failed: " .. tostring(err) end
+  return ensureOwnedTileset(S, tid, App)
 end
 
 -- ---- block selection / shift ------------------------------------------------
@@ -417,6 +509,73 @@ end
 local function cellInBlockSel(cx, cy, x0, y0, x1, y1)
   return cx >= x0 * 2 and cx <= x1 * 2 + 1
      and cy >= y0 * 2 and cy <= y1 * 2 + 1
+end
+
+-- Block clipboard: RMB / Ctrl+C copy, Shift+RMB / Ctrl+V paste.
+local function copyBlocksToClip(S, map, x0, y0, x1, y1)
+  if not (S and map and map.blocks) then return nil end
+  x0, y0, x1, y1 = clampBlockSel(map, x0, y0, x1, y1)
+  local bw, bh = x1 - x0 + 1, y1 - y0 + 1
+  local blocks = {}
+  local w = map.width
+  for by = y0, y1 do
+    for bx = x0, x1 do
+      blocks[#blocks + 1] = map.blocks[by * w + bx + 1] or 0
+    end
+  end
+  S.mapClip = {
+    w = bw, h = bh, blocks = blocks,
+    tileset = map.tileset,
+  }
+  if bw == 1 and bh == 1 then
+    S.paintBlock = blocks[1]
+    S.mapPaletteTileset = map.tileset
+  end
+  return bw, bh
+end
+
+local function pasteClipAt(S, mapId, destX, destY, App)
+  local clip = S and S.mapClip
+  if not (clip and type(clip.blocks) == "table" and clip.w and clip.h) then
+    return false, "clipboard empty — RMB or Ctrl+C to copy"
+  end
+  local map = ensureOwned(S, mapId)
+  if not map or type(map.blocks) ~= "table" then
+    return false, "no map"
+  end
+  destX = math.floor(tonumber(destX) or 0)
+  destY = math.floor(tonumber(destY) or 0)
+  local w, h = map.width, map.height
+  local n = 0
+  for row = 0, clip.h - 1 do
+    for col = 0, clip.w - 1 do
+      local nx, ny = destX + col, destY + row
+      if nx >= 0 and ny >= 0 and nx < w and ny < h then
+        map.blocks[ny * w + nx + 1] = clip.blocks[row * clip.w + col + 1] or 0
+        n = n + 1
+      end
+    end
+  end
+  if n == 0 then return false, "paste off-map" end
+  S._mapNeedsRebuild = map.id or mapId
+  if S.data and S.data.maps then S.data.maps[map.id or mapId] = map end
+  MapLoader.invalidate(map.id or mapId)
+  if App and App.markDirty then App.markDirty() end
+  local note = ""
+  if clip.tileset and map.tileset and clip.tileset ~= map.tileset then
+    note = " (from tileset " .. tostring(clip.tileset) .. ")"
+  end
+  return true, string.format("Pasted %dx%d at (%d,%d)%s",
+    clip.w, clip.h, destX, destY, note)
+end
+
+local function pasteDestBlock(S, map)
+  if S._mapHoverBx ~= nil and S._mapHoverBy ~= nil then
+    return S._mapHoverBx, S._mapHoverBy
+  end
+  local x0, y0 = normalizeBlockSel(S.mapSel)
+  if x0 then return x0, y0 end
+  return 0, 0
 end
 
 -- Shift blocks (+ warps/objects/signs in the region) by dx/dy blocks.
@@ -599,15 +758,44 @@ local function removeBadgeGate(S, mapId)
   syncLiveBadgeGate(S, mapId, nil)
 end
 
+-- Map locale for door SFX / wild rules / LAST_MAP (Outside / Inside / Cave).
+local function inferMapEnvironment(map)
+  if type(map) ~= "table" then return "outside" end
+  local env = map.environment
+  if env == "outside" or env == "inside" or env == "cave" then return env end
+  if map.outdoor == true then return "outside" end
+  if map.outdoor == false then
+    if map.tileset == "CAVERN" then return "cave" end
+    return "inside"
+  end
+  if map.tileset == "CAVERN" then return "cave" end
+  if map.tileset == "OVERWORLD" or map.tileset == "PLATEAU" then
+    return "outside"
+  end
+  return "inside"
+end
+
+local function setMapEnvironment(map, env)
+  if env ~= "outside" and env ~= "inside" and env ~= "cave" then return end
+  map.environment = env
+  map.outdoor = (env == "outside")
+end
+
 local function defaultMap(id, index, tileset)
   local w, h = 10, 9
   local blocks = {}
   for i = 1, w * h do blocks[i] = 1 end
+  local ts = tileset or "OVERWORLD"
+  local env = "outside"
+  if ts == "CAVERN" then env = "cave"
+  elseif ts ~= "OVERWORLD" and ts ~= "PLATEAU" then env = "inside" end
   return {
     id = id,
     label = id,
     index = index,
-    tileset = tileset or "OVERWORLD",
+    tileset = ts,
+    environment = env,
+    outdoor = env == "outside",
     width = w,
     height = h,
     blocks = blocks,
@@ -789,6 +977,64 @@ local function ensureTextPtr(S, mapId, textId)
     S.project.text_pointers[label][textId] = cloneTextPtr(entry)
   end
   return S.project.text_pointers[label][textId], label
+end
+
+-- Drop trainer headers / beat flags / dialog / talk scripts for a removed object,
+-- then reindex remaining trainer_headers to match new object indices.
+local function cleanupRemovedMapObject(S, map, removedIndex, removed)
+  if not S or not S.project or not map or not removed then return end
+  State.ensureProjectFields(S.project)
+  local mapId = map.id
+  local label = State.mapLabel(S, mapId)
+  local textId = removed.text
+
+  local bucket = label and S.project.trainer_headers
+    and S.project.trainer_headers[label]
+  if type(bucket) == "table" then
+    local hdr = bucket[removedIndex]
+    if type(hdr) == "table" then
+      for _, key in ipairs({ "battle", "won", "after" }) do
+        local tid = hdr[key]
+        if type(tid) == "string" and tid ~= "" then
+          S.project.text[tid] = nil
+        end
+      end
+      if type(hdr.event) == "string" and hdr.event ~= "" then
+        S.project.eventFlags[hdr.event] = nil
+      end
+    end
+    local newBucket = {}
+    for j, o in ipairs(map.objects or {}) do
+      if type(o) == "table" and o.trainerClass and o.trainerClass ~= "" then
+        local prevIdx = (j < removedIndex) and j or (j + 1)
+        if type(bucket[prevIdx]) == "table" then
+          newBucket[j] = bucket[prevIdx]
+        end
+      end
+    end
+    S.project.trainer_headers[label] = newBucket
+  end
+
+  if type(textId) == "string" and textId ~= "" and mapId then
+    local talkKey = mapId .. "/" .. textId
+    if S.project.talkScripts then
+      S.project.talkScripts[talkKey] = nil
+    end
+    if label and S.project.text_pointers and S.project.text_pointers[label] then
+      local ptr = S.project.text_pointers[label][textId]
+      if type(ptr) == "table" and type(ptr.text) == "string" then
+        -- Only drop invented mod bodies (not shared vanilla string ids).
+        local invented = "_" .. textId:gsub("^TEXT_", "")
+        if ptr.text == invented then
+          S.project.text[ptr.text] = nil
+        end
+      end
+      S.project.text_pointers[label][textId] = nil
+      if not next(S.project.text_pointers[label]) then
+        S.project.text_pointers[label] = nil
+      end
+    end
+  end
 end
 
 local function ptrRole(entry)
@@ -1371,8 +1617,8 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
       local ok = back and back.map == fromId
         and (back.offset or 0) == -(map.connections[dir].offset or 0)
       local known = layout.positions[wantMap] ~= nil or destDef ~= nil
-      local label = ok and "↔ linked"
-        or (known and "↔ pending" or "missing")
+      local label = ok and "<-> linked"
+        or (known and "<-> pending" or "missing")
       Kit.text("micro", label,
         px + 120 * s, y + fh + 6 * s, ok and PAL.green or PAL.red)
       y = y + fh + 2 * s
@@ -1543,6 +1789,13 @@ end
 prepareLiveMap = function(S, mapId, def)
   if not (S.data and mapId and def) then return end
   for tid, ts in pairs(S.project.tilesets or {}) do
+    -- Keep a pristine ROM copy before project tilesets overwrite live data
+    -- (needed so Save can diff terrain flags without dumping water anims).
+    S._vanillaTilesetBackup = S._vanillaTilesetBackup or {}
+    local cur = S.data.tilesets and S.data.tilesets[tid]
+    if not S._vanillaTilesetBackup[tid] and type(cur) == "table" and cur ~= ts then
+      S._vanillaTilesetBackup[tid] = cloneTilesetRecord(cur)
+    end
     local live = liveTilesetForEditor(S, ts)
     local prev = S.data.tilesets[tid]
     if prev ~= live or (prev and prev.image ~= live.image) then
@@ -1686,13 +1939,15 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
   local tool = S.mapTool or "paint"
 
   if tool == "pick" then
+    S.mapEditMode = "map"
     S.paintBlock = mapDef.blocks[idx] or 0
     S.mapTool = "paint"
     S.mapPaletteTileset = mapDef.tileset
-    S.status = string.format("Picked block %s (tileset=%s) -- paint armed",
+    S.status = string.format("Picked block %s (tileset=%s) -- Pencil armed",
       tostring(S.paintBlock), tostring(mapDef.tileset))
     return
   elseif tool == "paint" then
+    S.mapEditMode = "map"
     local bid = S.paintBlock or 1
     if mapDef.blocks[idx] ~= bid then
       mapDef.blocks[idx] = bid
@@ -1701,6 +1956,7 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       return
     end
   elseif tool == "erase" then
+    S.mapEditMode = "map"
     if mapDef.blocks[idx] ~= 0 then
       mapDef.blocks[idx] = 0
       S._mapNeedsRebuild = mapDef.id
@@ -1708,11 +1964,12 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       return
     end
   elseif tool == "collision" then
-    -- Paint tileset flags for this cell's feet tile (shared tileset-wide).
+    S.mapEditMode = "map"
+    -- Passage flags on this map's tileset slot (auto-clones shared stock).
+    local ts = ensureTerrainTileset(S, mapDef, App)
     local tid = mapDef.tileset
-    local ts = ensureOwnedTileset(S, tid, App)
     if not ts then
-      S.status = "No tileset for terrain paint (Import ROM / Link Recomp?)"
+      S.status = "No tileset for Passage paint (Import ROM / Link Recomp?)"
       return
     end
     local tile = Map.defCellTile(mapDef, ts, cx, cy)
@@ -1819,10 +2076,13 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     MapLoader.invalidateAll()
     App.markDirty()
     S.mapShowCollision = true
-    S.status = string.format("Tile %d → %s (tileset %s)",
+    -- Passage is per tileset slot (RPG Maker style), not per map cell.
+    S.status = string.format(
+      "Tile %d → %s (tileset %s)",
       tile, label, tostring(tid))
     return
   elseif tool == "warp" then
+    S.mapEditMode = "events"
     clearWarpDestPick(S)
     mapDef.warps = mapDef.warps or {}
     mapDef.warps[#mapDef.warps + 1] = {
@@ -1830,8 +2090,22 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     }
     S.mapSection = "warps"
     S.mapWarpIndex = #mapDef.warps
-    S.status = string.format("Warp at cell (%d,%d)", cx, cy)
+    local ts = tilesetDef(S, mapDef.tileset)
+    local tile = ts and Map.defCellTile(mapDef, ts, cx, cy)
+    local onWarpTile = false
+    if tile ~= nil and ts then
+      onWarpTile = listIndex(ts.doorTiles or {}, tile) ~= nil
+        or listIndex(ts.warpTiles or {}, tile) ~= nil
+    end
+    if onWarpTile then
+      S.status = string.format("Warp at cell (%d,%d)", cx, cy)
+    else
+      S.status = string.format(
+        "Warp at (%d,%d) — not a door/warp tile; Gen1 only fires at map edge / carpet",
+        cx, cy)
+    end
   elseif tool == "sign" then
+    S.mapEditMode = "events"
     mapDef.signs = mapDef.signs or {}
     local n = #mapDef.signs + 1
     local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_SIGN" .. n
@@ -1841,6 +2115,7 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     S.dialogMapId = mapDef.id
     S.dialogTextId = textId
   elseif tool == "object" then
+    S.mapEditMode = "events"
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
     local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_OBJ" .. n
@@ -1855,6 +2130,7 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     S.dialogTextId = textId
     S.status = "Placed " .. spr
   elseif tool == "trainer" then
+    S.mapEditMode = "events"
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
     local class = (S.trainerId and S.trainerId ~= "" and S.trainerId)
@@ -1896,6 +2172,7 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     S.status = string.format("Placed %s party %d as object #%d",
       class, party, n)
   elseif tool == "wild" then
+    S.mapEditMode = "events"
     -- Fixed wild (object.pokemon + level): Articuno, Power Plant Voltorb, …
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
@@ -1935,10 +2212,13 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       if d < bestD then best, bestD, kind = i, d, "sign" end
     end
     if kind == "object" then
+      S.mapEditMode = "events"
       S.mapSection = "objects"; S.mapObjectIndex = best
     elseif kind == "warp" then
+      S.mapEditMode = "events"
       S.mapSection = "warps"; S.mapWarpIndex = best
     elseif kind == "sign" then
+      S.mapEditMode = "events"
       S.mapSection = "signs"; S.mapSignIndex = best
     end
   end
@@ -2033,13 +2313,14 @@ local function drawCollisionOverlay(S, mapDef)
   local shore = {}
   for _, t in ipairs(ts.shoreTiles or {}) do shore[t] = true end
   local grass = ts.grassTile
-  local ledgeTiles, standTiles = {}, {}
+  -- Orange = ledge tile only. Vanilla standingTile values are often common
+  -- walkable ground (paths/floors) — outlining them looked like "wild" zones.
+  local ledgeTiles = {}
   local tsId = mapDef.tileset or "OVERWORLD"
   local ledges = (S.data and S.data.field and S.data.field.ledges) or {}
   for _, row in ipairs(ledges) do
     if type(row) == "table" and (row.tileset or "OVERWORLD") == tsId then
       if row.ledgeTile ~= nil then ledgeTiles[row.ledgeTile] = true end
-      if row.standingTile ~= nil then standTiles[row.standingTile] = true end
     end
   end
   for cy = y0, y1 do
@@ -2076,10 +2357,6 @@ local function drawCollisionOverlay(S, mapDef)
         love.graphics.setColor(1, 0.65, 0.15, 1)
         love.graphics.rectangle("line",
           cx * CELL - camX + 1, cy * CELL - camY + 1, CELL - 2, CELL - 2)
-      elseif tile ~= nil and standTiles[tile] then
-        love.graphics.setColor(1, 0.55, 0.1, 0.9)
-        love.graphics.rectangle("line",
-          cx * CELL - camX + 2, cy * CELL - camY + 2, CELL - 4, CELL - 4)
       end
     end
   end
@@ -2169,13 +2446,15 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     and not S.warpDestPick
   local selecting = (tool == "select") and not S.warpDestPick
   local over = Kit.hit(vx, vy, vw, vh)
-  -- Middle / right button always pans (Kit.mouseDown is left-only).
-  local auxPan = false
+  -- Middle button / Space / Alt pan. Right-click copies the block (eyedropper).
+  local rmb, mmb = false, false
   if love and love.mouse and love.mouse.isDown then
-    auxPan = love.mouse.isDown(2) or love.mouse.isDown(3)
+    rmb = love.mouse.isDown(2)
+    mmb = love.mouse.isDown(3)
   end
   local spacePan = love.keyboard.isDown("space")
     or love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt")
+  local auxPan = mmb
   local panHeld = (auxPan or spacePan)
     and not Kit.blockClicks
     and (over or (S._mapDrag and S._mapDrag.pan))
@@ -2188,6 +2467,34 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     local by = math.floor(wy / BLOCK_PX)
     return bx, by
   end
+
+  -- Track hover for Ctrl+V paste destination.
+  if over then
+    local hbx, hby = mouseBlock()
+    S._mapHoverBx, S._mapHoverBy = hbx, hby
+  end
+
+  if over and rmb and not S._mapRmbWasDown and not Kit.blockClicks
+      and not spacePan and not S.warpDestPick then
+    local bx, by = mouseBlock()
+    if bx >= 0 and by >= 0 and bx < (mapDef.width or 0)
+        and by < (mapDef.height or 0) then
+      local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+      if shift then
+        local ok, msg = pasteClipAt(S, mapDef.id or S.mapId, bx, by, App)
+        S.status = msg or (ok and "Pasted" or "Paste failed")
+      else
+        local bw, bh = copyBlocksToClip(S, mapDef, bx, by, bx, by)
+        if tool == "pick" then S.mapTool = "paint" end
+        if bw then
+          S.status = string.format(
+            "Copied block %s — Shift+RMB or Ctrl+V to paste",
+            tostring(S.paintBlock))
+        end
+      end
+    end
+  end
+  S._mapRmbWasDown = rmb
 
   if panHeld then
     S._mapSelDraft = nil
@@ -2305,21 +2612,21 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local ts = tostring(mapDef.tileset or "?")
   if S.warpDestPick then
     hint = string.format(
-      "%.1fx  %s  click=set warp dest  Esc=cancel  MMB/RMB/Space=pan",
+      "%.1fx  %s  click=set warp dest  Esc=cancel  MMB/Space=pan",
       S.mapZoom, ts)
   elseif tool == "collision" then
     hint = string.format(
-      "%.1fx  %s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge",
+      "%.1fx  %s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge (not wild)",
       S.mapZoom, ts, tostring(S.mapCollisionMode or "solid"),
       (S.mapCollisionMode == "ledge"
         and (" dir=" .. tostring(S.mapLedgeDir or "down")) or ""))
   elseif brush then
     hint = string.format(
-      "%.1fx  %s  blk=%s  drag=paint  MMB/RMB/Space=pan  hold WASD",
+      "%.1fx  %s  blk=%s  drag=paint  RMB=copy Shift+RMB=paste  MMB/Space=pan",
       S.mapZoom, ts, tostring(S.paintBlock or 1))
   elseif selecting then
     hint = string.format(
-      "%.1fx  %s  drag=marquee  Apply shift  MMB/RMB/Space=pan",
+      "%.1fx  %s  drag=marquee  Ctrl+C/V copy/paste  Apply shift  MMB/Space=pan",
       S.mapZoom, ts)
   else
     hint = string.format("%.1fx  %s  drag=pan  hold WASD  click=%s",
@@ -2378,11 +2685,39 @@ function Maps.wheelmoved(S, dy)
   return false
 end
 
-function Maps.keypressed(S, key)
+function Maps.keypressed(S, key, App)
   -- Escape / typing handled at App while the tileset modal is up.
   if S.mapTilesetPicker then return true end
   if key == "escape" and S.warpDestPick then
     clearWarpDestPick(S, "Set destination cancelled")
+    return true
+  end
+  local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+    or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
+  if ctrl and (key == "c" or key == "v") and S.mapViewMode ~= "world" then
+    local map = resolveMapDef(S, S.mapId)
+    if not map then return true end
+    if key == "c" then
+      local x0, y0, x1, y1 = normalizeBlockSel(S.mapSel)
+      if not x0 and S._mapHoverBx ~= nil then
+        x0 = S._mapHoverBx; y0 = S._mapHoverBy
+        x1, y1 = x0, y0
+      end
+      if not x0 then
+        S.status = "Nothing to copy — select a region or hover a block"
+        return true
+      end
+      local bw, bh = copyBlocksToClip(S, map, x0, y0, x1, y1)
+      if bw then
+        S.status = string.format("Copied %dx%d — Ctrl+V or Shift+RMB to paste",
+          bw, bh)
+      end
+      return true
+    end
+    -- Ctrl+V
+    local dx, dy = pasteDestBlock(S, map)
+    local ok, msg = pasteClipAt(S, S.mapId, dx, dy, App)
+    S.status = msg or (ok and "Pasted" or "Paste failed")
     return true
   end
   -- WASD pans in Maps.update; arrows are reserved for the map list.
@@ -2475,9 +2810,9 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
     list = filtered
   end
 
-  local btnH = 26 * s
-  local btnGap = 4 * s
-  local footerH = btnH * 2 + btnGap + 6 * s
+  local btnH = 24 * s
+  local btnGap = 3 * s
+  local footerH = btnH * 3 + btnGap * 2 + 6 * s
   local listY = cy + qh + 8 * s
   local listH = py + ph - pad - listY - footerH
   local rowH = 32 * s
@@ -2504,6 +2839,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
       local on = map.tileset == id
       local focused = p.focus == id
       local modded = S.project.tilesets and S.project.tilesets[id] ~= nil
+      local localSlot = modded and S.project.tilesets[id]._mapLocal
       if Kit.hover(cx, ry, innerW, rowH) then p.focus = id end
       if Kit.row(cx, ry, innerW, rowH, on or focused, PAL.blue) then
         applyMapTileset(S, map, id, App, mutate)
@@ -2515,7 +2851,9 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
       drawBlockThumb(S, id, 1, cx + 4 * s, ry + (rowH - thumb) / 2, thumb)
       local label = Kit.ellipsize("mono", id, math.max(8, innerW - thumb - 16 * s))
       Kit.text("mono", label, cx + 4 * s + thumb + 6 * s, ry + 8 * s,
-        on and PAL.heading or (modded and PAL.text or PAL.muted))
+        on and PAL.heading
+          or (localSlot and PAL.green)
+          or (modded and PAL.text or PAL.muted))
       ry = ry + rowH + 3 * s
     end
     Kit.popClip()
@@ -2525,14 +2863,34 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
 
   local focusId = p.focus or map.tileset or list[1]
   local by = listY + listH + 6 * s
-  if Kit.button(cx, by, listW, btnH, "Replace PNG", {
+  -- Three footer actions: Clone (RM slot), Replace, New from PNG.
+  local row1 = btnH
+  if Kit.button(cx, by, listW, row1, "Clone for this map", {
+      kind = "good",
+      tooltip = "RPG Maker style: new tileset slot from the selected one, assigned here",
+    }) then
+    local m = mutate()
+    if focusId and m.tileset ~= focusId then
+      applyMapTileset(S, m, focusId, App, mutate)
+      m = resolveMapDef(S, S.mapId) or m
+    end
+    local _, newId, err = cloneTilesetForMap(S, m, App)
+    if newId then
+      S.status = "Tileset slot " .. newId .. " (Passage local to this map)"
+      S.mapTilesetPicker = nil
+      Kit.blur()
+      return
+    end
+    S.status = "Clone failed: " .. tostring(err)
+  end
+  if Kit.button(cx, by + row1 + btnGap, listW, row1, "Replace PNG", {
       kind = "accent",
       tooltip = "Import a PNG over this tileset's image (assets/tilesets/)",
     }) then
     importTilesetPng(S, App, focusId, { rebuildBlocks = false })
   end
-  if Kit.button(cx, by + btnH + btnGap, listW, btnH, "+ New from PNG", {
-      kind = "good",
+  if Kit.button(cx, by + (row1 + btnGap) * 2, listW, row1, "+ New from PNG", {
+      kind = "ghost",
       tooltip = "Register a new tileset from a PNG sheet",
     }) then
     importTilesetPng(S, App, nil, { createNew = true, rebuildBlocks = true })
@@ -2734,10 +3092,99 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if v ~= (map.label or "") then map = mutate(); map.label = v end
   end) then return py end
 
+  if prow("Locale", function(fx, fy, fw, fh_)
+    local cur = inferMapEnvironment(map)
+    local mx = fx
+    for _, opt in ipairs({
+      { id = "outside", label = "Outside", tip = "Towns / routes — grass & water wilds, Go Outside SFX" },
+      { id = "inside", label = "Inside", tip = "Buildings — indoor wilds (if any), Go Inside SFX" },
+      { id = "cave", label = "Cave", tip = "Caves / dungeons — indoor wilds on every tile when indexed indoor" },
+    }) do
+      local on = cur == opt.id
+      local bw = Kit.textWidth("micro", opt.label) + 16 * s
+      if Kit.chip(mx, fy, bw, fh_, opt.label, on, PAL.blue, nil, opt.tip) then
+        if cur ~= opt.id then
+          map = mutate()
+          setMapEnvironment(map, opt.id)
+          MapLoader.invalidate(map.id)
+          App.markDirty()
+          S.status = "Map locale → " .. opt.label
+        end
+      end
+      mx = mx + bw + 4 * s
+    end
+  end) then return py end
+  do
+    local cur = inferMapEnvironment(map)
+    local hint = (cur == "outside" and "wilds in grass / water only")
+      or (cur == "cave" and "treated as indoors for wilds & exits")
+      or "interior (not an outside map)"
+    Kit.text("micro", hint, px + 10 * s, py, PAL.faint)
+    py = py + 14 * s
+  end
+
+  if prow("Dark map", function(fx, fy, fw, fh_)
+    -- field.darkMaps: needs FLASH until lit (Rock Tunnel, etc.)
+    local function darkList()
+      if type(S.project.darkMaps) == "table"
+          and type(S.project.darkMaps.maps) == "table" then
+        return S.project.darkMaps.maps
+      end
+      local base = S.data and S.data.field and S.data.field.darkMaps
+      return (base and base.maps) or {}
+    end
+    local function isDark()
+      for _, mid in ipairs(darkList()) do
+        if mid == map.id then return true end
+      end
+      return false
+    end
+    local on = isDark()
+    if Kit.chip(fx, fy, 120 * s, fh_, on and "Dark (FLASH)" or "Lit",
+        on, PAL.blue,
+        nil, "When on, this map is listed in field.darkMaps (needs FLASH)") then
+      State.ensureProjectFields(S.project)
+      if type(S.project.darkMaps) ~= "table"
+          or type(S.project.darkMaps.maps) ~= "table" then
+        local base = S.data and S.data.field and S.data.field.darkMaps
+        local maps = {}
+        if base and type(base.maps) == "table" then
+          for i, mid in ipairs(base.maps) do maps[i] = mid end
+        end
+        S.project.darkMaps = { maps = maps }
+        if base and base.palOffset ~= nil then
+          S.project.darkMaps.palOffset = base.palOffset
+        end
+      end
+      local list = S.project.darkMaps.maps
+      if on then
+        for i = #list, 1, -1 do
+          if list[i] == map.id then table.remove(list, i) end
+        end
+      else
+        list[#list + 1] = map.id
+      end
+      App.markDirty()
+      S.status = on and (map.id .. " removed from darkMaps")
+        or (map.id .. " added to darkMaps")
+    end
+  end) then return py end
+
   if prow("Index", function(fx, fy, fw, fh_)
     local cur = map.index or 0
     local v = tonumber(field(App, "mp_idx", fx, fy, 80 * s, fh_, tostring(cur), "0")) or 0
     if v ~= cur then map = mutate(); map.index = v end
+    -- Gen1: index >= 37 + non-outside = encounters on every tile.
+    local firstIndoor = 37
+    local indoor = S.data and S.data.field and S.data.field.indoorEncounters
+    if indoor and indoor.firstIndoorMap then firstIndoor = indoor.firstIndoorMap end
+    if (map.index or 0) >= firstIndoor and Map.isOutside(map) then
+      Kit.text("micro", "outside: grass/water only",
+        fx + 88 * s, fy + 6 * s, PAL.faint)
+    elseif (map.index or 0) >= firstIndoor then
+      Kit.text("micro", "indoor index: wilds on EVERY tile",
+        fx + 88 * s, fy + 6 * s, PAL.yellow)
+    end
   end) then return py end
 
   if prow("Size W x H (blocks)", function(fx, fy, fw, fh_)
@@ -2786,15 +3233,43 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   end
 
   if prow("Tileset", function(fx, fy, fw, fh_)
-    local label = Kit.ellipsize("mono", map.tileset or "?", fw - 100 * s)
-    Kit.text("mono", label, fx, fy + 6 * s, PAL.heading)
-    if Kit.button(fx + fw - 96 * s, fy, 96 * s, fh_, "Assign", {
+    local cloneW = 70 * s
+    local assignW = 70 * s
+    local gap = 4 * s
+    local labelW = math.max(40 * s, fw - cloneW - assignW - gap * 2)
+    local label = Kit.ellipsize("mono", map.tileset or "?", labelW - 4 * s)
+    local ownedTs = S.project.tilesets and S.project.tilesets[map.tileset or ""]
+    local localSlot = ownedTs and ownedTs._mapLocal
+    Kit.text("mono", label, fx, fy + 6 * s, localSlot and PAL.green or PAL.heading)
+    if Kit.button(fx + labelW + gap, fy, cloneW, fh_, "Clone", {
+        kind = "good",
+        tooltip = "RPG Maker style: copy tileset for THIS map (Passage edits stay local)",
+      }) then
+      map = mutate()
+      local _, newId, err = cloneTilesetForMap(S, map, App)
+      if newId then
+        S.status = "Tileset slot " .. newId .. " — Passage edits affect this map only"
+      else
+        S.status = "Clone failed: " .. tostring(err)
+      end
+    end
+    if Kit.button(fx + labelW + gap + cloneW + gap, fy, assignW, fh_, "Assign", {
         kind = "accent",
-        tooltip = "Switch map.tileset (Gen1: one tileset per map)",
+        tooltip = "Choose which tileset slot this map uses (like RPG Maker)",
       }) then
       openTilesetPicker(S)
     end
   end) then return py end
+  do
+    local ownedTs = S.project.tilesets and S.project.tilesets[map.tileset or ""]
+    if ownedTs and ownedTs._mapLocal then
+      Kit.text("micro", "local slot (Passage safe)", px + 10 * s, py, PAL.green)
+    else
+      Kit.text("micro", "shared tileset — Clone or TERRAIN will make a local slot",
+        px + 10 * s, py, PAL.yellow)
+    end
+    py = py + 14 * s
+  end
 
   if prow("Border block", function(fx, fy, fw, fh_)
     local bid = map.borderBlock or 0
@@ -2904,7 +3379,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       local back = dest and dest.connections and dest.connections[oppositeDir(dir)]
       local ok = back and back.map == fromId
         and (back.offset or 0) == -(map.connections[dir].offset or 0)
-      Kit.text("micro", ok and "↔ linked" or (dest and "↔ pending" or "missing"),
+      Kit.text("micro", ok and "<-> linked" or (dest and "<-> pending" or "missing"),
         px + 120 * s, py + fh + 6 * s, ok and PAL.green or PAL.red)
       py = py + fh + 2 * s
     end
@@ -2913,8 +3388,8 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   return py
 end
 
--- Block palette for map.tileset (Tiled: tile = Gen1 block). Drawn in the
--- right stack under Details so thumbs stay large (~4 columns).
+-- Block palette for map.tileset (Tiled: tile = Gen1 block). RM XP–style
+-- left-column tileset dock under the map list.
 local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   local s = Kit.scale
   Kit.card(dx, dy, dw, dh, 10 * s)
@@ -2926,21 +3401,39 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     S.mapBlockOffset = 0
   end
 
-  local headerH = 22 * s
+  local narrow = dw < 260 * s
+  local headerH = narrow and 44 * s or 22 * s
   local headerY = dy + pad
-  Kit.text("micro", "MAP BLOCKS", dx + pad, headerY, PAL.caption)
-  Kit.text("micro", Kit.ellipsize("micro", active, dw - 100 * s),
-    dx + pad, headerY + 12 * s, PAL.muted)
-  local findW = 44 * s
-  local assignW = 58 * s
-  if Kit.button(dx + dw - pad - findW - assignW - 4 * s, headerY, assignW, 20 * s,
-      "Assign", {
+  Kit.text("micro", "TILESET", dx + pad, headerY, PAL.caption)
+  local ownedActive = S.project.tilesets and S.project.tilesets[active]
+  Kit.text("micro", Kit.ellipsize("micro", active, dw - 20 * s),
+    dx + pad, headerY + 12 * s,
+    (ownedActive and ownedActive._mapLocal) and PAL.green or PAL.muted)
+  local findW = 40 * s
+  local assignW = 52 * s
+  local cloneW = 48 * s
+  local btnY = narrow and (headerY + 22 * s) or headerY
+  local btnX = narrow and (dx + pad)
+    or (dx + dw - pad - findW - assignW - cloneW - 8 * s)
+  if Kit.button(btnX, btnY, cloneW, 20 * s, "Clone", {
+      kind = "good",
+      tooltip = "Duplicate tileset for this map (RPG Maker–style local Passage)",
+    }) then
+    local m = ensureOwned(S, S.mapId)
+    if m then
+      local _, newId, err = cloneTilesetForMap(S, m, App)
+      S.status = newId
+        and ("Tileset slot " .. newId)
+        or ("Clone failed: " .. tostring(err))
+    end
+  end
+  if Kit.button(btnX + cloneW + 4 * s, btnY, assignW, 20 * s, "Assign", {
         kind = "accent",
-        tooltip = "Switch map.tileset (one tileset per map)",
+        tooltip = "Switch this map's tileset slot",
       }) then
     openTilesetPicker(S)
   end
-  if Kit.button(dx + dw - pad - findW, headerY, findW, 20 * s, "Find", {
+  if Kit.button(btnX + cloneW + assignW + 8 * s, btnY, findW, 20 * s, "Find", {
       kind = "ghost", tooltip = "Search / preview tilesets to assign",
     }) then
     openTilesetPicker(S)
@@ -2955,10 +3448,10 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   local gridW = dw - 2 * pad
   local innerW = Kit.scrollInnerWidth(gridW)
   local gap = 4 * s
-  -- Target ~4 columns; grow thumbs when the column is wide.
-  local wantCols = 4
+  -- Left dock is narrow: prefer 2–3 columns of larger thumbs.
+  local wantCols = narrow and 3 or 4
   local thumb = math.floor((innerW - gap * (wantCols - 1)) / wantCols)
-  thumb = Theme.clamp(thumb, 32 * s, 52 * s)
+  thumb = Theme.clamp(thumb, 28 * s, 52 * s)
   local cols = math.max(1, math.floor((innerW + gap) / (thumb + gap)))
   local rows = math.max(1, math.floor((gridH + gap) / (thumb + gap)))
   local perPage = cols * rows
@@ -2992,8 +3485,9 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     end
     if Kit.press(bx, by, thumb, thumb) then
       S.paintBlock = i
+      S.mapEditMode = "map"
       S.mapTool = "paint"
-      S.status = string.format("tileset=%s block=%d", tostring(active), i)
+      S.status = string.format("Pencil: block %d (%s)", i, tostring(active))
     end
   end
   Kit.popClip()
@@ -3816,11 +4310,15 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete object",
         { kind = "danger" }) then
     map = mutate()
+    local removed = map.objects[i]
     table.remove(map.objects, i)
     for j, o in ipairs(map.objects) do o.index = j end
+    cleanupRemovedMapObject(S, map, i, removed)
     S.mapObjectIndex = math.min(i, #map.objects)
     MapLoader.invalidate(map.id)
     App.markDirty()
+    S.status = "Deleted object #" .. tostring(i)
+      .. " (cleared trainer text/flags/scripts)"
   end
   return py
 end
@@ -4068,42 +4566,72 @@ function Maps.draw(S, x, y, w, h, App)
     return
   end
 
-  local listW = math.min(200 * s, w * 0.22)
-  Kit.caption(x, y, "MAPS")
+  syncMapEditMode(S)
   S.mapViewMode = S.mapViewMode or "editor"
+
+  -- Left column: map list (top) + tileset palette (bottom) — RM XP layout.
+  local leftW = math.min(250 * s, w * 0.28)
+  Kit.caption(x, y, "MAPS")
+  local modeX = x + Kit.textWidth("caption", "MAPS") + 12 * s
   local modeY = y
-  local modeX = x + Kit.textWidth("caption", "MAPS") + 16 * s
   for _, mode in ipairs({
     { id = "editor", label = "Editor" },
     { id = "world", label = "World" },
   }) do
     local on = S.mapViewMode == mode.id
-    local bw = Kit.textWidth("micro", mode.label) + 16 * s
+    local bw = Kit.textWidth("micro", mode.label) + 14 * s
     if Kit.chip(modeX, modeY, bw, 22 * s, mode.label, on, PAL.green, nil,
         mode.id == "world"
           and "Show this map and its N/S/E/W neighbors"
-          or "Paint blocks, warps, objects") then
+          or "RM XP–style map editor") then
       S.mapViewMode = mode.id
       if mode.id == "world" then S._worldFitKey = nil end
     end
     modeX = modeX + bw + 4 * s
   end
-  local qh = 28 * s
-  local qy = y + 22 * s
-  local q, qChanged = Search.field(S, "mapQuery", x, qy, listW, qh, "search maps...")
+  -- Map | Events layer toggle (like RM XP tile vs event layer).
+  modeX = modeX + 8 * s
+  for _, mode in ipairs({
+    { id = "map", label = "Map", tip = "Pencil / tileset / Passage" },
+    { id = "events", label = "Events", tip = "NPCs, transfers, signs, trainers" },
+  }) do
+    local on = (S.mapEditMode or "map") == mode.id
+    local bw = Kit.textWidth("micro", mode.label) + 14 * s
+    if Kit.chip(modeX, modeY, bw, 22 * s, mode.label, on, PAL.blue, nil, mode.tip) then
+      syncMapEditMode(S, mode.id)
+      if mode.id == "map" then
+        S.status = "Map layer: Pencil paints blocks · Passage edits tileset slot"
+      else
+        S.status = "Event layer: place NPCs / Transfers / signs"
+      end
+    end
+    modeX = modeX + bw + 4 * s
+  end
+
+  local qh = 26 * s
+  local qy = y + 24 * s
+  local q, qChanged = Search.field(S, "mapQuery", x, qy, leftW, qh, "search maps...")
   if qChanged then S.mapListOffset = 0 end
-  local listY = qy + qh + 6 * s
-  local listH = h - (listY - y) - 40 * s
-  Kit.card(x, listY, listW, listH, 12 * s)
+
+  local leftTop = qy + qh + 6 * s
+  local leftBot = y + h
+  local leftBodyH = leftBot - leftTop
+  local newMapH = 30 * s
+  local listFrac = 0.40
+  local mapListH = math.max(100 * s, leftBodyH * listFrac - newMapH - 6 * s)
+  local tilesetY = leftTop + mapListH + newMapH + 10 * s
+  local tilesetH = math.max(120 * s, leftBot - tilesetY)
+
+  Kit.card(x, leftTop, leftW, mapListH, 10 * s)
 
   local ids = allMapIds(S)
   if q ~= "" then
     local filtered, ql = {}, q:lower()
     for _, id in ipairs(ids) do
-      local map = S.project.maps[id]
+      local mdef = S.project.maps[id]
         or (S.data.maps and S.data.maps[id])
-      local label = map and tostring(map.label or "") or ""
-      local ts = map and tostring(map.tileset or "") or ""
+      local label = mdef and tostring(mdef.label or "") or ""
+      local ts = mdef and tostring(mdef.tileset or "") or ""
       if id:lower():find(ql, 1, true)
           or label:lower():find(ql, 1, true)
           or ts:lower():find(ql, 1, true) then
@@ -4112,13 +4640,13 @@ function Maps.draw(S, x, y, w, h, App)
     end
     ids = filtered
   end
-  local rowH = 28 * s
-  local perPage = math.max(1, math.floor((listH - 16 * s) / (rowH + 3 * s)))
+  local rowH = 26 * s
+  local perPage = math.max(1, math.floor((mapListH - 14 * s) / (rowH + 3 * s)))
   local mapScrollX = x + 6 * s
-  local mapScrollW = listW - 12 * s
-  local mapScrollH = listH - 16 * s
+  local mapScrollW = leftW - 12 * s
+  local mapScrollH = mapListH - 14 * s
   local mapRowW = Kit.scrollInnerWidth(mapScrollW)
-  S.mapListOffset = Kit.scroll(mapScrollX, listY + 8 * s, mapScrollW,
+  S.mapListOffset = Kit.scroll(mapScrollX, leftTop + 6 * s, mapScrollW,
     mapScrollH, S.mapListOffset or 0, #ids, perPage, nil, "mapListOffset")
   local mapNav = RegList.bindNav(S, ids, {
     selKey = "mapId",
@@ -4134,10 +4662,10 @@ function Maps.draw(S, x, y, w, h, App)
       if S.mapViewMode == "world" then S._worldFitKey = nil end
     end,
   })
-  local ry = listY + 8 * s
+  local ry = leftTop + 6 * s
   for i = (S.mapListOffset or 0) + 1, math.min(#ids, (S.mapListOffset or 0) + perPage) do
     local id = ids[i]
-    local owned = S.project.maps[id] ~= nil
+    local rowOwned = S.project.maps[id] ~= nil
     if Kit.row(mapScrollX, ry, mapRowW, rowH, S.mapId == id, PAL.green) then
       mapNav.activate()
       S.mapId = id
@@ -4152,20 +4680,16 @@ function Maps.draw(S, x, y, w, h, App)
     local textX = mapScrollX + 6 * s
     local textMax = math.max(8, mapRowW - 12 * s)
     local label = Kit.ellipsize("mono", id, textMax)
-    if Kit.textWidth("mono", label) > textMax + 0.5 then
-      local unit = math.max(1, Kit.textWidth("mono", "W"))
-      local n = math.max(0, math.floor(textMax / unit) - 3)
-      label = (n > 0 and id:sub(1, n) or "") .. "..."
-    end
     Kit.pushClip(mapScrollX, ry, mapRowW, rowH)
-    Kit.text("mono", label, textX, ry + 6 * s, owned and PAL.text or PAL.muted)
+    Kit.text("mono", label, textX, ry + 5 * s, rowOwned and PAL.text or PAL.muted)
     Kit.popClip()
     ry = ry + rowH + 3 * s
   end
-  S.mapListOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
+  S.mapListOffset = Kit.scrollbar(mapScrollX, leftTop + 6 * s, mapScrollW,
     mapScrollH, S.mapListOffset or 0, #ids, perPage, "mapListOffset")
 
-  if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New map", { kind = "good" }) then
+  if Kit.button(x, leftTop + mapListH + 4 * s, leftW, newMapH, "+ New map",
+      { kind = "good" }) then
     local nid = "NEW_MAP"
     local n = 1
     while S.project.maps[nid] or (S.data.maps and S.data.maps[nid]) do
@@ -4179,6 +4703,7 @@ function Maps.draw(S, x, y, w, h, App)
     S.mapPaletteTileset = ts
     S._mapPaletteFor = nid
     S._mapCenteredFor = nil
+    syncMapEditMode(S, "map")
     App.markDirty()
   end
 
@@ -4189,59 +4714,92 @@ function Maps.draw(S, x, y, w, h, App)
     map, owned = resolveMapDef(S, first)
   end
 
-  local mainX = x + listW + 12 * s
-  local mainW = w - listW - 12 * s
+  local function mutate()
+    map = ensureOwned(S, S.mapId)
+    owned = true
+    return map
+  end
+
+  if map then
+    map = drawTilesetDock(S, map, mutate, App, x, tilesetY, leftW, tilesetH) or map
+  else
+    Kit.emptyBox(x, tilesetY, leftW, tilesetH, "No map selected")
+  end
+
+  -- Center + right
+  local split = 6 * s
+  -- Wider props drawer so Basics / Encounters fields stay readable.
+  local rightMin = 280 * s
+  local rightMax = math.max(rightMin, (w - leftW) * 0.48)
+  local rightDefault = Theme.clamp(320 * s, rightMin, rightMax)
+  local rightW = Theme.clamp(S.mapRightW or rightDefault, rightMin, rightMax)
+  local mainX = x + leftW + 10 * s
+  local mainW = math.max(120 * s, w - leftW - 10 * s)
 
   if S.mapViewMode == "world" then
-    local propW = 260 * s
+    local propW = math.min(260 * s, rightW + 40 * s)
     local worldY = qy
     local worldH = h - (worldY - y)
     drawWorldView(S, App, mainX, worldY, mainW, worldH, propW)
     return
   end
 
-  local tools = {
-    { id = "paint", tip = "Stamp the selected block (drag to paint)" },
-    { id = "erase", tip = "Paint block 0 (empty / void)" },
-    { id = "pick", tip = "Click the map to sample a block into the brush" },
-    { id = "select", tip = "Drag a block marquee; shift with dx/dy (Space/MMB pans)" },
-    { id = "collision", label = "TERRAIN",
-      tip = "Paint walk/solid/water/grass/shore/ledge on the cell's feet tile" },
-    { id = "warp", tip = "Place or select warps" },
-    { id = "object", tip = "Place NPCs / objects" },
-    { id = "sign", tip = "Place signs" },
-    { id = "trainer", tip = "Place a trainer object" },
-    { id = "wild", tip = "Place a fixed wild encounter (species + level on a cell)" },
-  }
+  -- Tool strip (filtered by Map / Events mode)
+  local tools
+  if (S.mapEditMode or "map") == "events" then
+    tools = {
+      { id = "object", label = "Event", tip = "Place / select NPC events" },
+      { id = "warp", label = "Transfer", tip = "Place map transfers (warps)" },
+      { id = "sign", label = "Sign", tip = "Place signs" },
+      { id = "trainer", label = "Trainer", tip = "Place a trainer event" },
+      { id = "wild", label = "Wild", tip = "Place a fixed wild encounter" },
+    }
+  else
+    tools = {
+      { id = "paint", label = "Pencil", tip = "Paint the selected tileset block" },
+      { id = "erase", label = "Eraser", tip = "Paint block 0 (empty)" },
+      { id = "pick", label = "Pick", tip = "Sample a block from the map" },
+      { id = "select", label = "Select", tip = "Marquee select blocks (copy/paste/shift)" },
+      { id = "collision", label = "Passage",
+        tip = "Walk/solid/water/grass on this map's tileset slot" },
+    }
+  end
   local tx = mainX
   for _, tool in ipairs(tools) do
     local on = (S.mapTool or "paint") == tool.id
     local label = tool.label or tool.id:upper()
-    local bw = (tool.id == "trainer" or tool.id == "select"
-        or tool.id == "object" or tool.id == "collision" or tool.id == "wild")
-      and math.max(70 * s, Kit.textWidth("micro", label) + 16 * s) or 54 * s
+    local bw = math.max(58 * s, Kit.textWidth("micro", label) + 14 * s)
     if Kit.chip(tx, y, bw, 26 * s, label, on, PAL.blue, nil, tool.tip) then
       S.mapTool = tool.id
-      if tool.id == "object" or tool.id == "trainer" or tool.id == "wild" then
-        S.mapSection = "objects"
+      if EVENT_TOOLS[tool.id] then
+        syncMapEditMode(S, "events")
+        if tool.id == "warp" then S.mapSection = "warps"
+        elseif tool.id == "sign" then S.mapSection = "signs"
+        else S.mapSection = "objects" end
+      else
+        syncMapEditMode(S, "map")
       end
       if tool.id == "collision" then
         S.mapShowCollision = true
         S.mapCollisionMode = S.mapCollisionMode or "solid"
-        S.status = "TERRAIN: paint walk/solid/water/grass/shore (tileset-wide)"
-      end
-      if tool.id == "wild" then
+        S.status = "Passage: paints this map's tileset slot (auto-clones if shared)"
+      elseif tool.id == "paint" then
+        S.status = "Pencil: paint blocks from the tileset palette"
+      elseif tool.id == "object" then
+        S.status = "Event: click the map to place an NPC"
+      elseif tool.id == "warp" then
+        S.status = "Transfer: click the map to place a warp"
+      elseif tool.id == "wild" then
         S.placeWildSpecies = S.placeWildSpecies or "ARTICUNO"
         S.placeWildLevel = S.placeWildLevel or 50
         S.placeSprite = S.placeSprite or "SPRITE_BIRD"
-        S.status = string.format("WILD tool: %s Lv%d — click a cell",
+        S.status = string.format("Wild: %s Lv%d — click a cell",
           tostring(S.placeWildSpecies), tonumber(S.placeWildLevel) or 50)
-      end
-      if tool.id == "trainer" then
+      elseif tool.id == "trainer" then
         S.trainerId = S.trainerId or "OPP_YOUNGSTER"
         S.placeTrainerParty = S.placeTrainerParty or 1
         S.placeSprite = S.placeSprite or "SPRITE_YOUNGSTER"
-        S.status = string.format("TRAINER tool: %s party %d — click a cell",
+        S.status = string.format("Trainer: %s party %d — click a cell",
           tostring(S.trainerId), tonumber(S.placeTrainerParty) or 1)
       end
     end
@@ -4251,13 +4809,13 @@ function Maps.draw(S, x, y, w, h, App)
     for _, mode in ipairs({
       { id = "solid", label = "Solid", tip = "Blocked / not walkable", accent = PAL.red },
       { id = "walk", label = "Walk", tip = "Passable (walkable list)", accent = PAL.green },
-      { id = "water", label = "Water", tip = "Surf water (wild water encounters)", accent = PAL.blue },
-      { id = "grass", label = "Grass", tip = "Tall grass tile (wild grass encounters)",
+      { id = "water", label = "Water", tip = "Surf water", accent = PAL.blue },
+      { id = "grass", label = "Grass", tip = "Tall grass (wild encounters)",
         accent = { 240, 70, 220 } },
-      { id = "shore", label = "Shore", tip = "Shore / beach edge for surf", accent = PAL.blue },
-      { id = "ledge", label = "Ledge", tip = "Click the ledge cell; hop dir below (field.ledges)",
+      { id = "shore", label = "Shore", tip = "Shore / beach edge", accent = PAL.blue },
+      { id = "ledge", label = "Ledge", tip = "Click ledge cell; hop dir below",
         accent = { 255, 140, 40 } },
-      { id = "none", label = "None", tip = "Clear grass / water / shore / ledge rules on this tile",
+      { id = "none", label = "None", tip = "Clear grass / water / shore / ledge",
         accent = PAL.steel },
     }) do
       local on = (S.mapCollisionMode or "solid") == mode.id
@@ -4272,10 +4830,11 @@ function Maps.draw(S, x, y, w, h, App)
     end
     if (S.mapCollisionMode or "solid") == "ledge" then
       for _, d in ipairs({
-        { id = "down", label = "↓" },
-        { id = "left", label = "←" },
-        { id = "right", label = "→" },
-        { id = "up", label = "↑" },
+        -- ASCII only — editor fonts often lack Unicode arrows (tofu □).
+        { id = "down", label = "v" },
+        { id = "left", label = "<" },
+        { id = "right", label = ">" },
+        { id = "up", label = "^" },
       }) do
         local on = (S.mapLedgeDir or "down") == d.id
         if Kit.chip(tx, y, 28 * s, 26 * s, d.label, on, { 255, 140, 40 }, nil,
@@ -4286,13 +4845,13 @@ function Maps.draw(S, x, y, w, h, App)
       end
     end
   end
-  if Kit.button(tx + 4 * s, y, 72 * s, 26 * s, "Dialog", {
+  if Kit.button(tx + 4 * s, y, 64 * s, 26 * s, "Dialog", {
       kind = "ghost", tooltip = "Edit this map's NPC / sign text",
     }) then
     S.tab = "dialog"
     S.dialogMapId = S.mapId
   end
-  tx = tx + 80 * s
+  tx = tx + 72 * s
   if Kit.stepper(tx, y, 26 * s, 26 * s, "-", {
       radius = 6 * s, tooltip = "Zoom out",
     }) then
@@ -4309,7 +4868,6 @@ function Maps.draw(S, x, y, w, h, App)
     S._mapCenteredFor = nil
   end
 
-  -- Paint / view strip under tools (SELECT gets shift controls instead)
   local barY = y + 30 * s
   local barH = 34 * s
   if S._mapSelFor ~= S.mapId then
@@ -4332,6 +4890,32 @@ function Maps.draw(S, x, y, w, h, App)
       }) then
       S.mapSel, S._mapSelDraft = nil, nil
       S.status = "Selection cleared"
+    end
+    bx = bx + 58 * s
+    if Kit.button(bx, barY + 4 * s, 52 * s, 28 * s, "Copy", {
+        kind = "accent",
+        tooltip = "Copy selection (Ctrl+C). Paste with Ctrl+V or Shift+RMB",
+      }) then
+      local x0, y0, x1, y1 = normalizeBlockSel(S.mapSel)
+      if not x0 then
+        S.status = "Select a region (or All) before copying"
+      else
+        local bw, bh = copyBlocksToClip(S, map, x0, y0, x1, y1)
+        if bw then
+          S.status = string.format("Copied %dx%d — Ctrl+V or Shift+RMB to paste",
+            bw, bh)
+        end
+      end
+    end
+    bx = bx + 56 * s
+    if Kit.button(bx, barY + 4 * s, 52 * s, 28 * s, "Paste", {
+        kind = "good",
+        tooltip = "Paste clipboard at hover / selection top-left (Ctrl+V)",
+      }) then
+      local dx, dy = pasteDestBlock(S, map)
+      local ok, msg = pasteClipAt(S, S.mapId, dx, dy, App)
+      S.status = msg or (ok and "Pasted" or "Paste failed")
+      map = resolveMapDef(S, S.mapId)
     end
     bx = bx + 58 * s
     Kit.text("micro", "dx", bx, barY + 2 * s, PAL.caption)
@@ -4369,32 +4953,25 @@ function Maps.draw(S, x, y, w, h, App)
     end
     if Kit.button(bx, barY + 4 * s, 56 * s, 28 * s, "Apply", {
         kind = "good",
-        tooltip = "Shift by dx,dy blocks (+dx east, +dy south; use +dy after growing height to free north)",
+        tooltip = "Shift by dx,dy blocks",
       }) then
       applyShift(tonumber(draft.dx) or 0, tonumber(draft.dy) or 0)
     end
     bx = bx + 62 * s
-    local nudges = {
-      { label = "←", dx = -1, dy = 0 },
-      { label = "→", dx = 1, dy = 0 },
-      { label = "↑", dx = 0, dy = -1 },
-      { label = "↓", dx = 0, dy = 1 },
-    }
-    for _, n in ipairs(nudges) do
+    for _, n in ipairs({
+      -- ASCII only — editor fonts often lack Unicode arrows (tofu □).
+      { label = "<", dx = -1, dy = 0 },
+      { label = ">", dx = 1, dy = 0 },
+      { label = "^", dx = 0, dy = -1 },
+      { label = "v", dx = 0, dy = 1 },
+    }) do
       if Kit.button(bx, barY + 4 * s, 28 * s, 28 * s, n.label, {
           kind = "ghost",
-          tooltip = string.format("Nudge selection by (%d, %d) blocks", n.dx, n.dy),
+          tooltip = string.format("Nudge (%d, %d)", n.dx, n.dy),
         }) then
         applyShift(n.dx, n.dy)
       end
       bx = bx + 32 * s
-    end
-    local x0, y0, x1, y1 = normalizeBlockSel(S.mapSel)
-    if x0 then
-      Kit.text("micro", string.format("sel (%d,%d)–(%d,%d)", x0, y0, x1, y1),
-        bx + 4 * s, barY + 12 * s, PAL.faint)
-    else
-      Kit.text("micro", "drag marquee or All", bx + 4 * s, barY + 12 * s, PAL.faint)
     end
   elseif map and (S.mapTool or "paint") == "wild" then
     barH = 38 * s
@@ -4414,8 +4991,6 @@ function Maps.draw(S, x, y, w, h, App)
       Preview.draw(S, monDef.spriteFront, bx + 210 * s, barY, 34 * s, 34 * s,
         Preview.monPaletteName(S, monDef, S.placeWildSpecies))
     end
-    Kit.text("micro", "click cell to place  ·  orange outline = fixed wild",
-      bx + 250 * s, barY + 12 * s, PAL.faint)
   elseif map and (S.mapTool or "paint") == "trainer" then
     barH = 38 * s
     local bx = mainX
@@ -4425,85 +5000,36 @@ function Maps.draw(S, x, y, w, h, App)
       S.trainerId or "OPP_YOUNGSTER", "OPP_YOUNGSTER")
       :upper():gsub("%s+", "_")
     if cls ~= "" then S.trainerId = cls end
-    local party = tonumber(field(App, "mp_tr_party", bx + 170 * s, barY + 14 * s,
+    local pty = tonumber(field(App, "mp_tr_pty", bx + 170 * s, barY + 14 * s,
       48 * s, 22 * s, tostring(S.placeTrainerParty or 1), "1")) or 1
-    S.placeTrainerParty = math.max(1, party)
-    local trDef = (S.project.trainers and S.project.trainers[S.trainerId])
-      or (S.data and S.data.trainers and S.data.trainers[S.trainerId])
-    if trDef and trDef.pic then
-      Preview.draw(S, trDef.pic, bx + 230 * s, barY, 34 * s, 34 * s)
-    end
-    local tipX = bx + 270 * s
-    if Kit.button(tipX, barY + 6 * s, 88 * s, 26 * s, "Parties", {
-        kind = "ghost",
-        tooltip = "Edit this class on the Trainers tab",
-      }) then
-      S.tab = "trainers"
-    end
-    Kit.text("micro", "click cell to place  ·  red outline = trainer",
-      tipX + 96 * s, barY + 12 * s, PAL.faint)
+    S.placeTrainerParty = math.max(1, pty)
   elseif map then
     local thumb = 28 * s
     local tsId = map.tileset
     drawBlockThumb(S, tsId, S.paintBlock or 1, mainX, barY, thumb)
-    Kit.text("micro", "block " .. tostring(S.paintBlock or 1),
+    Kit.text("micro", "brush " .. tostring(S.paintBlock or 1),
       mainX + thumb + 6 * s, barY + 2 * s, PAL.caption)
-    Kit.text("micro", Kit.ellipsize("micro", tsId or "?", 100 * s),
+    Kit.text("micro", Kit.ellipsize("micro", tsId or "?", 120 * s),
       mainX + thumb + 6 * s, barY + 14 * s, PAL.muted)
-    local bx = mainX + thumb + 120 * s
-    drawBlockThumb(S, tsId, map.borderBlock or 0, bx, barY, thumb)
-    Kit.text("micro", "border " .. tostring(map.borderBlock or 0),
-      bx + thumb + 4 * s, barY + 2 * s, PAL.caption)
-    if Kit.button(bx + thumb + 4 * s, barY + 14 * s, 72 * s, 14 * s, "Set border", {
-        kind = "ghost",
-        tooltip = "Set borderBlock from the selected paint block",
-      }) then
-      map = ensureOwned(S, S.mapId) or map
-      map.borderBlock = S.paintBlock or 0
-      MapLoader.invalidate(map.id)
-      App.markDirty()
-      S.status = "Border block → " .. tostring(map.borderBlock)
-    end
-    bx = bx + thumb + 84 * s
+    local bx = mainX + thumb + 140 * s
     if Kit.chip(bx, barY + 2 * s, 90 * s, barH - 4 * s, "Terrain",
         S.mapShowCollision, PAL.red, nil,
-        "Overlay: red=solid blue=water cyan=shore magenta=grass orange=ledge") then
+        "Overlay: red=solid blue=water magenta=grass orange=ledge") then
       S.mapShowCollision = not S.mapShowCollision
     end
     bx = bx + 98 * s
     local showNb = S.mapShowNeighbors ~= false
     if Kit.chip(bx, barY + 2 * s, 96 * s, barH - 4 * s, "Neighbors",
-        showNb, PAL.blue, nil, "Draw connected maps at N/S/E/W seams") then
+        showNb, PAL.blue, nil, "Draw connected maps at seams") then
       S.mapShowNeighbors = not showNb
-    end
-    bx = bx + 104 * s
-    local spr = S.placeSprite or "SPRITE_RED"
-    local sdef = spriteDef(S, spr)
-    if sdef and sdef.image then
-      Preview.draw(S, sdef.image, bx, barY, thumb, thumb)
-    else
-      Theme.col(PAL.rowBg, 1)
-      love.graphics.rectangle("fill", bx, barY, thumb, thumb, 3, 3)
-    end
-    Kit.text("micro", "place", bx + thumb + 4 * s, barY + 2 * s, PAL.caption)
-    Kit.text("micro", Kit.ellipsize("micro", spr, 120 * s),
-      bx + thumb + 4 * s, barY + 14 * s, PAL.muted)
-    if Kit.press(bx, barY, thumb + 130 * s, thumb) then
-      S.mapSection = "objects"
-      S.mapTool = "object"
     end
   end
 
-  -- Editor body: map canvas (left) + stacked Details / MAP BLOCKS (right).
+  -- Canvas (center) + properties (right)
   local canvasY = barY + barH + 4 * s
   local bodyH = math.max(80 * s, y + h - canvasY)
-  local split = 6 * s
-  local rightMin = 200 * s
-  local rightMax = math.max(rightMin, mainW * 0.48)
-  local rightDefault = Theme.clamp(240 * s, rightMin, rightMax)
-  local rightW = Theme.clamp(S.mapRightW or rightDefault, rightMin, rightMax)
-  local vHitX = mainX + mainW - rightW - split
   do
+    local vHitX = mainX + mainW - rightW - split
     local drag = S._mapSplits and S._mapSplits.rightW
     if Kit.mouseDown and not Kit.blockClicks then
       if drag or Kit.hit(vHitX, canvasY, split, bodyH) then
@@ -4518,6 +5044,7 @@ function Maps.draw(S, x, y, w, h, App)
     end
     S.mapRightW = rightW
   end
+  local vHitX = mainX + mainW - rightW - split
   local canvasW = math.max(80 * s, vHitX - mainX)
   local canvasH = bodyH
   local px = vHitX + split
@@ -4534,74 +5061,51 @@ function Maps.draw(S, x, y, w, h, App)
     math.max(0, canvasW - 2 * pad), math.max(0, canvasH - 2 * pad))
   drawMapPreview(S, map, mainX, canvasY, canvasW, canvasH, App)
 
-  local function mutate()
-    map = ensureOwned(S, S.mapId)
-    owned = true
-    return map
-  end
-
-  -- Right stack: details (top) / tiles (bottom); drag bars to resize.
-  local tilesMin = 160 * s
-  local tilesMax = math.max(tilesMin, bodyH - 140 * s)
-  local tilesDefault = Theme.clamp(bodyH * 0.55, tilesMin, tilesMax)
-  local tilesH = Theme.clamp(S.mapTilesH or tilesDefault, tilesMin, tilesMax)
-  local hHitY = canvasY + bodyH - tilesH - split
-  do
-    local drag = S._mapSplits and S._mapSplits.tilesH
-    if Kit.mouseDown and not Kit.blockClicks then
-      if drag or Kit.hit(px, hHitY, propW, split) then
-        S._mapSplits = S._mapSplits or {}
-        S._mapSplits.tilesH = true
-        tilesH = Theme.clamp(canvasY + bodyH - Kit.mouseY, tilesMin, tilesMax)
-        S.mapTilesH = tilesH
-        hHitY = canvasY + bodyH - tilesH - split
-      end
-    elseif drag then
-      S._mapSplits.tilesH = nil
-    end
-  end
-
-  local detailH = math.max(100 * s, hHitY - canvasY)
-  local title = map.id .. (owned and "" or " (vanilla)")
-  Kit.card(px, canvasY, propW, detailH, 12 * s)
-  Kit.text("micro", Kit.ellipsize("micro", title, propW - 16 * s),
-    px + 8 * s, canvasY + 6 * s, PAL.heading)
-
-  -- Splitter chrome (after cards so handles stay visible).
   do
     local hotV = Kit.hit(vHitX, canvasY, split, bodyH)
       or (S._mapSplits and S._mapSplits.rightW)
     Theme.col(PAL.cardBorder, hotV and 0.75 or 0.3)
     love.graphics.rectangle("fill", vHitX, canvasY, split, bodyH)
-    local hotH = Kit.hit(px, hHitY, propW, split)
-      or (S._mapSplits and S._mapSplits.tilesH)
-    Theme.col(PAL.cardBorder, hotH and 0.75 or 0.3)
-    love.graphics.rectangle("fill", px, hHitY, propW, split)
   end
 
+  -- Right properties drawer (mode-filtered sections)
   if S.mapSection == "blocks" then S.mapSection = "basics" end
+  syncMapEditMode(S)
   S.mapSection = S.mapSection or "basics"
+  local title = map.id .. (owned and "" or " (vanilla)")
+  Kit.card(px, canvasY, propW, bodyH, 12 * s)
+  Kit.text("micro", Kit.ellipsize("micro", title, propW - 16 * s),
+    px + 8 * s, canvasY + 6 * s,
+    (S.mapEditMode == "events") and PAL.blue or PAL.heading)
+  Kit.text("micro",
+    (S.mapEditMode == "events") and "Event properties" or "Map properties",
+    px + 8 * s, canvasY + 18 * s, PAL.faint)
+
   local sx = px + 8 * s
-  local secY = canvasY + 22 * s
+  local secY = canvasY + 34 * s
+  local allow = (S.mapEditMode == "events") and EVENT_MODE_SECTIONS or MAP_MODE_SECTIONS
   for _, sec in ipairs(SECTIONS) do
-    local on = S.mapSection == sec.id
-    local bw = Kit.textWidth("micro", sec.label) + 14 * s
-    if sx + bw > px + propW - 8 * s then
-      sx = px + 8 * s
-      secY = secY + 28 * s
+    if allow[sec.id] then
+      local on = S.mapSection == sec.id
+      local bw = Kit.textWidth("micro", sec.label) + 14 * s
+      if sx + bw > px + propW - 8 * s then
+        sx = px + 8 * s
+        secY = secY + 28 * s
+      end
+      if Kit.chip(sx, secY, bw, 24 * s, sec.label, on, PAL.green) then
+        S.mapSection = sec.id
+      end
+      sx = sx + bw + 3 * s
     end
-    if Kit.chip(sx, secY, bw, 24 * s, sec.label, on, PAL.green) then
-      S.mapSection = sec.id
-    end
-    sx = sx + bw + 3 * s
   end
   local footerH = 68 * s
   local viewX = px + pad
   local viewY = secY + 30 * s
   local viewW = propW - 2 * pad
-  local viewH = math.max(40 * s, canvasY + detailH - viewY - footerH)
+  local viewH = math.max(40 * s, canvasY + bodyH - viewY - footerH)
   FormPane.track(S, "mapFormScroll",
-    tostring(S.mapId) .. "|" .. tostring(S.mapSection))
+    tostring(S.mapId) .. "|" .. tostring(S.mapSection) .. "|"
+      .. tostring(S.mapEditMode))
   local contentY, view = FormPane.begin(S, "mapFormScroll", viewX, viewY, viewW, viewH)
   local formX = view.x or viewX
   local formW = view.contentW or viewW
@@ -4633,7 +5137,7 @@ function Maps.draw(S, x, y, w, h, App)
   end
   FormPane.finish(S, "mapFormScroll", contentTop, contentY, view)
 
-  local fy = canvasY + detailH - footerH + 4 * s
+  local fy = canvasY + bodyH - footerH + 4 * s
   if Kit.button(px + 10 * s, fy, propW - 20 * s, 26 * s, "Clear markers",
       { kind = "ghost" }) then
     local mid = map.id or S.mapId
@@ -4661,9 +5165,6 @@ function Maps.draw(S, x, y, w, h, App)
     S._mapCenteredFor = nil
     App.markDirty()
   end
-
-  local tilesY = hHitY + split
-  map = drawTilesetDock(S, map, mutate, App, px, tilesY, propW, tilesH) or map
 
   if S.importReport and S.importReport ~= "" then
     local brief = S.importReport:gsub("\r", ""):match("([^\n]+)") or ""
