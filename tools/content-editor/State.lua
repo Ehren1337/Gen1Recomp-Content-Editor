@@ -48,6 +48,8 @@ function State.new()
     testSave = nil,
     testSavePath = nil,
     flagFilter = "",
+    -- Editor preview: resolve colors from data/palettes_gbc.lua (default ON).
+    useGbcPalettes = true,
   }
 end
 
@@ -85,6 +87,8 @@ function State.blankProject(id, name)
     constants = {},   -- constants patches (levelCap, badges, …)
     audio = {},       -- songs/cries/sfx/mapSongs
     palettes = {},    -- id -> colors
+    -- GBC ADVANCED tileset BG groups: groupColors[tileset] = 8×4×{r,g,b}
+    gbcWorld = { groupColors = {} },
     sprites = {},     -- overworld sprite defs
     aiClasses = {},   -- trainer AI class records
     battle_anims = {}, -- registry ids: MOVE / subanim:N / tilesheet:N
@@ -128,6 +132,8 @@ function State.ensureProjectFields(project)
   project.constants = project.constants or {}
   project.audio = project.audio or {}
   project.palettes = project.palettes or {}
+  project.gbcWorld = project.gbcWorld or { groupColors = {} }
+  project.gbcWorld.groupColors = project.gbcWorld.groupColors or {}
   project.sprites = project.sprites or {}
   project.aiClasses = project.aiClasses or {}
   project.battle_anims = project.battle_anims or {}

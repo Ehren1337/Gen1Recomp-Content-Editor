@@ -150,10 +150,153 @@ local function normalizeColors(rec)
   return out
 end
 
--- Sorted palette ids (ROM/cache order, then GBC pack, then project extras).
--- `data.palettes` is optional — without a ROM import the Maps / GFX pickers
--- would list nothing even though data/palettes_gbc.lua ships 200+ names
--- that Preview.paletteColors already resolves.
+-- Editor preview: use pokered-gbc pack colors (default ON). When OFF, resolve
+-- from ROM/cache SGB palettes only. Persisted in DataSource prefs.
+function Preview.useGbcPalettes(S)
+  if S and S.useGbcPalettes ~= nil then
+    return S.useGbcPalettes and true or false
+  end
+  local prefs = S and S.dataPrefs
+  if prefs and prefs.useGbcPalettes ~= nil then
+    return prefs.useGbcPalettes and true or false
+  end
+  return true
+end
+
+-- Push project.gbcWorld overrides into PaletteFX and sync COLORS mode so
+-- map preview uses ADVANCED (redpp) per-tile GBC baking when GBC is ON.
+function Preview.syncGbcWorldRuntime(S)
+  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  if not (ok and PaletteFX) then return end
+  local use = Preview.useGbcPalettes(S)
+  if use then
+    if PaletteFX.setMode then PaletteFX.setMode("redpp") end
+    local gw = S and S.project and S.project.gbcWorld
+    local groups = gw and gw.groupColors
+    if PaletteFX.setWorldGroupOverrides then
+      PaletteFX.setWorldGroupOverrides(groups)
+    end
+  else
+    if PaletteFX.setWorldGroupOverrides then
+      PaletteFX.setWorldGroupOverrides(nil)
+    end
+    if PaletteFX.setMode then PaletteFX.setMode("gbc") end
+  end
+  pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  Preview.invalidate()
+end
+
+function Preview.setUseGbcPalettes(S, on)
+  if not S then return end
+  on = on and true or false
+  S.useGbcPalettes = on
+  S.dataPrefs = S.dataPrefs or {}
+  S.dataPrefs.useGbcPalettes = on
+  local ok, DataSource = pcall(require, "DataSource")
+  if ok and DataSource and DataSource.savePrefs then
+    local prefs = DataSource.loadPrefs and DataSource.loadPrefs() or {}
+    prefs.useGbcPalettes = on
+    if S.dataPrefs.mode then prefs.mode = S.dataPrefs.mode end
+    if S.dataPrefs.recompRoot then prefs.recompRoot = S.dataPrefs.recompRoot end
+    DataSource.savePrefs(prefs)
+  end
+  Preview.syncGbcWorldRuntime(S)
+end
+
+Preview.GBC_GROUP_NAMES = {
+  "GRAY", "RED", "GREEN", "BLUE", "YELLOW", "BROWN", "ROOF", "TEXT",
+}
+
+function Preview.hasTilesetGbcGroups(S, tilesetId)
+  if type(tilesetId) ~= "string" or tilesetId == "" then return false end
+  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  return ok and PaletteFX and PaletteFX.hasWorldTileset
+    and PaletteFX.hasWorldTileset(tilesetId) and true or false
+end
+
+-- Effective 8×4 colors (project override merged over pack vanilla).
+function Preview.tilesetGbcGroups(S, tilesetId)
+  if not Preview.hasTilesetGbcGroups(S, tilesetId) then return nil end
+  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  if not (ok and PaletteFX and PaletteFX.vanillaWorldGroupColors) then
+    return nil
+  end
+  local base = PaletteFX.vanillaWorldGroupColors(tilesetId)
+  if not base then return nil end
+  local owned = S and S.project and S.project.gbcWorld
+    and S.project.gbcWorld.groupColors
+    and S.project.gbcWorld.groupColors[tilesetId]
+  if type(owned) ~= "table" then return base end
+  local out = {}
+  for i = 1, 8 do
+    local g = owned[i]
+    if type(g) == "table" and type(g[1]) == "table" then
+      out[i] = normalizeColors({ colors = g }) or base[i]
+    else
+      out[i] = base[i]
+    end
+  end
+  return out
+end
+
+function Preview.tilesetGbcGroupsOwned(S, tilesetId)
+  local gw = S and S.project and S.project.gbcWorld
+  return gw and gw.groupColors and gw.groupColors[tilesetId] ~= nil
+end
+
+-- Clone vanilla (or keep owned) into project so a color slot can be edited.
+function Preview.ensureTilesetGbcGroups(S, tilesetId)
+  if not S or not S.project or not Preview.hasTilesetGbcGroups(S, tilesetId) then
+    return nil
+  end
+  local State = require("State")
+  State.ensureProjectFields(S.project)
+  S.project.gbcWorld = S.project.gbcWorld or { groupColors = {} }
+  S.project.gbcWorld.groupColors = S.project.gbcWorld.groupColors or {}
+  local owned = S.project.gbcWorld.groupColors[tilesetId]
+  if owned then return owned end
+  local groups = Preview.tilesetGbcGroups(S, tilesetId)
+  if not groups then return nil end
+  local copy = {}
+  for i = 1, 8 do
+    local g = groups[i]
+    copy[i] = {}
+    for c = 1, 4 do
+      local col = g[c] or { 0, 0, 0 }
+      copy[i][c] = { col[1] or 0, col[2] or 0, col[3] or 0 }
+    end
+  end
+  S.project.gbcWorld.groupColors[tilesetId] = copy
+  return copy
+end
+
+function Preview.setTilesetGbcGroupColor(S, tilesetId, groupIndex, colorIndex, rgb)
+  local owned = Preview.ensureTilesetGbcGroups(S, tilesetId)
+  if not owned then return false end
+  local gi = tonumber(groupIndex) or 0
+  local ci = tonumber(colorIndex) or 0
+  if gi < 1 or gi > 8 or ci < 1 or ci > 4 then return false end
+  owned[gi] = owned[gi] or {}
+  owned[gi][ci] = {
+    math.max(0, math.min(255, tonumber(rgb and rgb[1]) or 0)),
+    math.max(0, math.min(255, tonumber(rgb and rgb[2]) or 0)),
+    math.max(0, math.min(255, tonumber(rgb and rgb[3]) or 0)),
+  }
+  Preview.syncGbcWorldRuntime(S)
+  return true
+end
+
+function Preview.clearTilesetGbcGroups(S, tilesetId)
+  local gw = S and S.project and S.project.gbcWorld
+  if not (gw and gw.groupColors and tilesetId) then return false end
+  if gw.groupColors[tilesetId] == nil then return false end
+  gw.groupColors[tilesetId] = nil
+  Preview.syncGbcWorldRuntime(S)
+  return true
+end
+
+-- Sorted palette ids (ROM/cache, optional GBC/Yellow packs, project extras).
+-- With useGbcPalettes OFF and no ROM cache, the list may be project-only.
 function Preview.paletteIds(S)
   local ids, seen = {}, {}
   local function add(id)
@@ -177,14 +320,16 @@ function Preview.paletteIds(S)
   end
   local data = S and S.data and S.data.palettes
   addTable(data and data.order, data and data.palettes)
-  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
-  if ok and PaletteFX and PaletteFX.gbcPack then
-    local pack = PaletteFX.gbcPack()
-    if pack then addTable(pack.order, pack.palettes) end
-  end
-  if ok and PaletteFX and PaletteFX.yellowPack then
-    local pack = PaletteFX.yellowPack()
-    if pack then addTable(pack.order, pack.palettes) end
+  if Preview.useGbcPalettes(S) then
+    local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+    if ok and PaletteFX and PaletteFX.gbcPack then
+      local pack = PaletteFX.gbcPack()
+      if pack then addTable(pack.order, pack.palettes) end
+    end
+    if ok and PaletteFX and PaletteFX.yellowPack then
+      local pack = PaletteFX.yellowPack()
+      if pack then addTable(pack.order, pack.palettes) end
+    end
   end
   if S and S.project and S.project.palettes then
     local extra = {}
@@ -197,19 +342,27 @@ function Preview.paletteIds(S)
   return ids
 end
 
--- Resolve named palette colors (project override wins). Prefer GBC pack in
--- the editor — clearer tile contrast than SGB for map painting.
+-- Resolve named palette colors (project override wins).
+-- GBC ON: GBC pack before ROM/cache. GBC OFF: ROM/cache only.
 function Preview.paletteColors(S, name)
   if type(name) ~= "string" or name == "" then return nil end
   if S and S.project and S.project.palettes and S.project.palettes[name] then
     local cols = normalizeColors(S.project.palettes[name])
     if cols then return cols end
   end
-  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
-  if ok and PaletteFX and PaletteFX.gbcPack then
-    local pack = PaletteFX.gbcPack()
-    local g = pack and pack.palettes and pack.palettes[name]
-    if g then return normalizeColors(g) end
+  local useGbc = Preview.useGbcPalettes(S)
+  if useGbc then
+    local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+    if ok and PaletteFX and PaletteFX.gbcPack then
+      local pack = PaletteFX.gbcPack()
+      local g = pack and pack.palettes and pack.palettes[name]
+      if g then return normalizeColors(g) end
+    end
+    if ok and PaletteFX and PaletteFX.yellowPack then
+      local pack = PaletteFX.yellowPack()
+      local y = pack and pack.palettes and pack.palettes[name]
+      if y then return normalizeColors(y) end
+    end
   end
   local data = S and S.data and S.data.palettes and S.data.palettes.palettes
   if data and data[name] then return normalizeColors(data[name]) end

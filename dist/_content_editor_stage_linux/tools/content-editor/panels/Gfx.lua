@@ -250,7 +250,17 @@ function Gfx.draw(S, x, y, w, h, App)
   if mode == "palettes" then
     local proj = S.project.palettes
     local data = (S.data and S.data.palettes and S.data.palettes.palettes) or {}
-    -- Include GBC pack names when ROM-cache palettes are absent/optional.
+    local gbcOn = Preview.useGbcPalettes(S)
+    if Kit.chip(x, modeY, 120 * s, 22 * s, gbcOn and "GBC ON" or "GBC OFF",
+        gbcOn, PAL.yellow, nil,
+        gbcOn and "List/resolve GBC pack palettes"
+          or "ROM/cache SGB palettes only") then
+      Preview.setUseGbcPalettes(S, not gbcOn)
+      S.status = (not gbcOn)
+        and "GBC palettes ON — pokered-gbc pack colors"
+        or "GBC palettes OFF — ROM/cache SGB colors"
+    end
+    modeY = modeY + 28 * s
     local ids = Preview.paletteIds(S)
     local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, modeY, w, h - (modeY - y),
       "PALETTES", ids, {
@@ -620,6 +630,70 @@ function Gfx.draw(S, x, y, w, h, App)
       Preview.drawNamedSwatches(S, S.gfxTilesetPalPreview,
         fx + fw - 80 * s, fy_ + (fh_ - 14 * s) / 2, 80 * s, 14 * s)
     end)
+  end
+  if Preview.useGbcPalettes(S) and Preview.hasTilesetGbcGroups(S, id) then
+    local names = Preview.GBC_GROUP_NAMES
+    local groups = Preview.tilesetGbcGroups(S, id)
+    local ownedGbc = Preview.tilesetGbcGroupsOwned(S, id)
+    Kit.text("micro", "GBC BG groups"
+        .. (ownedGbc and " (mod)" or " (vanilla)"),
+      viewX, fy, PAL.caption)
+    fy = fy + 14 * s
+    local sw = 20 * s
+    local gap = 3 * s
+    for gi = 1, 8 do
+      local label = names[gi] or ("G" .. (gi - 1))
+      Kit.text("micro", label, viewX, fy + 4 * s, PAL.muted)
+      local g = groups and groups[gi]
+      local bx = viewX + 48 * s
+      for ci = 1, 4 do
+        local c = (g and g[ci]) or { 40, 40, 40 }
+        local sx = bx + (ci - 1) * (sw + gap)
+        love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+          (c[3] or 0) / 255, 1)
+        love.graphics.rectangle("fill", sx, fy, sw, 18 * s, 3 * s, 3 * s)
+        love.graphics.setColor(1, 1, 1, 0.35)
+        love.graphics.rectangle("line", sx, fy, sw, 18 * s, 3 * s, 3 * s)
+        love.graphics.setColor(1, 1, 1, 1)
+        if Kit.press(sx, fy, sw, 18 * s) then
+          local groupI, colorI, tid = gi, ci, id
+          ColorWheel.open(S, {
+            title = label .. " C" .. colorI .. " · " .. tostring(tid),
+            color = c,
+            onChange = function(rgb)
+              Preview.ensureTilesetGbcGroups(S, tid)
+              local ow = S.project.gbcWorld.groupColors[tid]
+              if ow and ow[groupI] then
+                ow[groupI][colorI] = {
+                  math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+                }
+              end
+              App.markDirty()
+            end,
+            onApply = function(rgb)
+              Preview.setTilesetGbcGroupColor(S, tid, groupI, colorI, rgb)
+              App.markDirty()
+              S.status = "GBC " .. label .. " C" .. colorI .. " updated"
+            end,
+          })
+        end
+      end
+      fy = fy + 22 * s
+    end
+    if ownedGbc then
+      if Kit.button(viewX, fy, 100 * s, fh, "Revert GBC", {
+          kind = "danger",
+          tooltip = "Clear mod overrides for this tileset's 8 BG groups",
+        }) then
+        Preview.clearTilesetGbcGroups(S, id)
+        App.markDirty()
+      end
+      fy = fy + fh + 8 * s
+    else
+      fy = fy + 6 * s
+    end
   end
   row("Image", function(fx, fy_, fw, fh_)
     Kit.text("micro", Kit.ellipsize("micro", tostring(rec.image or ""), fw - 100 * s),

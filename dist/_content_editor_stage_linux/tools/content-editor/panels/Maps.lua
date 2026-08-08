@@ -9,6 +9,7 @@ local Search = require("Search")
 local State = require("State")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local ColorWheel = require("ColorWheel")
 local SpeciesPicker = require("SpeciesPicker")
 local FormPane = require("FormPane")
 local SpriteUtil = require("SpriteUtil")
@@ -2667,6 +2668,23 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local swX, swY = vx + 6 * s, vy + vh - 34 * s
   if mapUsesTrueColor(S, mapDef) then
     Kit.text("micro", "true color", swX, swY + 1 * s, PAL.yellow)
+  elseif Preview.useGbcPalettes(S)
+      and Preview.hasTilesetGbcGroups(S, mapDef.tileset) then
+    local groups = Preview.tilesetGbcGroups(S, mapDef.tileset)
+    local cell = 8 * s
+    if groups then
+      for gi = 1, 8 do
+        local g = groups[gi]
+        local c = (g and g[2]) or { 128, 128, 128 }
+        love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+          (c[3] or 0) / 255, 1)
+        love.graphics.rectangle("fill", swX + (gi - 1) * (cell + 2 * s),
+          swY, cell, swH, 2 * s, 2 * s)
+      end
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+    Kit.text("micro", "GBC ×8 " .. tostring(mapDef.tileset or ""),
+      swX + 8 * (cell + 2 * s) + 4 * s, swY + 1 * s, PAL.faint)
   else
     local palName = mapPaletteName(S, mapDef)
     Preview.drawNamedSwatches(S, palName, swX, swY, 72 * s, swH)
@@ -2677,7 +2695,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         current = mapDef.palette,
         allowClear = true,
         clearLabel = "(inherit FieldDefaults)",
-        title = "MAP PALETTE (GBC)",
+        title = "MAP PALETTE (SGB)",
         onPick = function(id)
           local owned = ensureOwned(S, mid)
           if owned then
@@ -3402,14 +3420,118 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       App.markDirty()
       S.status = newOn
         and "TrueColor ON — raw tileset PNG (map palette ignored)"
-        or "TrueColor OFF — GBC/SGB palette remap"
+        or "TrueColor OFF — palette remap"
     end
   end) then return py end
   do
     local on = mapUsesTrueColor(S, map)
     Kit.text("micro",
       on and "full-color tileset — skips 4-shade palette remap"
-        or "OFF = grayscale tiles remapped through GBC palette colors",
+        or "OFF = grayscale tiles remapped through map palette colors",
+      px + 10 * s, py, PAL.faint)
+    py = py + 14 * s
+  end
+
+  if prow("GBC palettes", function(fx, fy, fw, fh_)
+    local on = Preview.useGbcPalettes(S)
+    if Kit.chip(fx, fy, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow,
+        nil, on
+          and "YES = ADVANCED per-tile GBC (8 BG groups)"
+          or "NO = ROM/cache SGB single palette") then
+      Preview.setUseGbcPalettes(S, not on)
+      MapLoader.invalidateAll()
+      S.status = (not on)
+        and "GBC ON — ADVANCED tileset groups + named pack"
+        or "GBC OFF — SGB map palette remap"
+    end
+  end) then return py end
+  do
+    local on = Preview.useGbcPalettes(S)
+    Kit.text("micro",
+      on and "preview = COLORS ADVANCED (8 BG palettes / tileset)"
+        or "preview = SGB single map palette",
+      px + 10 * s, py, PAL.faint)
+    py = py + 14 * s
+  end
+
+  -- GBC tileset BG groups (GRAY…TEXT): 8×4 editable when pack has world data.
+  local tsId = map.tileset
+  local gbcOn = Preview.useGbcPalettes(S)
+  if gbcOn and Preview.hasTilesetGbcGroups(S, tsId) then
+    local names = Preview.GBC_GROUP_NAMES
+    local groups = Preview.tilesetGbcGroups(S, tsId)
+    local owned = Preview.tilesetGbcGroupsOwned(S, tsId)
+    Kit.text("micro", "GBC BG groups · " .. tostring(tsId)
+        .. (owned and " (mod)" or " (vanilla)"),
+      px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    local sw = 22 * s
+    local gap = 4 * s
+    local rowH = 24 * s
+    for gi = 1, 8 do
+      if py + rowH + 4 * s > listBottom then return true end
+      local label = names[gi] or ("G" .. (gi - 1))
+      Kit.text("micro", label, px + 10 * s, py + 6 * s, PAL.muted)
+      local g = groups and groups[gi]
+      local bx = px + 10 * s + 52 * s
+      for ci = 1, 4 do
+        local c = (g and g[ci]) or { 40, 40, 40 }
+        local sx = bx + (ci - 1) * (sw + gap)
+        love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+          (c[3] or 0) / 255, 1)
+        love.graphics.rectangle("fill", sx, py + 2 * s, sw, rowH - 4 * s,
+          3 * s, 3 * s)
+        love.graphics.setColor(1, 1, 1, 0.35)
+        love.graphics.rectangle("line", sx, py + 2 * s, sw, rowH - 4 * s,
+          3 * s, 3 * s)
+        love.graphics.setColor(1, 1, 1, 1)
+        if Kit.press(sx, py + 2 * s, sw, rowH - 4 * s) then
+          local groupI, colorI = gi, ci
+          ColorWheel.open(S, {
+            title = label .. " C" .. colorI .. " · " .. tostring(tsId),
+            color = c,
+            onChange = function(rgb)
+              Preview.ensureTilesetGbcGroups(S, tsId)
+              local ow = S.project.gbcWorld.groupColors[tsId]
+              if ow and ow[groupI] then
+                ow[groupI][colorI] = {
+                  math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+                }
+              end
+              App.markDirty()
+            end,
+            onApply = function(rgb)
+              Preview.setTilesetGbcGroupColor(S, tsId, groupI, colorI, rgb)
+              App.markDirty()
+              MapLoader.invalidateAll()
+              S.status = "GBC " .. label .. " C" .. colorI .. " updated"
+            end,
+          })
+        end
+      end
+      py = py + rowH + 2 * s
+    end
+    if owned then
+      if py + fh + 8 * s > listBottom then return true end
+      if Kit.button(px + 10 * s, py, 100 * s, fh, "Revert GBC", {
+          kind = "danger",
+          tooltip = "Clear mod overrides for this tileset's 8 BG groups",
+        }) then
+        Preview.clearTilesetGbcGroups(S, tsId)
+        App.markDirty()
+        MapLoader.invalidateAll()
+        S.status = "Reverted GBC groups for " .. tostring(tsId)
+      end
+      py = py + fh + 8 * s
+    else
+      Kit.text("micro", "click a swatch to override (Save writes main.lua)",
+        px + 10 * s, py, PAL.faint)
+      py = py + 14 * s
+    end
+  elseif gbcOn and tsId then
+    Kit.text("micro", "no GBC world data for tileset " .. tostring(tsId),
       px + 10 * s, py, PAL.faint)
     py = py + 14 * s
   end
@@ -3418,7 +3540,12 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if prow("Map palette", function(fx, fy, fw, fh_)
       Kit.text("small", "(ignored — TrueColor)", fx, fy + 6 * s, PAL.faint)
     end) then return py end
+  elseif gbcOn and Preview.hasTilesetGbcGroups(S, tsId) then
+    if prow("SGB palette", function(fx, fy, fw, fh_)
+      Kit.text("small", "(unused while GBC ON)", fx, fy + 6 * s, PAL.faint)
+    end) then return py end
   else
+    local gbc = Preview.useGbcPalettes(S)
     if prow("Map palette", function(fx, fy, fw, fh_)
       local mid = map.id or S.mapId
       PalettePicker.row(S, {
@@ -3428,8 +3555,10 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
         emptyLabel = "(inherit)",
         clearLabel = "(inherit FieldDefaults)",
         allowClear = true,
-        title = "MAP PALETTE (GBC)",
-        tooltip = "Choose this map's background palette (GBC pack colors)",
+        title = gbc and "MAP PALETTE (GBC)" or "MAP PALETTE (SGB)",
+        tooltip = gbc
+          and "Choose this map's background palette (GBC pack colors)"
+          or "Choose this map's background palette (ROM/cache SGB)",
         onPick = function(id)
           map = mutate()
           map.palette = id

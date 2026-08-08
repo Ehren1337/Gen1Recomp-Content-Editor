@@ -54,23 +54,29 @@ end
 function DataSource.loadPrefs()
   local raw = love.filesystem.read(PREFS_FILE)
   if type(raw) ~= "string" or raw == "" then
-    return { mode = "auto", recompRoot = nil }
+    return { mode = "auto", recompRoot = nil, useGbcPalettes = true }
   end
   local ok, data = pcall(Json.decode, raw)
   if not ok or type(data) ~= "table" then
-    return { mode = "auto", recompRoot = nil }
+    return { mode = "auto", recompRoot = nil, useGbcPalettes = true }
   end
+  local useGbc = data.useGbcPalettes
+  if useGbc == nil then useGbc = true end
   return {
     mode = data.mode or "auto",
     recompRoot = data.recompRoot,
+    useGbcPalettes = useGbc and true or false,
   }
 end
 
 function DataSource.savePrefs(prefs)
   prefs = prefs or DataSource.loadPrefs()
+  local useGbc = prefs.useGbcPalettes
+  if useGbc == nil then useGbc = true end
   local body = Json.encode({
     mode = prefs.mode or "auto",
     recompRoot = prefs.recompRoot,
+    useGbcPalettes = useGbc and true or false,
   })
   love.filesystem.write(PREFS_FILE, body)
   return prefs

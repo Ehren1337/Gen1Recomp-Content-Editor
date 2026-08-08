@@ -158,7 +158,18 @@ function App.reloadData(opts)
   })
   S.dataSource = source
   S.dataPrefs = prefs
+  if prefs and prefs.useGbcPalettes ~= nil then
+    S.useGbcPalettes = prefs.useGbcPalettes and true or false
+  elseif S.useGbcPalettes == nil then
+    S.useGbcPalettes = true
+  end
   refreshModsAndEvents()
+  do
+    local okP, Preview = pcall(require, "Preview")
+    if okP and Preview and Preview.syncGbcWorldRuntime then
+      Preview.syncGbcWorldRuntime(S)
+    end
+  end
   say(status or DataSource.label(source))
   return true
 end
@@ -171,8 +182,17 @@ function App.load(modPath, opts)
   local source, prefs, status = DataSource.apply({ version = opts.version })
   S.dataSource = source
   S.dataPrefs = prefs
+  S.useGbcPalettes = (prefs and prefs.useGbcPalettes ~= nil)
+    and (prefs.useGbcPalettes and true or false)
+    or true
   S.status = status
   refreshModsAndEvents()
+  do
+    local okP, Preview = pcall(require, "Preview")
+    if okP and Preview and Preview.syncGbcWorldRuntime then
+      Preview.syncGbcWorldRuntime(S)
+    end
+  end
 
   if modPath and modPath ~= "" then
     App.openMod(modPath)
@@ -336,6 +356,12 @@ function App.openMod(path)
   S.trainerId = next(project.trainers)
   S.eventScriptKey = next(project.talkScripts)
   History.clear(S)
+  do
+    local okP, Preview = pcall(require, "Preview")
+    if okP and Preview and Preview.syncGbcWorldRuntime then
+      Preview.syncGbcWorldRuntime(S)
+    end
+  end
   say((note and (note .. " — ") or "") .. "Opened " .. path)
   return true
 end

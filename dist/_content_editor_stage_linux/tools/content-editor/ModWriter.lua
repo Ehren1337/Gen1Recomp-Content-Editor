@@ -750,6 +750,48 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
+  -- GBC ADVANCED tileset BG groups (8×4). Applied after pack load via PaletteFX.
+  do
+    local gw = project.gbcWorld and project.gbcWorld.groupColors
+    local tsIds = {}
+    if type(gw) == "table" then
+      for ts in pairs(gw) do
+        if type(ts) == "string" and type(gw[ts]) == "table" then
+          tsIds[#tsIds + 1] = ts
+        end
+      end
+    end
+    table.sort(tsIds)
+    if #tsIds > 0 then
+      local payload = {}
+      for _, ts in ipairs(tsIds) do
+        local groups = {}
+        for gi = 1, 8 do
+          local g = gw[ts][gi] or {}
+          local row = {}
+          for ci = 1, 4 do
+            local c = g[ci] or { 0, 0, 0 }
+            if c.r then row[ci] = { c.r, c.g, c.b }
+            else row[ci] = { c[1] or 0, c[2] or 0, c[3] or 0 } end
+          end
+          groups[gi] = row
+        end
+        payload[ts] = groups
+      end
+      out[#out + 1] = "  -- GBC tileset BG palette groups (COLORS = ADVANCED)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _gbcWorldGroups = " .. emitTableLiteral(payload, 2)
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function()"
+      out[#out + 1] = "      local ok, PaletteFX = pcall(require, \"src.render.PaletteFX\")"
+      out[#out + 1] = "      if ok and PaletteFX and PaletteFX.setWorldGroupOverrides then"
+      out[#out + 1] = "        PaletteFX.setWorldGroupOverrides(_gbcWorldGroups)"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+  end
+
   -- overworld sprites
   local sprIds = {}
   for sid in pairs(project.sprites or {}) do sprIds[#sprIds + 1] = sid end

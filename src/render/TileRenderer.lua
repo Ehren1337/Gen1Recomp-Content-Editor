@@ -961,12 +961,17 @@ end
 -- TileRenderer.new re-resolves through the asset search path.  Live
 -- instances keep the batches they already built; MapLoader.invalidateAll
 -- is what drops those (14 §cache-invalidation contract).
+function TileRenderer.clearGbcAtlasCache()
+  gbcAtlasCache = {}
+end
+
 function TileRenderer.invalidate()
   imageCache = {}
   shiftVariants = {}
   frameImages = {}
   toggleImages = {}
   stripData = {}
+  gbcAtlasCache = {}
 end
 
 Assets.register(TileRenderer.invalidate)
