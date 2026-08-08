@@ -7,6 +7,7 @@ local Search = require("Search")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local PaletteEdit = require("PaletteEdit")
+local SpeciesPicker = require("SpeciesPicker")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
 local RegList = require("RegList")
@@ -198,12 +199,18 @@ local SECTIONS = {
 
 local function allTrainerIds(S)
   local seen, ids = {}, {}
+  local deleted = (S.project and S.project.deleted and S.project.deleted.trainers) or {}
   for id in pairs((S.project and S.project.trainers) or {}) do
-    seen[id] = true; ids[#ids + 1] = id
+    if not deleted[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
   end
   if S.data and S.data.trainers then
     for id in pairs(S.data.trainers) do
-      if not seen[id] then ids[#ids + 1] = id end
+      if not seen[id] and not deleted[id] then
+        ids[#ids + 1] = id
+      end
     end
   end
   table.sort(ids)
@@ -457,7 +464,7 @@ function Trainers.draw(S, x, y, w, h, App)
   end
 
   Kit.card(formX, listY, formW, listH, 12 * s)
-  local footerH = owned and 44 * s or 12 * s
+  local footerH = 44 * s
   local pad = 12 * s
   local viewX = formX + pad
   local viewY = listY + pad
@@ -940,8 +947,25 @@ function Trainers.draw(S, x, y, w, h, App)
       local rowTop = fy
       local lvl = tonumber(field(App, "tr_lv_" .. mi, mx, fy, 50 * s, fh,
         tostring(mon.level or 5), "5")) or 5
-      local sp = field(App, "tr_sp_" .. mi, mx + 60 * s, fy, 160 * s, fh,
-        mon.species or "PIDGEY", "PIDGEY"):upper():gsub("%s+", "_")
+      local sp = mon.species or "PIDGEY"
+      SpeciesPicker.field(S, {
+        x = mx + 60 * s, y = fy, w = 160 * s, h = fh,
+        current = sp,
+        title = "TRAINER PARTY SPECIES",
+        onPick = function(id)
+          tr = mutate()
+          local p = tr.parties[S.trainerPartyIndex]
+          local cur = p[mi] or { level = 5, species = "PIDGEY" }
+          p[mi] = {
+            level = cur.level or 5,
+            species = id,
+            moves = cur.moves,
+            dvs = cur.dvs,
+            statExp = cur.statExp,
+          }
+          App.markDirty()
+        end,
+      })
       if Kit.button(mx + 230 * s, fy, 36 * s, fh, "X", { kind = "danger" })
           and #party > 1 then
         tr = mutate()
@@ -1308,10 +1332,11 @@ function Trainers.draw(S, x, y, w, h, App)
           local full = State.modFlag(S.project,
             (event ~= "" and event) or ("BEAT_" .. uniq))
           -- Write only this object index (never broadcast to other trainers).
+          -- Do not touch eventFlags here — each keystroke would leave partials;
+          -- Save / load rebuild from finished header.event values.
           draft.event = full
           bucket[idx] = draft
-          S.project.eventFlags = S.project.eventFlags or {}
-          S.project.eventFlags[full] = true
+          App.markDirty()
         end
         fy = fy + fh + 8 * s
 
@@ -1341,9 +1366,22 @@ function Trainers.draw(S, x, y, w, h, App)
 
   FormPane.finish(S, "trainerFormScroll", contentTop, fy, view)
 
-  if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 28 * s,
-      "Revert", { kind = "danger" }) then
-    S.project.trainers[S.trainerId] = nil
+  local btnY = listY + listH - 40 * s
+  local bx = formX + 12 * s
+  if owned then
+    if Kit.button(bx, btnY, 120 * s, 28 * s, "Revert", { kind = "ghost" }) then
+      S.project.trainers[S.trainerId] = nil
+      App.markDirty()
+    end
+    bx = bx + 128 * s
+  end
+  if Kit.button(bx, btnY, 120 * s, 28 * s,
+      "Delete", { kind = "danger",
+        tooltip = "Remove from this mod (Save emits content:remove)" }) then
+    State.markDeleted(S.project, "trainers", S.trainerId, tr,
+      S.data and S.data.trainers)
+    local ids = allTrainerIds(S)
+    S.trainerId = ids[1]
     App.markDirty()
   end
 end

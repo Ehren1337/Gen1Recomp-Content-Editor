@@ -9,6 +9,7 @@ local Search = require("Search")
 local State = require("State")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local SpeciesPicker = require("SpeciesPicker")
 local FormPane = require("FormPane")
 local SpriteUtil = require("SpriteUtil")
 local EncounterEdit = require("EncounterEdit")
@@ -2335,6 +2336,32 @@ local function drawMarkerOverlays(S, mapDef)
   drawObjectSprites(S, mapDef)
 end
 
+local function drawGridOverlay(S, mapDef)
+  if not S.mapShowGrid then return end
+  local camX, camY = S.mapCamX or 0, S.mapCamY or 0
+  local vw = (S._mapViewW or 480) / (S.mapZoom or 2)
+  local vh = (S._mapViewH or 432) / (S.mapZoom or 2)
+  local mw = (tonumber(mapDef.width) or 0) * BLOCK_PX
+  local mh = (tonumber(mapDef.height) or 0) * BLOCK_PX
+  if mw <= 0 or mh <= 0 then return end
+
+  -- One line per paint block (32px) — not per walk cell (16px).
+  local x0 = math.max(0, math.floor(camX / BLOCK_PX) * BLOCK_PX)
+  local y0 = math.max(0, math.floor(camY / BLOCK_PX) * BLOCK_PX)
+  local x1 = math.min(mw, math.ceil((camX + vw) / BLOCK_PX) * BLOCK_PX)
+  local y1 = math.min(mh, math.ceil((camY + vh) / BLOCK_PX) * BLOCK_PX)
+
+  love.graphics.setLineWidth(1)
+  love.graphics.setColor(0, 0, 0, 0.9)
+  for x = x0, x1, BLOCK_PX do
+    love.graphics.line(x - camX, y0 - camY, x - camX, y1 - camY)
+  end
+  for y = y0, y1, BLOCK_PX do
+    love.graphics.line(x0 - camX, y - camY, x1 - camX, y - camY)
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 local function drawCollisionOverlay(S, mapDef)
   if not S.mapShowCollision then return end
   local ts = tilesetDef(S, mapDef.tileset)
@@ -2468,6 +2495,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     love.graphics.rectangle("line",
       - camX, - camY,
       map.widthCells * CELL, map.heightCells * CELL)
+    drawGridOverlay(S, mapDef)
     drawCollisionOverlay(S, mapDef)
     drawMarkerOverlays(S, mapDef)
     drawSelectionOverlay(S, mapDef)
@@ -3801,6 +3829,24 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     return py + 20 * s
   end
 
+  -- Top of form so Delete is never clipped under the footer / scroll.
+  if py + 32 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete object",
+        { kind = "danger" }) then
+      map = mutate()
+      local removed = map.objects[i]
+      table.remove(map.objects, i)
+      for j, o in ipairs(map.objects) do o.index = j end
+      cleanupRemovedMapObject(S, map, i, removed)
+      S.mapObjectIndex = math.min(i, #map.objects)
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+      S.status = "Deleted object #" .. tostring(i)
+        .. " (cleared trainer text/flags/scripts)"
+    end
+    py = py + 34 * s
+  end
+
   -- sprite preview + place-sprite arm
   local def = spriteDef(S, obj.sprite)
   if py + 56 * s < listBottom then
@@ -4146,21 +4192,17 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
 
   if obj.pokemon and obj.pokemon ~= "" then
     row("Species", function(fx, fy, fw, fh_)
-      local monDef = (S.project.pokemon and S.project.pokemon[obj.pokemon])
-        or (S.data and S.data.pokemon and S.data.pokemon[obj.pokemon])
-      if monDef and monDef.spriteFront then
-        Preview.draw(S, monDef.spriteFront, fx, fy - 2 * s, fh_ + 4 * s, fh_ + 4 * s,
-          Preview.monPaletteName(S, monDef, obj.pokemon))
-        fx = fx + fh_ + 10 * s
-        fw = fw - fh_ - 10 * s
-      end
-      local v = field(App, "ob_wild_sp", fx, fy, fw, fh_,
-        obj.pokemon or "", "ARTICUNO"):upper():gsub("%s+", "_")
-      if v ~= "" and v ~= obj.pokemon then
-        map = mutate()
-        map.objects[i].pokemon = v
-        S.placeWildSpecies = v
-      end
+      SpeciesPicker.field(S, {
+        x = fx, y = fy, w = fw, h = fh_,
+        current = obj.pokemon or "ARTICUNO",
+        title = "FIXED WILD SPECIES",
+        onPick = function(id)
+          map = mutate()
+          map.objects[i].pokemon = id
+          S.placeWildSpecies = id
+          App.markDirty()
+        end,
+      })
     end)
     row("Level", function(fx, fy, fw, fh_)
       local cur = tonumber(obj.level) or 50
@@ -4381,9 +4423,8 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         else
           v = State.modFlag(S.project, v)
         end
+        -- Do not write eventFlags on each keystroke (leaves H / HI / HIDE_…).
         h.event = v
-        S.project.eventFlags = S.project.eventFlags or {}
-        S.project.eventFlags[v] = true
         hdr = h
         App.markDirty()
       end
@@ -4399,20 +4440,6 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     end
   end)
 
-  if py + 32 * s <= listBottom
-      and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete object",
-        { kind = "danger" }) then
-    map = mutate()
-    local removed = map.objects[i]
-    table.remove(map.objects, i)
-    for j, o in ipairs(map.objects) do o.index = j end
-    cleanupRemovedMapObject(S, map, i, removed)
-    S.mapObjectIndex = math.min(i, #map.objects)
-    MapLoader.invalidate(map.id)
-    App.markDirty()
-    S.status = "Deleted object #" .. tostring(i)
-      .. " (cleared trainer text/flags/scripts)"
-  end
   return py
 end
 
@@ -4442,14 +4469,16 @@ local function drawSigns(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     local v = field(App, "sg_text", fx, fy, fw, fh_, sign.text or "", "TEXT_")
     if v ~= (sign.text or "") then map = mutate(); map.signs[i].text = v end
   end)
-  if py + 32 * s <= listBottom
-      and Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete sign",
+  if py + 32 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete sign",
         { kind = "danger" }) then
-    map = mutate()
-    table.remove(map.signs, i)
-    S.mapSignIndex = math.min(i, #map.signs)
-    MapLoader.invalidate(map.id)
-    App.markDirty()
+      map = mutate()
+      table.remove(map.signs, i)
+      S.mapSignIndex = math.min(i, #map.signs)
+      MapLoader.invalidate(map.id)
+      App.markDirty()
+    end
+    py = py + 34 * s
   end
   return py
 end
@@ -4960,6 +4989,11 @@ function Maps.draw(S, x, y, w, h, App)
   if Kit.button(tx + 100 * s, y, 44 * s, 26 * s, "Fit", { kind = "ghost" }) then
     S._mapCenteredFor = nil
   end
+  if Kit.chip(tx + 150 * s, y, 52 * s, 26 * s, "Grid",
+      S.mapShowGrid, PAL.steel, nil,
+      "Toggle paint-block grid (32px)") then
+    S.mapShowGrid = not S.mapShowGrid
+  end
 
   local barY = y + 30 * s
   local barH = 34 * s
@@ -5070,20 +5104,18 @@ function Maps.draw(S, x, y, w, h, App)
     barH = 38 * s
     local bx = mainX
     Kit.text("micro", "Species", bx, barY + 2 * s, PAL.caption)
-    Kit.text("micro", "Lv", bx + 150 * s, barY + 2 * s, PAL.caption)
-    local sp = field(App, "mp_wild_sp", bx, barY + 14 * s, 140 * s, 22 * s,
-      S.placeWildSpecies or "ARTICUNO", "ARTICUNO")
-      :upper():gsub("%s+", "_")
-    if sp ~= "" then S.placeWildSpecies = sp end
-    local lv = tonumber(field(App, "mp_wild_lv", bx + 150 * s, barY + 14 * s,
+    Kit.text("micro", "Lv", bx + 200 * s, barY + 2 * s, PAL.caption)
+    SpeciesPicker.field(S, {
+      x = bx, y = barY + 14 * s, w = 190 * s, h = 22 * s,
+      current = S.placeWildSpecies or "ARTICUNO",
+      title = "PLACE WILD SPECIES",
+      onPick = function(id)
+        S.placeWildSpecies = id
+      end,
+    })
+    local lv = tonumber(field(App, "mp_wild_lv", bx + 200 * s, barY + 14 * s,
       48 * s, 22 * s, tostring(S.placeWildLevel or 50), "50")) or 50
     S.placeWildLevel = math.max(1, math.min(100, lv))
-    local monDef = (S.project.pokemon and S.project.pokemon[S.placeWildSpecies])
-      or (S.data and S.data.pokemon and S.data.pokemon[S.placeWildSpecies])
-    if monDef and monDef.spriteFront then
-      Preview.draw(S, monDef.spriteFront, bx + 210 * s, barY, 34 * s, 34 * s,
-        Preview.monPaletteName(S, monDef, S.placeWildSpecies))
-    end
   elseif map and (S.mapTool or "paint") == "trainer" then
     barH = 38 * s
     local bx = mainX

@@ -5,6 +5,7 @@ local Theme = require("Theme")
 local State = require("State")
 local RegList = require("RegList")
 local FormPane = require("FormPane")
+local ItemPicker = require("ItemPicker")
 local PAL = Theme.PAL
 
 local Shops = {}
@@ -30,14 +31,6 @@ local function allItemIds(S)
   end
   table.sort(ids)
   return ids
-end
-
-local function cycle(list, cur)
-  if #list == 0 then return cur or "POKE_BALL" end
-  for i, id in ipairs(list) do
-    if id == cur then return list[(i % #list) + 1] end
-  end
-  return list[1]
 end
 
 local function cloneEntry(src)
@@ -239,19 +232,23 @@ function Shops.draw(S, x, y, w, h, App)
   fy = fy + 18 * s
 
   for mi, itemId in ipairs(mart) do
-    if Kit.button(viewX, fy, viewW - 44 * s, fh, itemId or "?",
-        { kind = "accent", font = "small" }) then
-      local e = ensureShop(S, rec.label, rec.textId, App)
-      e.mart[mi] = cycle(items, itemId)
-      App.markDirty()
-      keys, byKey = collectShops(S)
-      rec = byKey[key]
-      mart = rec.mart
-    end
+    local slot = mi
+    local label = rec.label
+    local textId = rec.textId
+    ItemPicker.field(S, {
+      x = viewX, y = fy, w = viewW - 44 * s, h = fh,
+      current = itemId or "POKE_BALL",
+      title = "SHOP STOCK",
+      onPick = function(id)
+        local e = ensureShop(S, label, textId, App)
+        e.mart[slot] = id
+        App.markDirty()
+      end,
+    })
     if Kit.button(viewX + viewW - 36 * s, fy, 32 * s, fh, "X",
         { kind = "danger", font = "small" }) then
-      local e = ensureShop(S, rec.label, rec.textId, App)
-      table.remove(e.mart, mi)
+      local e = ensureShop(S, label, textId, App)
+      table.remove(e.mart, slot)
       App.markDirty()
       break
     end
@@ -259,9 +256,18 @@ function Shops.draw(S, x, y, w, h, App)
   end
 
   if Kit.button(viewX, fy, 120 * s, fh, "+ Add item", { kind = "good" }) then
-    local e = ensureShop(S, rec.label, rec.textId, App)
-    e.mart[#e.mart + 1] = (#items > 0 and items[1]) or "POKE_BALL"
-    App.markDirty()
+    local label = rec.label
+    local textId = rec.textId
+    ensureShop(S, label, textId, App)
+    ItemPicker.open(S, {
+      current = (#items > 0 and items[1]) or "POKE_BALL",
+      title = "ADD SHOP ITEM",
+      onPick = function(id)
+        local e = ensureShop(S, label, textId, App)
+        e.mart[#e.mart + 1] = id
+        App.markDirty()
+      end,
+    })
   end
   fy = fy + fh + 8 * s
 

@@ -34,6 +34,7 @@ function State.new()
     mapZoom = 2,
     mapCamX = 0,
     mapCamY = 0,
+    mapShowGrid = false,
     mapListOffset = 0,
     pokemonListOffset = 0,
     itemListOffset = 0,
@@ -99,6 +100,7 @@ function State.blankProject(id, name)
     starterRemap = {},
     -- Special gifts/battles with DVs + moves (Encounters tab)
     specialEncounters = {},
+    deleted = { pokemon = {}, items = {}, trainers = {} },
     nextMapIndex = 1000,
   }
 end
@@ -143,8 +145,35 @@ function State.ensureProjectFields(project)
   project.ledges = project.ledges or {}
   project.starterRemap = project.starterRemap or {}
   project.specialEncounters = project.specialEncounters or {}
+  project.deleted = project.deleted or {}
+  project.deleted.pokemon = project.deleted.pokemon or {}
+  project.deleted.items = project.deleted.items or {}
+  project.deleted.trainers = project.deleted.trainers or {}
   project.nextMapIndex = project.nextMapIndex or 1000
   return project
+end
+
+function State.isDeleted(project, kind, id)
+  return project and project.deleted and project.deleted[kind]
+    and project.deleted[kind][id] and true or false
+end
+
+-- Drop a project override and, when the id exists in base game data (or was
+-- a non-_isNew patch), record a tombstone so Save emits content:remove.
+-- kind = "pokemon" | "items" | "trainers"
+function State.markDeleted(project, kind, id, rec, baseTable)
+  if not project or not id or id == "" then return false end
+  State.ensureProjectFields(project)
+  local bag = project[kind]
+  if bag then bag[id] = nil end
+  local isNew = rec and rec._isNew == true
+  local inBase = baseTable and baseTable[id] ~= nil
+  if isNew and not inBase then
+    project.deleted[kind][id] = nil
+  else
+    project.deleted[kind][id] = true
+  end
+  return true
 end
 
 function State.mapLabel(S, mapId)
@@ -166,6 +195,45 @@ function State.modFlag(project, shortName)
   end
   local prefix = "MOD_" .. (project.id or "MOD"):upper():gsub("%W+", "_") .. "_"
   return prefix .. shortName
+end
+
+-- Rebuild eventFlags from authored steps / trainer headers so typing a flag
+-- name never leaves partials (M, MA, MAP, MAP1) in the project or Save output.
+function State.rebuildEventFlags(project)
+  if not project then return end
+  local flags = {}
+  local function add(n)
+    if type(n) == "string" and n ~= "" then flags[n] = true end
+  end
+  local function scrapeSteps(steps)
+    for _, step in ipairs(steps or {}) do
+      if step.flag then add(State.modFlag(project, step.flag)) end
+      if step.choseFlag then add(State.modFlag(project, step.choseFlag)) end
+    end
+  end
+  for _, script in pairs(project.talkScripts or {}) do
+    scrapeSteps(script.steps)
+  end
+  for _, hooks in pairs(project.mapHooks or {}) do
+    if type(hooks) == "table" then
+      if hooks.onEnter then scrapeSteps(hooks.onEnter.steps) end
+      if hooks.onVictory then scrapeSteps(hooks.onVictory.steps) end
+      for _, cell in ipairs(hooks.onStepCells or {}) do
+        scrapeSteps(cell.steps)
+      end
+      for _, scr in pairs(hooks.scripts or {}) do
+        scrapeSteps(scr.steps)
+      end
+    end
+  end
+  for _, bucket in pairs(project.trainer_headers or {}) do
+    if type(bucket) == "table" then
+      for _, h in pairs(bucket) do
+        if type(h) == "table" and h.event then add(h.event) end
+      end
+    end
+  end
+  project.eventFlags = flags
 end
 
 return State

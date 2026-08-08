@@ -3,7 +3,7 @@
 local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
-local Preview = require("Preview")
+local SpeciesPicker = require("SpeciesPicker")
 local PAL = Theme.PAL
 
 local EncounterEdit = {}
@@ -99,19 +99,20 @@ local function drawSlotRows(S, App, px, py, propW, listBottom, fh, s,
   for si = 1, #(slots or {}) do
     if py + fh > listBottom - 36 * s then break end
     local slot = slots[si]
-    local speciesDef = (S.project.pokemon and S.project.pokemon[slot.species])
-      or (S.data.pokemon and S.data.pokemon[slot.species])
-    if speciesDef and speciesDef.spriteFront then
-      Preview.draw(S, speciesDef.spriteFront, px + 10 * s, py, 24 * s, 24 * s,
-        Preview.monPaletteName(S, speciesDef, slot.species))
-    end
-    local lx = px + 40 * s
+    local lx = px + 10 * s
     local lvl = tonumber(field(App, "enc_lv_" .. kindKey .. si, lx, py, 40 * s, fh,
       tostring(slot.level or 1), "1")) or 1
     local spW = math.max(80 * s, propW - (lx - px) - 48 * s - 42 * s - 8 * s)
-    local sp = field(App, "enc_sp_" .. kindKey .. si, lx + 48 * s, py, spW, fh,
-      slot.species or "PIDGEY", "PIDGEY"):upper():gsub("%s+", "_")
-    if lvl ~= (slot.level or 1) or sp ~= (slot.species or "") then
+    local sp = slot.species or "PIDGEY"
+    SpeciesPicker.field(S, {
+      x = lx + 48 * s, y = py, w = spW, h = fh,
+      current = sp,
+      title = "ENCOUNTER SPECIES",
+      onPick = function(id)
+        onChange(si, { level = math.max(1, slot.level or 1), species = id })
+      end,
+    })
+    if lvl ~= (slot.level or 1) then
       onChange(si, { level = math.max(1, lvl), species = sp })
     end
     if Kit.button(px + propW - 42 * s, py, 28 * s, fh, "X", { kind = "danger" }) then
@@ -264,9 +265,19 @@ function EncounterEdit.drawWild(S, map, mutate, App, px, py, propW, listBottom, 
     py = py + 14 * s
     local lvl = tonumber(field(App, "enc_old_lv", px + 10 * s, py, 50 * s, fh,
       tostring(always.level or 5), "5")) or 5
-    local sp = field(App, "enc_old_sp", px + 70 * s, py, 140 * s, fh,
-      always.species or "MAGIKARP", "MAGIKARP"):upper():gsub("%s+", "_")
-    if lvl ~= (always.level or 5) or sp ~= (always.species or "") then
+    local sp = always.species or "MAGIKARP"
+    SpeciesPicker.field(S, {
+      x = px + 70 * s, y = py, w = math.max(100 * s, propW - 90 * s), h = fh,
+      current = sp,
+      title = "OLD ROD SPECIES",
+      onPick = function(id)
+        S.project.fishing.OLD_ROD = {
+          always = { level = math.max(1, always.level or 5), species = id },
+        }
+        App.markDirty()
+      end,
+    })
+    if lvl ~= (always.level or 5) then
       S.project.fishing.OLD_ROD = {
         always = { level = math.max(1, lvl), species = sp },
       }

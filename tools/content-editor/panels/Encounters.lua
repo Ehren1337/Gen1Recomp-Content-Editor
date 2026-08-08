@@ -6,7 +6,7 @@ local State = require("State")
 local Search = require("Search")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
-local Preview = require("Preview")
+local SpeciesPicker = require("SpeciesPicker")
 local EncounterEdit = require("EncounterEdit")
 local Maps = require("Maps")
 local PAL = Theme.PAL
@@ -60,12 +60,6 @@ local function defaultSpecial(id)
     won = "You're amazing!",
     bindTextId = "",
   }
-end
-
-local function speciesDef(S, speciesId)
-  if not speciesId then return nil end
-  return (S.project.pokemon and S.project.pokemon[speciesId])
-    or (S.data and S.data.pokemon and S.data.pokemon[speciesId])
 end
 
 local function drawWild(S, App, x, y, w, h)
@@ -220,15 +214,15 @@ local function drawSpecial(S, App, x, y, w, h)
   end)
 
   row("Species", function(fx, fy_, fw, fh_)
-    local prevW = 40 * s
-    local def = speciesDef(S, rec.species)
-    if def and def.spriteFront then
-      Preview.draw(S, def.spriteFront, fx, fy_ - 4 * s, 36 * s, 36 * s,
-        Preview.monPaletteName(S, def, rec.species))
-    end
-    local v = field(App, "spec_sp", fx + prevW, fy_, fw - prevW, fh_,
-      rec.species or "MAGIKARP", "MAGIKARP"):upper():gsub("%s+", "_")
-    if v ~= (rec.species or "") then rec.species = v; App.markDirty() end
+    SpeciesPicker.field(S, {
+      x = fx, y = fy_, w = fw, h = fh_,
+      current = rec.species or "MAGIKARP",
+      title = "SPECIAL ENCOUNTER SPECIES",
+      onPick = function(id)
+        rec.species = id
+        App.markDirty()
+      end,
+    })
   end)
 
   row("Level", function(fx, fy_, fw, fh_)

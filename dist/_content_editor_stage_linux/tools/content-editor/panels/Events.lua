@@ -10,6 +10,7 @@ local FormPane = require("FormPane")
 local TalkIndex = require("TalkIndex")
 local ModWriter = require("ModWriter")
 local RegList = require("RegList")
+local SpeciesPicker = require("SpeciesPicker")
 local PAL = Theme.PAL
 
 local Events = {}
@@ -409,8 +410,9 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
     local y = row()
     step.flag = field(App, "ev_f_" .. i, fx, y, 160 * s, fh,
       step.flag or "STARTED", "STARTED or EVENT_*")
+    -- Do not write eventFlags here: each keystroke would tombstone partials
+    -- (M, MA, MAP…). Save / flag tester rebuild from finished step.flag.
     local full = State.modFlag(S.project, step.flag)
-    S.project.eventFlags[full] = true
     Kit.text("micro", full, fx + 170 * s, y + 8 * s, PAL.faint)
   elseif kind == "give_item" or kind == "take_item"
       or kind == "check_item_skip" or kind == "check_item_missing" then
@@ -424,9 +426,18 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
   elseif kind == "give_pokemon" or kind == "give_starter"
       or kind == "oneshot_pokemon" or kind == "wild_battle" then
     local y = row()
-    step.species = field(App, "ev_sp_" .. i, fx, y, 140 * s, fh,
-      step.species or (kind == "wild_battle" and "PIDGEY" or "PIKACHU"),
-      "SPECIES"):upper():gsub("%s+", "_")
+    local defSp = kind == "wild_battle" and "PIDGEY"
+      or (kind == "give_starter" and "BULBASAUR" or "PIKACHU")
+    SpeciesPicker.field(S, {
+      x = fx, y = y, w = 140 * s, h = fh,
+      current = step.species or defSp,
+      title = kind == "give_starter" and "STARTER SPECIES"
+        or "SPECIES",
+      onPick = function(id)
+        step.species = id
+        App.markDirty()
+      end,
+    })
     step.level = tonumber(field(App, "ev_lv_" .. i, fx + 150 * s, y, 50 * s, fh,
       tostring(step.level or 5), "5")) or 5
     if kind ~= "wild_battle" then
@@ -456,7 +467,6 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
         step.after or "I already gave you one.", "after")
       step.flag = field(App, "ev_of_" .. i, fx + fw - 130 * s, y4, 120 * s, fh,
         step.flag or "GOT_MON", "GOT_MON")
-      S.project.eventFlags[State.modFlag(S.project, step.flag)] = true
     end
   elseif kind == "oneshot_gift" then
     local y = row()
@@ -469,7 +479,6 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       tostring(step.count or 1), "1")) or 1
     step.flag = field(App, "ev_gf_" .. i, fx + 180 * s, y2, 100 * s, fh,
       step.flag or "DONE", "DONE")
-    S.project.eventFlags[State.modFlag(S.project, step.flag)] = true
     local y3 = row()
     step.after = field(App, "ev_ga_" .. i, fx, y3, fw, fh,
       step.after or "I already gave you one.", "after text")
@@ -502,7 +511,6 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
         step.won or "I lost...", "on win")
       step.flag = field(App, "ev_tf_" .. i, fx + fw - 130 * s, y3, 120 * s, fh,
         step.flag or "BEAT_TRAINER", "BEAT_*")
-      S.project.eventFlags[State.modFlag(S.project, step.flag)] = true
       local y4 = row()
       step.after = field(App, "ev_ta_" .. i, fx, y4, fw, fh,
         step.after or "You're strong.", "after defeated")
@@ -531,7 +539,6 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
     step.flag = field(App, "ev_trdf_" .. i, fx + 110 * s, y, 140 * s, fh,
       step.flag or "TRADED", "TRADED")
     local full = State.modFlag(S.project, step.flag)
-    S.project.eventFlags[full] = true
     Kit.text("micro", full, fx + 260 * s, y + 8 * s, PAL.faint)
   elseif kind == "raw" then
     local y = row()
@@ -561,6 +568,159 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
   end
 
   return used
+end
+
+local function swapSteps(steps, i, j)
+  if type(steps) ~= "table" then return false end
+  if i < 1 or j < 1 or i > #steps or j > #steps or i == j then return false end
+  steps[i], steps[j] = steps[j], steps[i]
+  return true
+end
+
+local function moveStep(steps, from, to)
+  if type(steps) ~= "table" then return false end
+  if from < 1 or from > #steps or to < 1 or to > #steps or from == to then
+    return false
+  end
+  local item = table.remove(steps, from)
+  table.insert(steps, to, item)
+  return true
+end
+
+local function beginStepListReorder(S, listKey)
+  if S._stepDrag and S._stepDrag.listKey ~= listKey and not Kit.mouseDown then
+    S._stepDrag = nil
+  end
+  S._stepRowBounds = {}
+  -- Block field clicks for the rest of this frame while a drag is active.
+  if S._stepDrag and S._stepDrag.listKey == listKey and Kit.mouseDown then
+    Kit.blockClicks = true
+  end
+end
+
+local function finishStepListReorder(S, steps, listKey, App)
+  local drag = S._stepDrag
+  if not drag or drag.listKey ~= listKey then return end
+  if Kit.mouseDown then
+    Kit.blockClicks = true
+    local my = Kit.mouseY
+    local bounds = S._stepRowBounds or {}
+    local over = drag.from
+    if #bounds > 0 then
+      if my < bounds[1].y then
+        over = bounds[1].i
+      elseif my >= bounds[#bounds].y + bounds[#bounds].h then
+        over = bounds[#bounds].i
+      else
+        for _, r in ipairs(bounds) do
+          if my >= r.y and my < r.y + r.h then
+            over = r.i
+            break
+          end
+        end
+      end
+    end
+    drag.over = over
+  else
+    if drag.over and drag.from and drag.over ~= drag.from then
+      if moveStep(steps, drag.from, drag.over) then
+        App.markDirty()
+      end
+    end
+    S._stepDrag = nil
+  end
+end
+
+-- Editable step row: [≡] [Kind] fields… [↑] [↓] [X]
+-- Returns the next fy after this block.
+local function drawEditableStep(S, App, steps, i, listKey, viewX, fy, innerW, kindW, fh, s)
+  local step = steps[i]
+  if not step then return fy end
+  local kind = step.kind or "show_text"
+  local handleW = 26 * s
+  local btnW = 26 * s
+  local gap = 2 * s
+  local rightChrome = btnW * 3 + gap * 2
+  local leftChrome = handleW + 4 * s
+  local kindX = viewX + leftChrome
+  local fieldX = kindX + kindW + 8 * s
+  local fieldW = math.max(40 * s,
+    innerW - leftChrome - kindW - 8 * s - rightChrome - 4 * s)
+  local xBtn = viewX + innerW - btnW
+  local downBtn = xBtn - btnW - gap
+  local upBtn = downBtn - btnW - gap
+
+  local drag = S._stepDrag
+  local isFrom = drag and drag.listKey == listKey and drag.from == i
+  local isOver = drag and drag.listKey == listKey and drag.over == i
+    and drag.from ~= i
+
+  -- Start drag from the handle only (click frame).
+  if not drag and Kit.mouseClicked and not Kit.blockClicks
+      and Kit.hit(viewX, fy, handleW, fh) then
+    S._stepDrag = { listKey = listKey, from = i, over = i }
+    drag = S._stepDrag
+    isFrom = true
+  end
+
+  if Kit.button(viewX, fy, handleW, fh, "=", {
+      kind = isFrom and "accent" or "ghost", font = "small",
+      tooltip = "Drag to reorder",
+    }) then
+    -- Visual only; drag starts via mouseClicked on the handle hit rect.
+  end
+
+  if Kit.button(kindX, fy, kindW, fh, stepLabel(kind),
+      { kind = "accent", font = "small",
+        tooltip = kind == "raw"
+          and "Engine cmd — edit the line, or click to change step type"
+          or "Click to change step type" }) then
+    local nextKind = cycleKind(kind)
+    step.kind = nextKind
+    if nextKind == "raw" and (not step.note or step.note == "") then
+      step.note = "check_flag EVENT_FLAG"
+      step.row = { "check_flag", "EVENT_FLAG" }
+    end
+    App.markDirty()
+  end
+
+  local rowsN = drawStepFields(S, App, step, i, step.kind or kind,
+    fieldX, fy, fieldW, fh, s)
+  local blockH = math.max(1, rowsN) * (fh + 4 * s)
+  local rowH = blockH + 8 * s
+
+  S._stepRowBounds[#S._stepRowBounds + 1] = { i = i, y = fy, h = rowH }
+
+  if isFrom or isOver then
+    Theme.col(PAL.blue, isOver and 0.35 or 0.18)
+    love.graphics.rectangle("line", viewX, fy, innerW, blockH, 4 * s, 4 * s)
+  end
+
+  if i > 1 and Kit.button(upBtn, fy, btnW, fh, "^", {
+      kind = "ghost", font = "small", tooltip = "Move step up",
+    }) then
+    if swapSteps(steps, i, i - 1) then
+      S._stepDrag = nil
+      App.markDirty()
+    end
+  end
+  if i < #steps and Kit.button(downBtn, fy, btnW, fh, "v", {
+      kind = "ghost", font = "small", tooltip = "Move step down",
+    }) then
+    if swapSteps(steps, i, i + 1) then
+      S._stepDrag = nil
+      App.markDirty()
+    end
+  end
+  if Kit.button(xBtn, fy, btnW, fh, "X", {
+      kind = "danger", font = "small",
+    }) then
+    table.remove(steps, i)
+    S._stepDrag = nil
+    App.markDirty()
+  end
+
+  return fy + rowH
 end
 
 local function drawScripts(S, x, y, w, h, App)
@@ -743,6 +903,8 @@ local function drawScripts(S, x, y, w, h, App)
     fy = fy + 24 * s
   end
 
+  local listKey = "script:" .. tostring(S.eventScriptKey or "")
+  if not readOnly then beginStepListReorder(S, listKey) end
   for i, step in ipairs(steps) do
     local kind = step.kind or "show_text"
     if readOnly then
@@ -786,30 +948,12 @@ local function drawScripts(S, x, y, w, h, App)
       end
       fy = fy + fh + 6 * s
     else
-      local script = owned
-      if Kit.button(viewX, fy, kindW, fh, stepLabel(kind),
-          { kind = "accent", font = "small",
-            tooltip = kind == "raw"
-              and "Engine cmd — edit the line, or click to change step type"
-              or "Click to change step type" }) then
-        local nextKind = cycleKind(kind)
-        step.kind = nextKind
-        if nextKind == "raw" and (not step.note or step.note == "") then
-          step.note = "check_flag EVENT_FLAG"
-          step.row = { "check_flag", "EVENT_FLAG" }
-        end
-        App.markDirty()
-      end
-      local rowsN = drawStepFields(S, App, step, i, step.kind or kind,
-        viewX + kindW + 8 * s, fy, innerW - kindW - 48 * s, fh, s)
-      local blockH = math.max(1, rowsN) * (fh + 4 * s)
-      if Kit.button(viewX + innerW - 32 * s, fy, 28 * s, fh, "X",
-          { kind = "danger", font = "small" }) then
-        table.remove(script.steps, i)
-        App.markDirty()
-      end
-      fy = fy + blockH + 8 * s
+      fy = drawEditableStep(S, App, steps, i, listKey,
+        viewX, fy, innerW, kindW, fh, s)
     end
+  end
+  if not readOnly then
+    finishStepListReorder(S, steps, listKey, App)
   end
 
   FormPane.finish(S, "eventFormScroll", contentTop, fy, view)
@@ -873,15 +1017,20 @@ local function drawStarters(S, x, y, w, h, App)
     Kit.text("small", ball.label, x + 20 * s, fy + 6 * s, PAL.caption)
     fy = fy + 22 * s
     Kit.text("micro", "becomes", x + 20 * s, fy + 8 * s, PAL.faint)
-    local nsp = field(App, "st_sp_" .. ball.from, x + 90 * s, fy, 160 * s, fh,
-      sp, ball.from):upper():gsub("%s+", "_")
+    SpeciesPicker.field(S, {
+      x = x + 90 * s, y = fy, w = 160 * s, h = fh,
+      current = sp,
+      title = "STARTER · " .. ball.label,
+      onPick = function(id)
+        remap[ball.from] = { species = id, level = lv }
+        App.markDirty()
+      end,
+    })
     local nlv = tonumber(field(App, "st_lv_" .. ball.from, x + 260 * s, fy, 50 * s, fh,
       tostring(lv), "5")) or 5
-    if nsp ~= sp or nlv ~= lv then
-      remap[ball.from] = { species = nsp, level = nlv }
+    if nlv ~= lv then
+      remap[ball.from] = { species = sp, level = nlv }
       App.markDirty()
-    elseif nsp == ball.from and nlv == 5 then
-      -- keep explicit identity optional; leave stored if user set it
     end
     if Kit.button(x + 330 * s, fy, 70 * s, fh, "Reset", { kind = "ghost" }) then
       remap[ball.from] = nil
@@ -896,33 +1045,13 @@ local function drawStarters(S, x, y, w, h, App)
 end
 
 local function scrapeFlags(S)
+  State.rebuildEventFlags(S.project)
   local names = {}
   local seen = {}
   local function add(n)
     if n and not seen[n] then seen[n] = true; names[#names + 1] = n end
   end
   for n in pairs(S.project.eventFlags or {}) do add(n) end
-  local function scrapeSteps(steps)
-    for _, step in ipairs(steps or {}) do
-      if step.flag then add(State.modFlag(S.project, step.flag)) end
-      if step.choseFlag then add(State.modFlag(S.project, step.choseFlag)) end
-    end
-  end
-  for _, script in pairs(S.project.talkScripts or {}) do
-    scrapeSteps(script.steps)
-  end
-  for _, hooks in pairs(S.project.mapHooks or {}) do
-    if type(hooks) == "table" then
-      if hooks.onEnter then scrapeSteps(hooks.onEnter.steps) end
-      if hooks.onVictory then scrapeSteps(hooks.onVictory.steps) end
-      for _, cell in ipairs(hooks.onStepCells or {}) do
-        scrapeSteps(cell.steps)
-      end
-      for _, scr in pairs(hooks.scripts or {}) do
-        scrapeSteps(scr.steps)
-      end
-    end
-  end
   if S.events then
     for _, n in ipairs(S.events) do add(n) end
   end
@@ -1065,6 +1194,44 @@ local function vanillaHookLabel(info, kind)
   return h.form == "lua" and " *" or " +"
 end
 
+local function mapHasModHooks(S, mapId)
+  local hooks = S.project and S.project.mapHooks and S.project.mapHooks[mapId]
+  if type(hooks) ~= "table" then return false end
+  if hooks.onEnter or hooks.onVictory then return true end
+  if type(hooks.onStepCells) == "table" and #hooks.onStepCells > 0 then return true end
+  if type(hooks.scripts) == "table" and next(hooks.scripts) then return true end
+  return false
+end
+
+-- Drop the current mod hook bag (onEnter / onVictory / one onStep cell / named script).
+local function clearModHook(S, mapId, kind, cellIdx, scriptName)
+  local bag = S.project.mapHooks and S.project.mapHooks[mapId]
+  if type(bag) ~= "table" then return false end
+  if kind == "onEnter" then
+    bag.onEnter = nil
+  elseif kind == "onVictory" then
+    bag.onVictory = nil
+  elseif kind == "onStep" then
+    if type(bag.onStepCells) == "table" then
+      local idx = tonumber(cellIdx) or 1
+      table.remove(bag.onStepCells, idx)
+      if #bag.onStepCells == 0 then bag.onStepCells = nil end
+    end
+  elseif kind == "script" then
+    if type(bag.scripts) == "table" and scriptName then
+      bag.scripts[scriptName] = nil
+      if not next(bag.scripts) then bag.scripts = nil end
+    end
+  else
+    return false
+  end
+  if not bag.onEnter and not bag.onVictory
+      and not bag.onStepCells and not bag.scripts then
+    S.project.mapHooks[mapId] = nil
+  end
+  return true
+end
+
 local function drawHooks(S, x, y, w, h, App)
   local s = Kit.scale
   State.ensureProjectFields(S.project)
@@ -1102,11 +1269,13 @@ local function drawHooks(S, x, y, w, h, App)
       S.hookFormScroll = nil
     end
     local hasV = TalkIndex.mapHasHooks(id)
-    local mark = hasV and " *" or ""
+    local hasM = mapHasModHooks(S, id)
+    local mark = (hasM and " +" or "") .. (hasV and " *" or "")
     Kit.pushClip(mapScrollX, ry, mapRowW, mapRowH)
     Kit.text("micro",
       fitIn("micro", id .. mark, math.max(8, mapRowW - 12 * s)),
-      mapScrollX + 6 * s, ry + 6 * s, hasV and PAL.yellow or PAL.text)
+      mapScrollX + 6 * s, ry + 6 * s,
+      hasM and PAL.green or (hasV and PAL.yellow or PAL.text))
     Kit.popClip()
     ry = ry + mapRowH + 2 * s
   end
@@ -1165,7 +1334,7 @@ local function drawHooks(S, x, y, w, h, App)
   local viewH = math.max(40 * s, listH - pad - footerH - metaH)
 
   Kit.text("micro",
-    Kit.ellipsize("micro", mapId .. " / " .. kind, formW - 24 * s),
+    Kit.ellipsize("micro", mapId .. " / " .. kind, formW - 140 * s),
     formX + 12 * s, listY + 10 * s, PAL.faint)
 
   -- Named scripts: pick from vanilla list + mod drafts.
@@ -1233,11 +1402,34 @@ local function drawHooks(S, x, y, w, h, App)
       S.eventHookCellIdx = #hooks.onStepCells
       App.markDirty()
     end
+    if Kit.button(formX + 418 * s, listY + 24 * s, 80 * s, 26 * s, "Del cell",
+        { kind = "danger", font = "small",
+          tooltip = "Remove this mod onStep cell" }) then
+      clearModHook(S, mapId, "onStep", idx, nil)
+      if hooks.onStepCells and #hooks.onStepCells > 0 then
+        S.eventHookCellIdx = math.min(idx, #hooks.onStepCells)
+      else
+        S.eventHookCellIdx = 1
+      end
+      App.markDirty()
+    end
   end
 
   local steps = resolveHookSteps(hooks, kind, S.eventHookCellIdx,
     S.eventHookScriptName, false)
   local editing = type(steps) == "table"
+
+  if editing and kind ~= "onStep" and Kit.button(
+      formX + formW - 12 * s - 100 * s, listY + 6 * s, 100 * s, 26 * s,
+      "Clear mod", {
+        kind = "danger", font = "small",
+        tooltip = "Remove this mod's hook steps (engine hook stays)",
+      }) then
+    clearModHook(S, mapId, kind, S.eventHookCellIdx, S.eventHookScriptName)
+    App.markDirty()
+    steps = nil
+    editing = false
+  end
 
   local function ensureSteps()
     if editing then return steps end
@@ -1345,23 +1537,15 @@ local function drawHooks(S, x, y, w, h, App)
   end
 
   if editing then
-    for i, step in ipairs(steps) do
-      local sk = step.kind or "show_text"
-      if Kit.button(viewX, fy, kindW, fh, stepLabel(sk),
-          { kind = "accent", font = "small" }) then
-        step.kind = cycleKind(sk)
-        App.markDirty()
-      end
-      local rowsN = drawStepFields(S, App, step, i, step.kind or sk,
-        viewX + kindW + 8 * s, fy, innerW - kindW - 48 * s, fh, s)
-      local blockH = math.max(1, rowsN) * (fh + 4 * s)
-      if Kit.button(viewX + innerW - 32 * s, fy, 28 * s, fh, "X",
-          { kind = "danger", font = "small" }) then
-        table.remove(steps, i)
-        App.markDirty()
-      end
-      fy = fy + blockH + 8 * s
+    local listKey = "hook:" .. tostring(mapId) .. "/" .. tostring(kind)
+      .. "/" .. tostring(S.eventHookCellIdx or 0) .. "/"
+      .. tostring(S.eventHookScriptName or "")
+    beginStepListReorder(S, listKey)
+    for i = 1, #steps do
+      fy = drawEditableStep(S, App, steps, i, listKey,
+        viewX, fy, innerW, kindW, fh, s)
     end
+    finishStepListReorder(S, steps, listKey, App)
   end
   FormPane.finish(S, "hookFormScroll", contentTop, fy, view)
 

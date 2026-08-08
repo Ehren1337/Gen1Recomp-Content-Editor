@@ -284,7 +284,10 @@ function ModIO.load(modDir)
   local ok, project = pcall(chunk)
   if not ok then return nil, project end
   if type(project) ~= "table" then return nil, "editor_project.lua must return a table" end
-  return State.ensureProjectFields(project)
+  project = State.ensureProjectFields(project)
+  -- Drop typing partials (H / HI / HIDE_…) left in older editor_project.lua files.
+  State.rebuildEventFlags(project)
+  return project
 end
 
 function ModIO.save(modDir, project)
@@ -296,6 +299,8 @@ function ModIO.save(modDir, project)
 
   -- Persist trainer_headers seeded from map trainer objects / special battles.
   ModWriter.ensureTrainerHeaders(project)
+  -- Drop flag-name typing partials before writing editor_project / main.lua.
+  State.rebuildEventFlags(project)
 
   local body = ModWriter.serializeProject(project)
   local path = ModIO.projectPath(modDir)

@@ -35,6 +35,8 @@ local Player = require("Player")
 local Ui = require("Ui")
 local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
+local SpeciesPicker = require("SpeciesPicker")
+local ItemPicker = require("ItemPicker")
 local ColorWheel = require("ColorWheel")
 local PaletteEdit = require("PaletteEdit")
 local RegList = require("RegList")
@@ -1082,6 +1084,7 @@ function App.draw()
   History.beginFrame(S)
   -- Block underlying panel hits while a modal is up.
   if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
+      or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker then
     Kit.blockClicks = true
   end
@@ -1107,6 +1110,14 @@ function App.draw()
   if PalettePicker.isOpen(S) then
     Kit.blockClicks = ColorWheel.isOpen(S) or PaletteEdit.isOpen(S)
     PalettePicker.draw(S, 0, 0, W, H)
+  end
+  if SpeciesPicker.isOpen(S) then
+    Kit.blockClicks = false
+    SpeciesPicker.draw(S, 0, 0, W, H)
+  end
+  if ItemPicker.isOpen(S) then
+    Kit.blockClicks = false
+    ItemPicker.draw(S, 0, 0, W, H)
   end
   if BattleAnims.isPickerOpen(S) then
     Kit.blockClicks = false
@@ -1161,6 +1172,8 @@ function App.keypressed(key)
   if Kit.keypressed(key) then return end
   if key == "escape" then
     if PalettePicker.keypressed(S, key) then return end
+    if SpeciesPicker.keypressed(S, key) then return end
+    if ItemPicker.keypressed(S, key) then return end
     if BattleAnims.pickerKeypressed(S, key) then return end
     if S.mapTilesetPicker then
       S.mapTilesetPicker = nil
@@ -1181,6 +1194,7 @@ function App.keypressed(key)
   if key == "[" then return cycleTab(-1) end
   -- Modals own keyboard (except Kit textfields / Esc above).
   if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
+      or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S.mapTilesetPicker or S._pathPrompt then
     return
   end
@@ -1209,8 +1223,9 @@ function App.mousereleased() end
 
 function App.wheelmoved(_, y)
   -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.
-  if S and (S.mapTilesetPicker or PalettePicker.isOpen(S) or ColorWheel.isOpen(S)
-      or PaletteEdit.isOpen(S) or S._pathPrompt) then
+  if S and (S.mapTilesetPicker or PalettePicker.isOpen(S)
+      or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or S._pathPrompt) then
     wheelY = wheelY + (y or 0)
     return
   end

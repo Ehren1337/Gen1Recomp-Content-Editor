@@ -845,6 +845,15 @@ function ModWriter.emitMain(project, baseData)
       verb, pid, lit)
     out[#out + 1] = ""
   end
+  local delP = {}
+  for pid in pairs((project.deleted and project.deleted.pokemon) or {}) do
+    delP[#delP + 1] = pid
+  end
+  table.sort(delP)
+  for _, pid in ipairs(delP) do
+    out[#out + 1] = string.format("  mod.content.pokemon:remove(%q)", pid)
+    out[#out + 1] = ""
+  end
 
   -- Custom move effects before moves so f.id("move_effects") resolves.
   local meIds = {}
@@ -954,6 +963,15 @@ function ModWriter.emitMain(project, baseData)
       verb, iid, emitTableLiteral(rec, 1))
     out[#out + 1] = ""
   end
+  local delI = {}
+  for iid in pairs((project.deleted and project.deleted.items) or {}) do
+    delI[#delI + 1] = iid
+  end
+  table.sort(delI)
+  for _, iid in ipairs(delI) do
+    out[#out + 1] = string.format("  mod.content.items:remove(%q)", iid)
+    out[#out + 1] = ""
+  end
 
   local mIds = {}
   for mid in pairs(project.maps or {}) do mIds[#mIds + 1] = mid end
@@ -1061,6 +1079,15 @@ function ModWriter.emitMain(project, baseData)
     if raw.trueColor then
       trainerTrueColor[#trainerTrueColor + 1] = tid
     end
+  end
+  local delT = {}
+  for tid in pairs((project.deleted and project.deleted.trainers) or {}) do
+    delT[#delT + 1] = tid
+  end
+  table.sort(delT)
+  for _, tid in ipairs(delT) do
+    out[#out + 1] = string.format("  mod.content.trainers:remove(%q)", tid)
+    out[#out + 1] = ""
   end
 
   -- Stock Gen1Recomp keeps battleTheme / trainer trueColor in the schema but
@@ -1265,6 +1292,9 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
+  -- Drop typing partials (M / MA / MAP) left by older editor builds.
+  local State = require("State")
+  State.rebuildEventFlags(project)
   if next(project.eventFlags or {}) then
     out[#out + 1] = "  -- event flags declared in the content editor:"
     local flags = {}

@@ -6,6 +6,7 @@ local Theme = require("Theme")
 local State = require("State")
 local RegList = require("RegList")
 local FormPane = require("FormPane")
+local SpeciesPicker = require("SpeciesPicker")
 local PAL = Theme.PAL
 
 local Trades = {}
@@ -132,17 +133,27 @@ function Trades.draw(S, x, y, w, h, App)
   fy = fy + 22 * s
 
   row("Wants (give)", function(fx, fy_, fw, fh_)
-    local cur = tostring(t.give or "")
-    local v = RegList.field(App, "trd_give", fx, fy_, fw, fh_, cur, "ABRA")
-      :upper():gsub("%s+", "_")
-    if v ~= cur then ensure().give = v end
+    SpeciesPicker.field(S, {
+      x = fx, y = fy_, w = fw, h = fh_,
+      current = t.give or "ABRA",
+      title = "TRADE WANTS (GIVE)",
+      onPick = function(id)
+        ensure().give = id
+        App.markDirty()
+      end,
+    })
   end)
 
   row("Offers (get)", function(fx, fy_, fw, fh_)
-    local cur = tostring(t.get or "")
-    local v = RegList.field(App, "trd_get", fx, fy_, fw, fh_, cur, "MR_MIME")
-      :upper():gsub("%s+", "_")
-    if v ~= cur then ensure().get = v end
+    SpeciesPicker.field(S, {
+      x = fx, y = fy_, w = fw, h = fh_,
+      current = t.get or "MR_MIME",
+      title = "TRADE OFFERS (GET)",
+      onPick = function(id)
+        ensure().get = id
+        App.markDirty()
+      end,
+    })
   end)
 
   row("Nickname", function(fx, fy_, fw, fh_)

@@ -2,6 +2,7 @@
 
 local Kit = require("Kit")
 local Theme = require("Theme")
+local State = require("State")
 local ModIO = require("ModIO")
 local Search = require("Search")
 local TypeIds = require("TypeIds")
@@ -44,13 +45,16 @@ end
 
 local function allSpeciesIds(S)
   local seen, ids = {}, {}
+  local deleted = (S.project and S.project.deleted and S.project.deleted.pokemon) or {}
   for id in pairs((S.project and S.project.pokemon) or {}) do
-    seen[id] = true
-    ids[#ids + 1] = id
+    if not deleted[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
   end
   if S.data and S.data.pokemon then
     for id in pairs(S.data.pokemon) do
-      if not seen[id] then
+      if not seen[id] and not deleted[id] then
         seen[id] = true
         ids[#ids + 1] = id
       end
@@ -900,7 +904,7 @@ function Pokemon.draw(S, x, y, w, h, App)
   end
 
   Kit.card(formX, listY, formW, listH, 12 * s)
-  local footerH = owned and 44 * s or 12 * s
+  local footerH = 44 * s
   local pad = 12 * s
   local viewX = formX + pad
   local viewY = listY + pad
@@ -927,10 +931,23 @@ function Pokemon.draw(S, x, y, w, h, App)
   end
   FormPane.finish(S, "pokemonFormScroll", contentTop, fy, view)
 
-  if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
-      "Revert", { kind = "danger" }) then
-    S.project.pokemon[mon.id] = nil
-    S.pokemonId = mon.id
+  local btnY = listY + listH - 40 * s
+  local bx = formX + 12 * s
+  if owned then
+    if Kit.button(bx, btnY, 120 * s, 32 * s, "Revert", { kind = "ghost" }) then
+      S.project.pokemon[mon.id] = nil
+      S.pokemonId = mon.id
+      App.markDirty()
+    end
+    bx = bx + 128 * s
+  end
+  if Kit.button(bx, btnY, 120 * s, 32 * s,
+      "Delete", { kind = "danger",
+        tooltip = "Remove from this mod (Save emits content:remove)" }) then
+    State.markDeleted(S.project, "pokemon", mon.id, mon,
+      S.data and S.data.pokemon)
+    local ids = allSpeciesIds(S)
+    S.pokemonId = ids[1]
     App.markDirty()
   end
 end

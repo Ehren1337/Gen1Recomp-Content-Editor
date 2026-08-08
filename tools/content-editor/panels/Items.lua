@@ -3,6 +3,7 @@
 
 local Kit = require("Kit")
 local Theme = require("Theme")
+local State = require("State")
 local Search = require("Search")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
@@ -73,13 +74,16 @@ local X_STATS = { "attack", "defense", "speed", "special", "accuracy" }
 
 local function allItemIds(S)
   local seen, ids = {}, {}
+  local deleted = (S.project and S.project.deleted and S.project.deleted.items) or {}
   for id in pairs((S.project and S.project.items) or {}) do
-    seen[id] = true
-    ids[#ids + 1] = id
+    if not deleted[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
   end
   if S.data and S.data.items then
     for id in pairs(S.data.items) do
-      if not seen[id] then
+      if not seen[id] and not deleted[id] then
         seen[id] = true
         ids[#ids + 1] = id
       end
@@ -412,7 +416,7 @@ function Items.draw(S, x, y, w, h, App)
 
   Kit.caption(formX, y, "EDIT  " .. (item.id or "?") .. (owned and "" or "  (vanilla)"))
   Kit.card(formX, listY, formW, listH, 12 * s)
-  local footerH = owned and 44 * s or 12 * s
+  local footerH = 44 * s
   local pad = 12 * s
   local viewX = formX + pad
   local viewY = listY + pad
@@ -811,10 +815,23 @@ function Items.draw(S, x, y, w, h, App)
   fy = fy + 28 * s
   FormPane.finish(S, "itemFormScroll", contentTop, fy, view)
 
-  if owned and Kit.button(cardX + 12 * s, cardListY + cardListH - 40 * s, 120 * s, 32 * s,
-      "Revert", { kind = "danger" }) then
-    S.project.items[item.id] = nil
-    S.itemId = item.id
+  local btnY = cardListY + cardListH - 40 * s
+  local bx = cardX + 12 * s
+  if owned then
+    if Kit.button(bx, btnY, 120 * s, 32 * s, "Revert", { kind = "ghost" }) then
+      S.project.items[item.id] = nil
+      S.itemId = item.id
+      App.markDirty()
+    end
+    bx = bx + 128 * s
+  end
+  if Kit.button(bx, btnY, 120 * s, 32 * s,
+      "Delete", { kind = "danger",
+        tooltip = "Remove from this mod (Save emits content:remove)" }) then
+    State.markDeleted(S.project, "items", item.id, item,
+      S.data and S.data.items)
+    local ids = allItemIds(S)
+    S.itemId = ids[1]
     App.markDirty()
   end
 end
