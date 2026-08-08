@@ -1247,7 +1247,7 @@ end
 
 function App.mousereleased() end
 
-function App.wheelmoved(_, y)
+function App.wheelmoved(x, y)
   -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.
   if S and (S.mapTilesetPicker or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
@@ -1255,7 +1255,8 @@ function App.wheelmoved(_, y)
     wheelY = wheelY + (y or 0)
     return
   end
-  if S and S.tab == "maps" and Maps.wheelmoved and Maps.wheelmoved(S, y) then
+  if S and S.tab == "maps" and Maps.wheelmoved
+      and Maps.wheelmoved(S, y, x) then
     return
   end
   wheelY = wheelY + (y or 0)

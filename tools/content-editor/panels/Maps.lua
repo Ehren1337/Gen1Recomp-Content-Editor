@@ -1287,6 +1287,134 @@ local function clampWorldZoom(z)
   return z
 end
 
+-- Camera bounds in world px. When the map fits the view, lock to centered
+-- offsets (same as Fit); when zoomed in, clamp to [0, map - view].
+local function mapCamLimits(S, mapDef)
+  local z = math.max(0.25, S.mapZoom or 2)
+  local vw = (S._mapViewW or 480) / z
+  local vh = (S._mapViewH or 432) / z
+  local mw = (tonumber(mapDef and mapDef.width) or 0) * BLOCK_PX
+  local mh = (tonumber(mapDef and mapDef.height) or 0) * BLOCK_PX
+  local minX, maxX, minY, maxY
+  if mw <= vw then
+    minX = (mw - vw) / 2
+    maxX = minX
+  else
+    minX, maxX = 0, mw - vw
+  end
+  if mh <= vh then
+    minY = (mh - vh) / 2
+    maxY = minY
+  else
+    minY, maxY = 0, mh - vh
+  end
+  return minX, minY, maxX, maxY, mw, mh, vw, vh
+end
+
+local function clampMapCam(S, mapDef)
+  if not (S and mapDef) then return end
+  local minX, minY, maxX, maxY = mapCamLimits(S, mapDef)
+  local x = tonumber(S.mapCamX) or 0
+  local y = tonumber(S.mapCamY) or 0
+  if x < minX then x = minX elseif x > maxX then x = maxX end
+  if y < minY then y = minY elseif y > maxY then y = maxY end
+  S.mapCamX, S.mapCamY = x, y
+end
+
+-- H/V scrollbars on the map canvas (drag thumbs to pan while zoomed in).
+-- Sets S._mapSbBlocking when the pointer is on a bar / drag so paint/pan skip.
+local function drawMapScrollbars(S, mapDef, vx, vy, vw, vh)
+  S._mapSbBlocking = false
+  if not mapDef then return end
+  clampMapCam(S, mapDef)
+  local minX, minY, maxX, maxY, mw, mh, viewW, viewH = mapCamLimits(S, mapDef)
+  local s = Kit.scale
+  local sb = math.max(8, 10 * s)
+  local needH = maxX > minX + 0.5
+  local needV = maxY > minY + 0.5
+  if not needH and not needV then
+    S._mapSbDrag = nil
+    return
+  end
+
+  local trackW = needV and (vw - sb) or vw
+  local trackH = needH and (vh - sb) or vh
+
+  local drag = S._mapSbDrag
+  if drag and not (Kit.mouseDown or Kit.mouseClicked) then
+    S._mapSbDrag = nil
+    drag = nil
+  end
+  if drag then
+    S._mapSbBlocking = true
+    if drag.axis == "x" and needH then
+      local travel = math.max(1, drag.trackLen - drag.thumbLen)
+      local t = (Kit.mouseX - drag.origin) / travel
+      S.mapCamX = minX + Theme.clamp(t, 0, 1) * (maxX - minX)
+    elseif drag.axis == "y" and needV then
+      local travel = math.max(1, drag.trackLen - drag.thumbLen)
+      local t = (Kit.mouseY - drag.origin) / travel
+      S.mapCamY = minY + Theme.clamp(t, 0, 1) * (maxY - minY)
+    end
+    clampMapCam(S, mapDef)
+  end
+
+  if needV then
+    local range = math.max(1, maxY - minY)
+    local th = math.max(24 * s, trackH * (viewH / math.max(viewH, mh)))
+    local travel = math.max(1, trackH - th)
+    local ty = vy + travel * (((S.mapCamY or 0) - minY) / range)
+    local bx = vx + vw - sb
+    if Kit.hit(bx, vy, sb, trackH) then S._mapSbBlocking = true end
+    Theme.col(PAL.cardBorder, 0.35)
+    love.graphics.rectangle("fill", bx, vy, sb, trackH, sb / 2, sb / 2)
+    local hot = Kit.hover(bx, ty, sb, th)
+      or (S._mapSbDrag and S._mapSbDrag.axis == "y")
+    Theme.col(PAL.blue, hot and 0.9 or 0.65)
+    love.graphics.rectangle("fill", bx, ty, sb, th, sb / 2, sb / 2)
+    if Kit.press(bx, vy, sb, trackH) then
+      local clickT = Theme.clamp((Kit.mouseY - vy - th / 2) / travel, 0, 1)
+      S.mapCamY = minY + clickT * range
+      S._mapSbDrag = {
+        axis = "y",
+        origin = Kit.mouseY - travel * clickT,
+        trackLen = trackH,
+        thumbLen = th,
+      }
+      S._mapSbBlocking = true
+      clampMapCam(S, mapDef)
+    end
+  end
+
+  if needH then
+    local range = math.max(1, maxX - minX)
+    local tw = math.max(24 * s, trackW * (viewW / math.max(viewW, mw)))
+    local travel = math.max(1, trackW - tw)
+    local tx = vx + travel * (((S.mapCamX or 0) - minX) / range)
+    local by = vy + vh - sb
+    if Kit.hit(vx, by, trackW, sb) then S._mapSbBlocking = true end
+    Theme.col(PAL.cardBorder, 0.35)
+    love.graphics.rectangle("fill", vx, by, trackW, sb, sb / 2, sb / 2)
+    local hot = Kit.hover(tx, by, tw, sb)
+      or (S._mapSbDrag and S._mapSbDrag.axis == "x")
+    Theme.col(PAL.blue, hot and 0.9 or 0.65)
+    love.graphics.rectangle("fill", tx, by, tw, sb, sb / 2, sb / 2)
+    if Kit.press(vx, by, trackW, sb) then
+      local clickT = Theme.clamp((Kit.mouseX - vx - tw / 2) / travel, 0, 1)
+      S.mapCamX = minX + clickT * range
+      S._mapSbDrag = {
+        axis = "x",
+        origin = Kit.mouseX - travel * clickT,
+        trackLen = trackW,
+        thumbLen = tw,
+      }
+      S._mapSbBlocking = true
+      clampMapCam(S, mapDef)
+    end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 -- Forward declare: World view draws live tiles before this is assigned.
 local prepareLiveMap
 
@@ -2553,6 +2681,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     love.graphics.setScissor()
   end
 
+  clampMapCam(S, mapDef)
+  drawMapScrollbars(S, mapDef, vx, vy, vw, vh)
+
   local tool = S.mapTool or "paint"
   -- Dest pick is a single click; do not brush-drag while armed.
   local brush = (tool == "paint" or tool == "erase" or tool == "pick"
@@ -2622,7 +2753,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   end
   S._mapRmbWasDown = rmb
 
-  if panHeld then
+  if S._mapSbBlocking then
+    -- Scrollbar owns this pointer; do not paint or free-pan underneath.
+  elseif panHeld then
     S._mapSelDraft = nil
     local d = S._mapDrag
     if not d or not d.pan then
@@ -2634,6 +2767,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     else
       S.mapCamX = d.camX - (Kit.mouseX - d.mx) / S.mapZoom
       S.mapCamY = d.camY - (Kit.mouseY - d.my) / S.mapZoom
+      clampMapCam(S, mapDef)
     end
   elseif Kit.mouseDown and not Kit.blockClicks and (S._mapDrag or over) then
     if brush and over then
@@ -2683,6 +2817,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
           d.moved = true
           S.mapCamX = d.camX - dx / S.mapZoom
           S.mapCamY = d.camY - dy / S.mapZoom
+          clampMapCam(S, mapDef)
         end
       end
     end
@@ -2807,8 +2942,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       "%.1fx  %s%s  drag=marquee  Ctrl+C/V  Apply shift",
       S.mapZoom, ts, coord)
   else
-    hint = string.format("%.1fx  %s%s  drag=pan  WASD  click=%s",
-      S.mapZoom, ts, coord, tool)
+    hint = string.format(
+      "%.1fx  %s%s  scrollbars · Shift+wheel=V Ctrl+wheel=H · WASD/MMB pan",
+      S.mapZoom, ts, coord)
   end
   Kit.text("micro", hint, vx + 6 * s, vy + vh - 16 * s, PAL.faint)
 end
@@ -2843,21 +2979,53 @@ function Maps.update(S, dt)
     local step = (speed * dt) / z
     S.mapCamX = (S.mapCamX or 0) + dx * step
     S.mapCamY = (S.mapCamY or 0) + dy * step
+    local map = resolveMapDef(S, S.mapId)
+    if map then clampMapCam(S, map) end
   end
 end
 
-function Maps.wheelmoved(S, dy)
+function Maps.wheelmoved(S, dy, dx)
   if not S then return false end
+  dy = tonumber(dy) or 0
+  dx = tonumber(dx) or 0
   -- Modal owns the wheel (Kit.scroll on the list). Do not zoom the map.
   if S.mapTilesetPicker then return false end
   if S.mapViewMode == "world" and S._worldViewHit then
-    S.worldZoom = clampWorldZoom(
-      (S.worldZoom or 0.25) + (dy > 0 and 0.05 or -0.05))
-    return true
+    if dy ~= 0 then
+      S.worldZoom = clampWorldZoom(
+        (S.worldZoom or 0.25) + (dy > 0 and 0.05 or -0.05))
+    end
+    return dy ~= 0 or dx ~= 0
   end
   if not S._mapViewW then return false end
-  if S._mapViewHit then
+  if not S._mapViewHit then return false end
+
+  local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+  local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+    or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
+  local map = resolveMapDef(S, S.mapId)
+  local z = math.max(0.25, S.mapZoom or 2)
+  local step = (48 * (Kit.scale or 1)) / z
+
+  -- Trackpad horizontal / Ctrl+wheel → pan X; Shift+wheel → pan Y.
+  local panX, panY = 0, 0
+  if dx ~= 0 then panX = panX - dx * step end
+  if shift and dy ~= 0 then
+    panY = panY - dy * step
+    dy = 0
+  elseif ctrl and dy ~= 0 then
+    panX = panX - dy * step
+    dy = 0
+  end
+  if panX ~= 0 or panY ~= 0 then
+    S.mapCamX = (S.mapCamX or 0) + panX
+    S.mapCamY = (S.mapCamY or 0) + panY
+    if map then clampMapCam(S, map) end
+    return true
+  end
+  if dy ~= 0 then
     S.mapZoom = clampZoom((S.mapZoom or 2) + (dy > 0 and 0.25 or -0.25))
+    if map then clampMapCam(S, map) end
     return true
   end
   return false
