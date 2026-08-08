@@ -2321,6 +2321,43 @@ local function drawObjectSprites(S, mapDef)
   end
 end
 
+-- Screen-space (x,y) labels for objects / warps / signs (drawn after map zoom pop).
+local function drawMapCoordLabels(S, mapDef, vx, vy, vw, vh)
+  local z = S.mapZoom or 2
+  local camX, camY = S.mapCamX or 0, S.mapCamY or 0
+  local s = Kit.scale
+  local function inView(sx, sy)
+    return sx > vx - 40 * s and sy > vy - 20 * s
+      and sx < vx + vw + 8 * s and sy < vy + vh + 8 * s
+  end
+  local function labelAt(cx, cy, text, col)
+    local sx = vx + ((cx or 0) * CELL - camX) * z
+    local sy = vy + ((cy or 0) * CELL - camY) * z - 11 * s
+    if not inView(sx, sy) then return end
+    Kit.text("micro", text, sx, sy, col or PAL.heading)
+  end
+  for i, obj in ipairs(mapDef.objects or {}) do
+    if not obj.hidden then
+      local selected = S.mapObjectIndex == i and S.mapSection == "objects"
+      labelAt(obj.x, obj.y,
+        string.format("%d,%d", obj.x or 0, obj.y or 0),
+        selected and PAL.yellow or PAL.heading)
+    end
+  end
+  for i, w in ipairs(mapDef.warps or {}) do
+    local selected = S.mapWarpIndex == i and S.mapSection == "warps"
+    labelAt(w.x, w.y,
+      string.format("%d,%d", w.x or 0, w.y or 0),
+      selected and PAL.blue or PAL.muted)
+  end
+  for i, sign in ipairs(mapDef.signs or {}) do
+    local selected = S.mapSignIndex == i and S.mapSection == "signs"
+    labelAt(sign.x, sign.y,
+      string.format("%d,%d", sign.x or 0, sign.y or 0),
+      selected and PAL.yellow or PAL.muted)
+  end
+end
+
 local function drawMarkerOverlays(S, mapDef)
   local camX, camY = S.mapCamX or 0, S.mapCamY or 0
   local function cellRect(cx, cy)
@@ -2512,6 +2549,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     drawMarkerOverlays(S, mapDef)
     drawSelectionOverlay(S, mapDef)
     love.graphics.pop()
+    drawMapCoordLabels(S, mapDef, vx, vy, vw, vh)
     love.graphics.setScissor()
   end
 
@@ -2535,19 +2573,31 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     and not Kit.blockClicks
     and (over or (S._mapDrag and S._mapDrag.pan))
 
-  local function mouseBlock()
+  local function mouseWorld()
     local z = S.mapZoom or 2
     local wx = (Kit.mouseX - vx) / z + (S.mapCamX or 0)
     local wy = (Kit.mouseY - vy) / z + (S.mapCamY or 0)
-    local bx = math.floor(wx / BLOCK_PX)
-    local by = math.floor(wy / BLOCK_PX)
-    return bx, by
+    return wx, wy
   end
 
-  -- Track hover for Ctrl+V paste destination.
+  local function mouseBlock()
+    local wx, wy = mouseWorld()
+    return math.floor(wx / BLOCK_PX), math.floor(wy / BLOCK_PX)
+  end
+
+  local function mouseCell()
+    local wx, wy = mouseWorld()
+    return math.floor(wx / CELL), math.floor(wy / CELL)
+  end
+
+  -- Track hover for Ctrl+V paste destination + coord readout.
   if over then
     local hbx, hby = mouseBlock()
+    local hcx, hcy = mouseCell()
     S._mapHoverBx, S._mapHoverBy = hbx, hby
+    S._mapHoverCx, S._mapHoverCy = hcx, hcy
+  else
+    S._mapHoverCx, S._mapHoverCy = nil, nil
   end
 
   if over and rmb and not S._mapRmbWasDown and not Kit.blockClicks
@@ -2720,27 +2770,45 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   end
   local hint
   local ts = tostring(mapDef.tileset or "?")
+  local coord = ""
+  if S._mapHoverCx ~= nil and S._mapHoverCy ~= nil then
+    local cx, cy = S._mapHoverCx, S._mapHoverCy
+    local bx, by = S._mapHoverBx, S._mapHoverBy
+    local blk = nil
+    if bx and by and bx >= 0 and by >= 0
+        and bx < (mapDef.width or 0) and by < (mapDef.height or 0)
+        and type(mapDef.blocks) == "table" then
+      blk = mapDef.blocks[by * mapDef.width + bx + 1]
+    end
+    if blk ~= nil then
+      coord = string.format("  cell %d,%d  block %d,%d  id=%s",
+        cx, cy, bx, by, tostring(blk))
+    else
+      coord = string.format("  cell %d,%d  block %d,%d",
+        cx, cy, bx or 0, by or 0)
+    end
+  end
   if S.warpDestPick then
     hint = string.format(
-      "%.1fx  %s  click=set warp dest  Esc=cancel  MMB/Space=pan",
-      S.mapZoom, ts)
+      "%.1fx  %s%s  click=set warp dest  Esc=cancel  MMB/Space=pan",
+      S.mapZoom, ts, coord)
   elseif tool == "collision" then
     hint = string.format(
-      "%.1fx  %s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge (not wild)",
-      S.mapZoom, ts, tostring(S.mapCollisionMode or "solid"),
+      "%.1fx  %s%s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge",
+      S.mapZoom, ts, coord, tostring(S.mapCollisionMode or "solid"),
       (S.mapCollisionMode == "ledge"
         and (" dir=" .. tostring(S.mapLedgeDir or "down")) or ""))
   elseif brush then
     hint = string.format(
-      "%.1fx  %s  blk=%s  drag=paint  RMB=copy Shift+RMB=paste  MMB/Space=pan",
-      S.mapZoom, ts, tostring(S.paintBlock or 1))
+      "%.1fx  %s%s  blk=%s  drag=paint  RMB=copy Shift+RMB=paste",
+      S.mapZoom, ts, coord, tostring(S.paintBlock or 1))
   elseif selecting then
     hint = string.format(
-      "%.1fx  %s  drag=marquee  Ctrl+C/V copy/paste  Apply shift  MMB/Space=pan",
-      S.mapZoom, ts)
+      "%.1fx  %s%s  drag=marquee  Ctrl+C/V  Apply shift",
+      S.mapZoom, ts, coord)
   else
-    hint = string.format("%.1fx  %s  drag=pan  hold WASD  click=%s",
-      S.mapZoom, ts, tool)
+    hint = string.format("%.1fx  %s%s  drag=pan  WASD  click=%s",
+      S.mapZoom, ts, coord, tool)
   end
   Kit.text("micro", hint, vx + 6 * s, vy + vh - 16 * s, PAL.faint)
 end
