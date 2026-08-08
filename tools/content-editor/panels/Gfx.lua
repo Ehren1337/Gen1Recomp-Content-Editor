@@ -250,7 +250,8 @@ function Gfx.draw(S, x, y, w, h, App)
   if mode == "palettes" then
     local proj = S.project.palettes
     local data = (S.data and S.data.palettes and S.data.palettes.palettes) or {}
-    local ids = RegList.mergeIds(proj, data)
+    -- Include GBC pack names when ROM-cache palettes are absent/optional.
+    local ids = Preview.paletteIds(S)
     local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, modeY, w, h - (modeY - y),
       "PALETTES", ids, {
         queryKey = "gfxQuery", offsetKey = "gfxListOffset", selKey = "paletteId",
@@ -260,7 +261,11 @@ function Gfx.draw(S, x, y, w, h, App)
         onFooter = function()
           local nid = "MOD_PAL"
           local n = 1
-          while proj[nid] or data[nid] do n = n + 1; nid = "MOD_PAL_" .. n end
+          local known = {}
+          for _, pid in ipairs(Preview.paletteIds(S)) do known[pid] = true end
+          while proj[nid] or data[nid] or known[nid] do
+            n = n + 1; nid = "MOD_PAL_" .. n
+          end
           proj[nid] = {
             colors = {
               { 248, 248, 248 }, { 168, 168, 168 },
@@ -276,6 +281,11 @@ function Gfx.draw(S, x, y, w, h, App)
     local id = S.paletteId
     local owned = id and proj[id] ~= nil
     local rec = owned and proj[id] or data[id]
+    if not rec and id then
+      -- GBC/Yellow pack-only entry: synthesize a read-only view until edited.
+      local cols = Preview.paletteColors(S, id)
+      if cols then rec = { colors = cols } end
+    end
     if not id or not rec then
       Kit.emptyBox(formX, listY, formW, listH, "No palettes")
       return

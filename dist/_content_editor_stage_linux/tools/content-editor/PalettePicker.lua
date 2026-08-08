@@ -1,4 +1,5 @@
--- Shared SGB palette picker modal for Maps / Pokemon / Trainers / Items / GFX.
+-- Shared palette picker modal for Maps / Pokemon / Trainers / Items / GFX.
+-- Lists ROM-cache + GBC pack names (see Preview.paletteIds).
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -62,7 +63,7 @@ function PalettePicker.row(S, opts)
   if Kit.button(x, y, btnW, h,
       Kit.ellipsize("small", label, btnW - 8 * s), {
         kind = "accent",
-        tooltip = opts.tooltip or "Pick an SGB palette",
+        tooltip = opts.tooltip or "Pick a palette (GBC pack colors)",
       }) then
     PalettePicker.open(S, {
       current = cur ~= "" and cur or nil,

@@ -150,7 +150,10 @@ local function normalizeColors(rec)
   return out
 end
 
--- Sorted palette ids (vanilla order first, then project extras).
+-- Sorted palette ids (ROM/cache order, then GBC pack, then project extras).
+-- `data.palettes` is optional — without a ROM import the Maps / GFX pickers
+-- would list nothing even though data/palettes_gbc.lua ships 200+ names
+-- that Preview.paletteColors already resolves.
 function Preview.paletteIds(S)
   local ids, seen = {}, {}
   local function add(id)
@@ -159,18 +162,29 @@ function Preview.paletteIds(S)
       ids[#ids + 1] = id
     end
   end
-  local order = S and S.data and S.data.palettes and S.data.palettes.order
-  if type(order) == "table" then
-    for _, id in ipairs(order) do add(id) end
-  end
-  local dataPals = S and S.data and S.data.palettes and S.data.palettes.palettes
-  if type(dataPals) == "table" then
-    local extra = {}
-    for id in pairs(dataPals) do
-      if not seen[id] then extra[#extra + 1] = id end
+  local function addTable(order, pals)
+    if type(order) == "table" then
+      for _, id in ipairs(order) do add(id) end
     end
-    table.sort(extra)
-    for _, id in ipairs(extra) do add(id) end
+    if type(pals) == "table" then
+      local extra = {}
+      for id in pairs(pals) do
+        if not seen[id] then extra[#extra + 1] = id end
+      end
+      table.sort(extra)
+      for _, id in ipairs(extra) do add(id) end
+    end
+  end
+  local data = S and S.data and S.data.palettes
+  addTable(data and data.order, data and data.palettes)
+  local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  if ok and PaletteFX and PaletteFX.gbcPack then
+    local pack = PaletteFX.gbcPack()
+    if pack then addTable(pack.order, pack.palettes) end
+  end
+  if ok and PaletteFX and PaletteFX.yellowPack then
+    local pack = PaletteFX.yellowPack()
+    if pack then addTable(pack.order, pack.palettes) end
   end
   if S and S.project and S.project.palettes then
     local extra = {}

@@ -2677,7 +2677,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         current = mapDef.palette,
         allowClear = true,
         clearLabel = "(inherit FieldDefaults)",
-        title = "MAP SGB PALETTE",
+        title = "MAP PALETTE (GBC)",
         onPick = function(id)
           local owned = ensureOwned(S, mid)
           if owned then
@@ -3401,25 +3401,25 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       Preview.invalidate()
       App.markDirty()
       S.status = newOn
-        and "TrueColor ON — raw tileset PNG (SGB palette ignored)"
-        or "TrueColor OFF — SGB palette remap"
+        and "TrueColor ON — raw tileset PNG (map palette ignored)"
+        or "TrueColor OFF — GBC/SGB palette remap"
     end
   end) then return py end
   do
     local on = mapUsesTrueColor(S, map)
     Kit.text("micro",
       on and "full-color tileset — skips 4-shade palette remap"
-        or "OFF = grayscale tiles remapped through SGB palette",
+        or "OFF = grayscale tiles remapped through GBC palette colors",
       px + 10 * s, py, PAL.faint)
     py = py + 14 * s
   end
 
   if mapUsesTrueColor(S, map) then
-    if prow("SGB palette", function(fx, fy, fw, fh_)
+    if prow("Map palette", function(fx, fy, fw, fh_)
       Kit.text("small", "(ignored — TrueColor)", fx, fy + 6 * s, PAL.faint)
     end) then return py end
   else
-    if prow("SGB palette", function(fx, fy, fw, fh_)
+    if prow("Map palette", function(fx, fy, fw, fh_)
       local mid = map.id or S.mapId
       PalettePicker.row(S, {
         x = fx, y = fy, w = fw, h = fh_,
@@ -3428,8 +3428,8 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
         emptyLabel = "(inherit)",
         clearLabel = "(inherit FieldDefaults)",
         allowClear = true,
-        title = "MAP SGB PALETTE",
-        tooltip = "Choose this map's SGB background palette",
+        title = "MAP PALETTE (GBC)",
+        tooltip = "Choose this map's background palette (GBC pack colors)",
         onPick = function(id)
           map = mutate()
           map.palette = id
