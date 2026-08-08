@@ -899,6 +899,16 @@ local function spriteDef(S, spriteId)
   return S.data and S.data.sprites and S.data.sprites[spriteId]
 end
 
+-- nil = draw raw (trueColor); otherwise SGB palette id for Preview.draw.
+local function spritePreviewPal(S, def)
+  if not def or def.trueColor then return nil end
+  local src = def.paletteSource
+  if type(src) == "string" and src ~= "" and Preview.paletteColors(S, src) then
+    return src
+  end
+  return "MEWMON"
+end
+
 local function spriteIds(S, customOnly)
   local proj = S.project and S.project.sprites
   if customOnly then
@@ -2278,7 +2288,8 @@ local function drawObjectSprites(S, mapDef)
         if not ok then
           local def = spriteDef(S, obj.sprite)
           if def and def.image then
-            Preview.draw(S, def.image, px - camX, py - camY - 4, CELL, CELL)
+            Preview.draw(S, def.image, px - camX, py - camY - 4, CELL, CELL,
+              spritePreviewPal(S, def))
           end
         end
       else
@@ -3851,7 +3862,8 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
   local def = spriteDef(S, obj.sprite)
   if py + 56 * s < listBottom then
     if def and def.image then
-      Preview.draw(S, def.image, px + 10 * s, py, 48 * s, 48 * s)
+      Preview.draw(S, def.image, px + 10 * s, py, 48 * s, 48 * s,
+        spritePreviewPal(S, def))
     else
       Theme.col(PAL.rowBg, 1)
       love.graphics.rectangle("fill", px + 10 * s, py, 48 * s, 48 * s, 6 * s, 6 * s)
@@ -3866,7 +3878,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
   end
 
   -- Inline edit for project-owned (custom) sprites
-  if SpriteUtil.isOwned(S, obj.sprite) and py + fh * 3 <= listBottom then
+  if SpriteUtil.isOwned(S, obj.sprite) and py + fh * 4 <= listBottom then
     local rec = S.project.sprites[obj.sprite]
     Kit.text("micro", "Custom sprite", px + 10 * s, py, PAL.caption)
     py = py + 14 * s
@@ -3881,6 +3893,8 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         if not e then return end
         App.importToMod(picked, nil, function(rel)
           e.image = rel
+          -- Full-color imports usually need TrueColor (skip SGB remap).
+          e.trueColor = true
           spriteCache[sid] = nil
           Preview.invalidate()
           App.markDirty()
@@ -3907,6 +3921,27 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       if not rec.walker then rec.walker = nil end
       spriteCache[obj.sprite] = nil
       App.markDirty()
+    end
+    py = py + fh + 6 * s
+    Kit.text("micro", "TrueColor", px + 10 * s, py + 6 * s, PAL.caption)
+    do
+      local on = rec.trueColor and true or false
+      if Kit.chip(px + 90 * s, py, 80 * s, fh, on and "YES" or "NO", on, PAL.yellow,
+          nil, "YES = raw PNG colors (skip SGB palette remap)") then
+        rec.trueColor = (not on) or nil
+        if not rec.trueColor then rec.trueColor = nil end
+        spriteCache[obj.sprite] = nil
+        Preview.invalidate()
+        App.markDirty()
+      end
+    end
+    if Kit.button(px + 180 * s, py, 90 * s, fh, "GFX tab", {
+        kind = "ghost", font = "small",
+        tooltip = "Open this sprite on the GFX tab",
+      }) then
+      S.tab = "gfx"
+      S.gfxMode = "sprites"
+      S.spriteEditId = obj.sprite
     end
     py = py + fh + 8 * s
   end
@@ -3967,7 +4002,8 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         local bx = px + 10 * s + c * (thumb + gap)
         local sdef = spriteDef(S, id)
         if sdef and sdef.image then
-          Preview.draw(S, sdef.image, bx, py, thumb, thumb)
+          Preview.draw(S, sdef.image, bx, py, thumb, thumb,
+            spritePreviewPal(S, sdef))
         else
           Theme.col(PAL.rowBg, 1)
           love.graphics.rectangle("fill", bx, py, thumb, thumb, 3, 3)

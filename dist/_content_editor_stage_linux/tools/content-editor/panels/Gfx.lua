@@ -439,6 +439,10 @@ function Gfx.draw(S, x, y, w, h, App)
             end
             App.importToMod(picked, nil, function(rel)
               e.image = rel
+              -- Full-color PNG imports usually need TrueColor.
+              e.trueColor = true
+              Preview.invalidate()
+              App.markDirty()
             end)
           end)
       end
@@ -458,15 +462,22 @@ function Gfx.draw(S, x, y, w, h, App)
     end)
     row("TrueColor", function(fx, fy_, fw, fh_)
       local on = rec.trueColor and true or false
-      if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+      if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow,
+          nil, "YES = raw PNG colors (skip SGB palette remap)") then
         local e = ensure()
         e.trueColor = not on
         if not e.trueColor then e.trueColor = nil end
         Preview.invalidate()
         App.markDirty()
       end
+      Kit.text("micro", on and "raw PNG" or "SGB remap",
+        fx + 90 * s, fy_ + 8 * s, PAL.faint)
     end)
     row("Palette src", function(fx, fy_, fw, fh_)
+      if rec.trueColor then
+        Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+        return
+      end
       local cur = rec.paletteSource or ""
       local v = RegList.field(App, "spr_ps", fx, fy_, math.max(40 * s, fw - 88 * s), fh_, cur, "optional")
       if v ~= cur then
