@@ -11,6 +11,7 @@ local PalettePicker = require("PalettePicker")
 local PaletteEdit = require("PaletteEdit")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
+local Autocomplete = require("Autocomplete")
 local PAL = Theme.PAL
 
 local Pokemon = {}
@@ -151,7 +152,11 @@ local function defaultMon(id)
   }
 end
 
-local function field(S, App, id, x, y, w, h, value, ph)
+-- Optional 9th arg `suggest`: id list or function() -> list for autocomplete.
+local function field(S, App, id, x, y, w, h, value, ph, suggest)
+  if suggest then
+    return RegList.suggestField(App, S, id, x, y, w, h, value, ph, suggest)
+  end
   local v = Kit.textfield(id, x, y, w, h, value, ph)
   if v ~= tostring(value or "") then App.markDirty() end
   return v
@@ -627,7 +632,8 @@ local function drawLearnset(S, mon, mutate, App, formX, fy, formW, fh, s)
     local mv = row.move or "TACKLE"
     local vLvl = numField(S, App, "pk_ls_l_" .. i, formX, fy, 60 * s, fh, lvl)
     local vMv = field(S, App, "pk_ls_m_" .. i, formX + 70 * s, fy,
-      formW - 160 * s, fh, mv, "MOVE")
+      formW - 160 * s, fh, mv, "MOVE",
+      function() return Autocomplete.moveIds(S) end)
     vMv = vMv:upper():gsub("%s+", "_")
     if vLvl ~= lvl or vMv ~= mv then
       mon = mutate()

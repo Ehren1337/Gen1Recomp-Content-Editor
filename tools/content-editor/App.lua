@@ -37,6 +37,7 @@ local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
 local SpeciesPicker = require("SpeciesPicker")
 local ItemPicker = require("ItemPicker")
+local Autocomplete = require("Autocomplete")
 local ColorWheel = require("ColorWheel")
 local PaletteEdit = require("PaletteEdit")
 local RegList = require("RegList")
@@ -991,6 +992,7 @@ function App.draw()
   Kit.beginFrame(mx, my, mouseClicked, wheelY)
   mouseClicked = false
   clickX, clickY = nil, nil
+  Autocomplete.beginFrame(S)
 
   Theme.field(W, H)
 
@@ -1121,6 +1123,13 @@ function App.draw()
   end
   History.endFrame(S)
 
+  -- Inline autocomplete over panel fields (before status / full-screen modals).
+  if not (ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
+      or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker) then
+    Autocomplete.draw(S)
+  end
+
   -- status bar
   local statusH = 38 * s
   local statusY = H - statusH
@@ -1195,6 +1204,8 @@ function App.keypressed(key)
   end
   if PaletteEdit.isOpen(S) and PaletteEdit.keypressed(S, key) then return end
   if ColorWheel.isOpen(S) and ColorWheel.keypressed(S, key) then return end
+  -- Autocomplete claims Up/Down/Enter/Tab/Esc before the textfield.
+  if Autocomplete.keypressed(S, key) then return end
   if Kit.keypressed(key) then return end
   if key == "escape" then
     if PalettePicker.keypressed(S, key) then return end
@@ -1216,6 +1227,7 @@ function App.keypressed(key)
   if key == "s" and ctrl then
     return App.save()
   end
+  -- Tab cycles tabs only when autocomplete did not claim it.
   if key == "]" or key == "tab" then return cycleTab(1) end
   if key == "[" then return cycleTab(-1) end
   -- Modals own keyboard (except Kit textfields / Esc above).

@@ -26,6 +26,32 @@ function RegList.field(App, id, x, y, w, h, value, ph)
   return v
 end
 
+-- Text field with inline autocomplete dropdown (see Autocomplete.lua).
+-- idsOrFn: string array, or function() -> array of suggestion ids.
+function RegList.suggestField(App, S, id, x, y, w, h, value, ph, idsOrFn)
+  local Autocomplete = require("Autocomplete")
+  local picked = Autocomplete.takePick(S, id)
+  if picked ~= nil then
+    value = picked
+    App.markDirty()
+  end
+  local v = Kit.textfield(id, x, y, w, h, value, ph)
+  if v ~= tostring(value or "") then App.markDirty() end
+  local ids = idsOrFn
+  if type(idsOrFn) == "function" then
+    ids = idsOrFn()
+  end
+  Autocomplete.offer(S, {
+    fieldId = id,
+    x = x,
+    y = y + h + 2 * (Kit.scale or 1),
+    w = w,
+    query = v,
+    ids = ids,
+  })
+  return v
+end
+
 function RegList.num(App, id, x, y, w, h, value)
   local v = RegList.field(App, id, x, y, w, h, tostring(value or 0), "0")
   return tonumber(v) or value or 0

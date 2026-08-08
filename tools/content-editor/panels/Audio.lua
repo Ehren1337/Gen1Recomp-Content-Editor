@@ -6,6 +6,7 @@ local State = require("State")
 local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
+local Autocomplete = require("Autocomplete")
 local ModIO = require("ModIO")
 local PAL = Theme.PAL
 
@@ -438,7 +439,8 @@ function Audio.draw(S, x, y, w, h, App)
     end)
     row("Or type", function(fx, fy_, fw, fh_)
       local cur = tostring((owned and proj[id]) or rec or "")
-      local v = RegList.field(App, "au_ms", fx, fy_, fw, fh_, cur, "Music_...")
+      local v = RegList.suggestField(App, S, "au_ms", fx, fy_, fw, fh_, cur,
+        "Music_...", function() return Autocomplete.songIds(S) end)
       if v ~= cur then
         proj[id] = v
         owned = true

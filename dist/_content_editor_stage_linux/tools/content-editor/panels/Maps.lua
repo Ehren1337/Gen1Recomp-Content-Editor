@@ -15,12 +15,14 @@ local FormPane = require("FormPane")
 local SpriteUtil = require("SpriteUtil")
 local EncounterEdit = require("EncounterEdit")
 local RegList = require("RegList")
+local Autocomplete = require("Autocomplete")
 local MapLoader = require("src.world.MapLoader")
 local Map = require("src.world.Map")
 local SpriteRenderer = require("src.render.SpriteRenderer")
 local PAL = Theme.PAL
 
 local Maps = {}
+local acS -- session for RegList.suggestField (set in Maps.draw)
 
 local CELL = 16  -- walk cell; a block is 2x2 cells
 local BLOCK_PX = 32  -- one Gen1 block = 4x4 of 8x8 tiles
@@ -811,7 +813,11 @@ local function defaultMap(id, index, tileset)
   }
 end
 
-local function field(App, id, x, y, w, h, value, ph)
+-- Optional 9th arg `suggest`: id list or function() -> list for autocomplete.
+local function field(App, id, x, y, w, h, value, ph, suggest)
+  if acS and suggest then
+    return RegList.suggestField(App, acS, id, x, y, w, h, value, ph, suggest)
+  end
   local v = Kit.textfield(id, x, y, w, h, value, ph)
   if v ~= tostring(value or "") then App.markDirty() end
   return v
@@ -3839,7 +3845,8 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   end) then return py end
   if prow("Music id", function(fx, fy, fw, fh_)
     local cur = select(1, mapSongFor(S, map.id))
-    local v = field(App, "mp_music", fx, fy, fw, fh_, cur, "Music_...")
+    local v = field(App, "mp_music", fx, fy, fw, fh_, cur, "Music_...",
+      function() return Autocomplete.songIds(S) end)
     if v ~= cur then
       setMapSong(S, map.id, (v ~= "" and v) or nil, App)
     end
@@ -3857,7 +3864,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     local cur = map.connections[dir]
     local val = cur and cur.map or ""
     local v = field(App, "mp_c_" .. dir, px + 10 * s, py, propW - 20 * s, fh,
-      val, dir)
+      val, dir, function() return Autocomplete.mapIds(S) end)
     local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
     local curMap = cur and cur.map or ""
     local curOff = cur and (cur.offset or 0) or 0
@@ -4444,7 +4451,9 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     end
   end)
   row("Text id", function(fx, fy, fw, fh_)
-    local v = field(App, "ob_text", fx, fy, fw - 70 * s, fh_, obj.text or "", "TEXT_")
+    local mid = map.id or S.mapId
+    local v = field(App, "ob_text", fx, fy, fw - 70 * s, fh_, obj.text or "", "TEXT_",
+      function() return Autocomplete.textIds(S, mid) end)
     if v ~= (obj.text or "") then map = mutate(); map.objects[i].text = v end
     if obj.text and obj.text ~= ""
         and Kit.button(fx + fw - 64 * s, fy, 64 * s, fh_, "Event",
@@ -4677,7 +4686,8 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
 
   if obj.trainerClass and obj.trainerClass ~= "" then
     row("Class (OPP_*)", function(fx, fy, fw, fh_)
-      local v = field(App, "ob_tc", fx, fy, fw, fh_, obj.trainerClass or "", "OPP_")
+      local v = field(App, "ob_tc", fx, fy, fw, fh_, obj.trainerClass or "", "OPP_",
+        function() return Autocomplete.trainerIds(S) end)
       v = v ~= "" and v:upper():gsub("%s+", "_") or nil
       if v ~= obj.trainerClass then
         map = mutate()
@@ -4867,7 +4877,9 @@ local function drawSigns(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end)
   row("Text id", function(fx, fy, fw, fh_)
-    local v = field(App, "sg_text", fx, fy, fw, fh_, sign.text or "", "TEXT_")
+    local mid = map.id or S.mapId
+    local v = field(App, "sg_text", fx, fy, fw, fh_, sign.text or "", "TEXT_",
+      function() return Autocomplete.textIds(S, mid) end)
     if v ~= (sign.text or "") then map = mutate(); map.signs[i].text = v end
   end)
   if py + 32 * s <= listBottom then
@@ -5083,6 +5095,7 @@ local function drawEncounters(S, map, mutate, App, px, py, propW, listBottom, fh
 end
 
 function Maps.draw(S, x, y, w, h, App)
+  acS = S
   local s = Kit.scale
   if not S.project then
     Kit.emptyBox(x, y, w, h, "Open a mod on the Project tab first")
@@ -5523,7 +5536,8 @@ function Maps.draw(S, x, y, w, h, App)
     Kit.text("micro", "Class (OPP_*)", bx, barY + 2 * s, PAL.caption)
     Kit.text("micro", "Party", bx + 170 * s, barY + 2 * s, PAL.caption)
     local cls = field(App, "mp_tr_cls", bx, barY + 14 * s, 160 * s, 22 * s,
-      S.trainerId or "OPP_YOUNGSTER", "OPP_YOUNGSTER")
+      S.trainerId or "OPP_YOUNGSTER", "OPP_YOUNGSTER",
+      function() return Autocomplete.trainerIds(S) end)
       :upper():gsub("%s+", "_")
     if cls ~= "" then S.trainerId = cls end
     local pty = tonumber(field(App, "mp_tr_pty", bx + 170 * s, barY + 14 * s,

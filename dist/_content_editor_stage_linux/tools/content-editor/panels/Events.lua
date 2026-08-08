@@ -11,9 +11,11 @@ local TalkIndex = require("TalkIndex")
 local ModWriter = require("ModWriter")
 local RegList = require("RegList")
 local SpeciesPicker = require("SpeciesPicker")
+local Autocomplete = require("Autocomplete")
 local PAL = Theme.PAL
 
 local Events = {}
+local acS -- session for RegList.suggestField (set in Events.draw)
 
 local STEP_KINDS = {
   { id = "show_text", label = "Show text" },
@@ -244,7 +246,11 @@ local function sourceColor(src)
   return PAL.faint
 end
 
-local function field(App, id, x, y, w, h, value, ph)
+-- Optional 9th arg `suggest`: id list or function() -> list for autocomplete.
+local function field(App, id, x, y, w, h, value, ph, suggest)
+  if acS and suggest then
+    return RegList.suggestField(App, acS, id, x, y, w, h, value, ph, suggest)
+  end
   local v = Kit.textfield(id, x, y, w, h, value, ph)
   if v ~= tostring(value or "") then App.markDirty() end
   return v
@@ -409,7 +415,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       or kind == "check_flag_skip" or kind == "check_flag_missing" then
     local y = row()
     step.flag = field(App, "ev_f_" .. i, fx, y, 160 * s, fh,
-      step.flag or "STARTED", "short name or EVENT_*")
+      step.flag or "STARTED", "short name or EVENT_*",
+      function() return Autocomplete.flagIds(S) end)
     -- Do not write eventFlags here: each keystroke would tombstone partials
     -- (M, MA, MAP…). Save / flag tester rebuild from finished step.flag.
     local full = State.modFlag(S.project, step.flag)
@@ -418,7 +425,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       or kind == "check_item_skip" or kind == "check_item_missing" then
     local y = row()
     step.item = field(App, "ev_i_" .. i, fx, y, 140 * s, fh,
-      step.item or "POTION", "POTION"):upper():gsub("%s+", "_")
+      step.item or "POTION", "POTION",
+      function() return Autocomplete.itemIds(S) end):upper():gsub("%s+", "_")
     if kind == "give_item" or kind == "take_item" then
       step.count = tonumber(field(App, "ev_c_" .. i, fx + 150 * s, y, 50 * s, fh,
         tostring(step.count or 1), "1")) or 1
@@ -452,7 +460,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
     if kind == "give_starter" then
       local y3 = row()
       step.choseFlag = field(App, "ev_cf_" .. i, fx, y3, 160 * s, fh,
-        step.choseFlag or "EVENT_CHOSE_BULBASAUR", "EVENT_CHOSE_*")
+        step.choseFlag or "EVENT_CHOSE_BULBASAUR", "EVENT_CHOSE_*",
+        function() return Autocomplete.flagIds(S) end)
       step.rivalStarter = tonumber(field(App, "ev_rs_" .. i,
         fx + 170 * s, y3, 40 * s, fh,
         tostring(step.rivalStarter or 1), "1")) or 1
@@ -466,7 +475,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.after = field(App, "ev_oa_" .. i, fx, y4, fw - 140 * s, fh,
         step.after or "I already gave you one.", "after")
       step.flag = field(App, "ev_of_" .. i, fx + fw - 130 * s, y4, 120 * s, fh,
-        step.flag or "GOT_MON", "GOT_MON")
+        step.flag or "GOT_MON", "GOT_MON",
+        function() return Autocomplete.flagIds(S) end)
     end
   elseif kind == "oneshot_gift" then
     local y = row()
@@ -474,11 +484,13 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.text or "Here, take this!", "intro")
     local y2 = row()
     step.item = field(App, "ev_gi_" .. i, fx, y2, 120 * s, fh,
-      step.item or "POTION", "POTION"):upper():gsub("%s+", "_")
+      step.item or "POTION", "POTION",
+      function() return Autocomplete.itemIds(S) end):upper():gsub("%s+", "_")
     step.count = tonumber(field(App, "ev_gc_" .. i, fx + 130 * s, y2, 40 * s, fh,
       tostring(step.count or 1), "1")) or 1
     step.flag = field(App, "ev_gf_" .. i, fx + 180 * s, y2, 100 * s, fh,
-      step.flag or "DONE", "DONE")
+      step.flag or "DONE", "DONE",
+      function() return Autocomplete.flagIds(S) end)
     local y3 = row()
     step.after = field(App, "ev_ga_" .. i, fx, y3, fw, fh,
       step.after or "I already gave you one.", "after text")
@@ -489,7 +501,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
   elseif kind == "warp" then
     local y = row()
     step.map = field(App, "ev_wm_" .. i, fx, y, 140 * s, fh,
-      step.map or "PALLET_TOWN", "MAP"):upper():gsub("%s+", "_")
+      step.map or "PALLET_TOWN", "MAP",
+      function() return Autocomplete.mapIds(S) end):upper():gsub("%s+", "_")
     step.x = tonumber(field(App, "ev_wx_" .. i, fx + 150 * s, y, 40 * s, fh,
       tostring(step.x or 0), "0")) or 0
     step.y = tonumber(field(App, "ev_wy_" .. i, fx + 200 * s, y, 40 * s, fh,
@@ -499,7 +512,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
   elseif kind == "trainer_battle" or kind == "oneshot_trainer" then
     local y = row()
     step.trainer = field(App, "ev_tr_" .. i, fx, y, 160 * s, fh,
-      step.trainer or "OPP_BUG_CATCHER", "OPP_*"):upper():gsub("%s+", "_")
+      step.trainer or "OPP_BUG_CATCHER", "OPP_*",
+      function() return Autocomplete.trainerIds(S) end):upper():gsub("%s+", "_")
     step.party = tonumber(field(App, "ev_tp_" .. i, fx + 170 * s, y, 40 * s, fh,
       tostring(step.party or 1), "1")) or 1
     if kind == "oneshot_trainer" then
@@ -510,7 +524,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.won = field(App, "ev_tw_" .. i, fx, y3, fw - 140 * s, fh,
         step.won or "I lost...", "on win")
       step.flag = field(App, "ev_tf_" .. i, fx + fw - 130 * s, y3, 120 * s, fh,
-        step.flag or "BEAT_TRAINER", "BEAT_*")
+        step.flag or "BEAT_TRAINER", "BEAT_*",
+        function() return Autocomplete.flagIds(S) end)
       local y4 = row()
       step.after = field(App, "ev_ta_" .. i, fx, y4, fw, fh,
         step.after or "You're strong.", "after defeated")
@@ -537,7 +552,8 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       tostring(step.index or 1), "1")) or 1
     Kit.text("micro", "trade #", fx + 56 * s, y + 8 * s, PAL.faint)
     step.flag = field(App, "ev_trdf_" .. i, fx + 110 * s, y, 140 * s, fh,
-      step.flag or "TRADED", "TRADED")
+      step.flag or "TRADED", "TRADED",
+      function() return Autocomplete.flagIds(S) end)
     local full = State.modFlag(S.project, step.flag)
     Kit.text("micro", full, fx + 260 * s, y + 8 * s, PAL.faint)
   elseif kind == "raw" then
@@ -1586,6 +1602,7 @@ local function drawHooks(S, x, y, w, h, App)
 end
 
 function Events.draw(S, x, y, w, h, App)
+  acS = S
   local s = Kit.scale
   if not S.project then
     Kit.emptyBox(x, y, w, h, "Open a mod on the Project tab first")

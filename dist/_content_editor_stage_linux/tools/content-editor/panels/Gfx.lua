@@ -7,6 +7,7 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local ColorWheel = require("ColorWheel")
+local Autocomplete = require("Autocomplete")
 local ModIO = require("ModIO")
 local SpriteUtil = require("SpriteUtil")
 local MapLoader = require("src.world.MapLoader")
@@ -499,7 +500,9 @@ function Gfx.draw(S, x, y, w, h, App)
         return
       end
       local cur = rec.paletteSource or ""
-      local v = RegList.field(App, "spr_ps", fx, fy_, math.max(40 * s, fw - 88 * s), fh_, cur, "optional")
+      local v = RegList.suggestField(App, S, "spr_ps", fx, fy_,
+        math.max(40 * s, fw - 88 * s), fh_, cur, "optional",
+        function() return Autocomplete.paletteIds(S) end)
       if v ~= cur then
         local e = ensure()
         e.paletteSource = (v ~= "" and v) or nil
