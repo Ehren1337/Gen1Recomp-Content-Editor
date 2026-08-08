@@ -209,6 +209,19 @@ function State.rebuildEventFlags(project)
     for _, step in ipairs(steps or {}) do
       if step.flag then add(State.modFlag(project, step.flag)) end
       if step.choseFlag then add(State.modFlag(project, step.choseFlag)) end
+      -- Engine cmd set_flag / clear_flag / check_flag (same MOD_ qualify on Save).
+      if (step.kind == "raw" or not step.kind)
+          and type(step.note) == "string" and step.note:match("%S") then
+        local ok, ModWriter = pcall(require, "ModWriter")
+        if ok and ModWriter.parseEngineLine then
+          local row = ModWriter.parseEngineLine(step.note)
+          local verb = row and row[1]
+          if (verb == "set_flag" or verb == "clear_flag" or verb == "check_flag")
+              and type(row[2]) == "string" then
+            add(State.modFlag(project, row[2]))
+          end
+        end
+      end
     end
   end
   for _, script in pairs(project.talkScripts or {}) do

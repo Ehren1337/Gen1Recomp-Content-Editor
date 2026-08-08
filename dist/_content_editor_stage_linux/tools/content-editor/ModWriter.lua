@@ -2145,6 +2145,22 @@ function ModWriter.compileMapHooks(project)
   return byMap
 end
 
+-- Qualify set_flag / clear_flag / check_flag args the same way as the
+-- Set flag / Clear flag / If flag step kinds (MOD_<modId>_…, pass EVENT_*/MOD_*).
+function ModWriter.qualifyFlagArgs(project, row)
+  if type(row) ~= "table" then return row end
+  local verb = row[1]
+  if (verb == "set_flag" or verb == "clear_flag" or verb == "check_flag")
+      and type(row[2]) == "string" and row[2] ~= "" then
+    local State = require("State")
+    local copy = {}
+    for i, v in ipairs(row) do copy[i] = v end
+    copy[2] = State.modFlag(project, row[2])
+    return copy
+  end
+  return row
+end
+
 function ModWriter.stepsToRows(project, steps)
   local rows = {}
   local function flagName(short)
@@ -2162,7 +2178,9 @@ function ModWriter.stepsToRows(project, steps)
       if type(row) == "table" and row[1] then
         local copy = {}
         for i, v in ipairs(row) do copy[i] = v end
-        rows[#rows + 1] = copy
+        -- Same MOD_ prefix as Set flag / Clear flag tags so Engine cmd and
+        -- structured steps stay in sync for short flag names.
+        rows[#rows + 1] = ModWriter.qualifyFlagArgs(project, copy)
       end
     elseif kind == "show_image" then
       local path = step.path or step.image or ""

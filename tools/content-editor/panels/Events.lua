@@ -409,11 +409,11 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       or kind == "check_flag_skip" or kind == "check_flag_missing" then
     local y = row()
     step.flag = field(App, "ev_f_" .. i, fx, y, 160 * s, fh,
-      step.flag or "STARTED", "STARTED or EVENT_*")
+      step.flag or "STARTED", "short name or EVENT_*")
     -- Do not write eventFlags here: each keystroke would tombstone partials
     -- (M, MA, MAP…). Save / flag tester rebuild from finished step.flag.
     local full = State.modFlag(S.project, step.flag)
-    Kit.text("micro", full, fx + 170 * s, y + 8 * s, PAL.faint)
+    Kit.text("micro", "→ " .. full, fx + 170 * s, y + 8 * s, PAL.faint)
   elseif kind == "give_item" or kind == "take_item"
       or kind == "check_item_skip" or kind == "check_item_missing" then
     local y = row()
@@ -554,6 +554,18 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.note, "verb arg1 arg2 …")
     if step.note ~= prev then
       step.row = ModWriter.parseEngineLine(step.note)
+    end
+    -- Mirror Set/Clear flag: short flag names in Engine cmd get MOD_<mod>_…
+    local parsed = ModWriter.parseEngineLine(step.note)
+    local verb = parsed and parsed[1]
+    if (verb == "set_flag" or verb == "clear_flag" or verb == "check_flag")
+        and type(parsed[2]) == "string" then
+      local full = State.modFlag(S.project, parsed[2])
+      if full ~= parsed[2] then
+        local y2 = row()
+        Kit.text("micro", "→ emits " .. verb .. " " .. full,
+          fx, y2 + 8 * s, PAL.faint)
+      end
     end
   elseif kind == "label" then
     local y = row()
