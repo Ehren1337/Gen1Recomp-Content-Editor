@@ -387,7 +387,9 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       local on = step.skipOnNo ~= false
       if Kit.chip(fx, y2, 160 * s, fh, on and "Skip on NO" or "Keep on NO",
           on, PAL.yellow) then
-        step.skipOnNo = on and false or true
+        -- Do not use `on and false or true` — Lua treats false as failure
+        -- and the expression always collapses to true.
+        step.skipOnNo = not on
         App.markDirty()
       end
     end
