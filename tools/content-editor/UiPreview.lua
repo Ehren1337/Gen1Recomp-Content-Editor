@@ -1008,4 +1008,149 @@ function UiPreview.draw(S, mode, x, y, w, s)
   return y + vh + 28 * s
 end
 
+-- ---- dialog text-box preview (Dialog tab) ----
+
+local function previewSubstitute(text)
+  text = tostring(text or "")
+  text = text:gsub("{PLAYER}", "RED")
+  text = text:gsub("{RIVAL}", "BLUE")
+  return text
+end
+
+-- Live Gen1 text-box preview of dialog body (not a full GB screen).
+-- opts: page (1-based), lineStart (1-based scroll within page)
+-- Returns height consumed, info { page, pageCount, lineStart, canPrev, canNext, hasMore }.
+function UiPreview.drawTextBoxPreview(S, text, x, y, maxW, opts)
+  opts = opts or {}
+  local s = Kit.scale
+  local eng = applyTheme(S)
+  local tb = eng.textBox or THEME_DEFAULTS.textBox
+  local tw = tonumber(tb.tw) or 20
+  local th = tonumber(tb.th) or 6
+  local maxCols = tonumber(tb.maxCols) or 18
+  local boxW, boxH = tw * 8, th * 8
+
+  local substituted = previewSubstitute(text)
+  local pages = { { "" } }
+  local okPaginate, TextBox = pcall(require, "src.render.TextBox")
+  if okPaginate and TextBox.paginate then
+    local ok, result = pcall(TextBox.paginate, substituted, maxCols)
+    if ok and type(result) == "table" and #result > 0 then
+      pages = result
+    end
+  end
+
+  local pageCount = #pages
+  local page = math.max(1, math.min(pageCount, tonumber(opts.page) or 1))
+  local lines = pages[page] or { "" }
+  local maxLineStart = math.max(1, #lines - 1)
+  if #lines <= 2 then maxLineStart = 1 end
+  local lineStart = math.max(1, math.min(maxLineStart, tonumber(opts.lineStart) or 1))
+  local line1 = lines[lineStart] or ""
+  local line2 = lines[lineStart + 1] or ""
+  local hasMore = (lineStart + 1 < #lines) or (page < pageCount)
+  local canPrev = page > 1 or lineStart > 1
+  local canNext = hasMore
+
+  local scale = math.max(1, math.floor((maxW or boxW) / boxW))
+  local vw, vh = boxW * scale, boxH * scale
+  local pad = 4 * s
+  local frameW = vw + pad * 2
+  local frameH = vh + pad * 2
+
+  Theme.col(PAL.bgBot or PAL.card, 1)
+  love.graphics.rectangle("fill", x, y, frameW, frameH, 6 * s, 6 * s)
+
+  local vx, vy = x + pad, y + pad
+  Kit.pushClip(vx, vy, vw, vh)
+  love.graphics.push()
+  love.graphics.translate(vx, vy)
+  love.graphics.scale(scale, scale)
+
+  local fontOk = ensureFont(S)
+  if fontOk then
+    local Font = require("src.render.Font")
+    love.graphics.setColor(1, 1, 1, 1)
+    pcall(Font.drawBox, 0, 0, tw, th)
+    love.graphics.setColor(0, 0, 0, 1)
+    pcall(Font.draw, line1, 8, 16)
+    pcall(Font.draw, line2, 8, 32)
+    -- Blinking ▼: more text, or wait-for-A/B at end of the box (classic look).
+    local blink = 0
+    if love and love.timer and love.timer.getTime then
+      blink = math.floor(love.timer.getTime() * 2) % 2
+    elseif Kit.time then
+      blink = math.floor((Kit.time or 0) * 2) % 2
+    end
+    if blink == 0 then
+      local arrow = eng.moreArrow or THEME_DEFAULTS.moreArrow or 0xEE
+      pcall(Font.drawCode, arrow, (tw - 2) * 8, (th - 1) * 8 - 4)
+    end
+  else
+    -- No ROM font sheets: approximate the box so editing still has a preview.
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.rectangle("fill", 0, 0, boxW, boxH)
+    love.graphics.setColor(0, 0, 0, 1)
+    love.graphics.rectangle("line", 0.5, 0.5, boxW - 1, boxH - 1)
+    love.graphics.rectangle("line", 2.5, 2.5, boxW - 5, boxH - 5)
+    if love.graphics.print then
+      love.graphics.print(line1, 8, 16)
+      love.graphics.print(line2, 8, 32)
+      love.graphics.print("v", (tw - 2) * 8, (th - 1) * 8 - 4)
+    end
+  end
+
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.pop()
+  Kit.popClip()
+
+  local info = {
+    page = page,
+    pageCount = pageCount,
+    lineStart = lineStart,
+    canPrev = canPrev,
+    canNext = canNext,
+    hasMore = hasMore,
+    scale = scale,
+    frameW = frameW,
+    frameH = frameH,
+  }
+  return frameH, info
+end
+
+-- Step preview navigation within paginated dialog text.
+-- dir: -1 prev, +1 next. Returns new page, lineStart.
+function UiPreview.stepTextBoxPreview(S, text, page, lineStart, dir)
+  local eng = applyTheme(S)
+  local tb = eng.textBox or THEME_DEFAULTS.textBox
+  local maxCols = tonumber(tb.maxCols) or 18
+  local pages = { { "" } }
+  local okPaginate, TextBox = pcall(require, "src.render.TextBox")
+  if okPaginate and TextBox.paginate then
+    local ok, result = pcall(TextBox.paginate, previewSubstitute(text), maxCols)
+    if ok and type(result) == "table" and #result > 0 then pages = result end
+  end
+  page = math.max(1, math.min(#pages, tonumber(page) or 1))
+  local lines = pages[page] or { "" }
+  local maxLineStart = math.max(1, #lines <= 2 and 1 or (#lines - 1))
+  lineStart = math.max(1, math.min(maxLineStart, tonumber(lineStart) or 1))
+  dir = tonumber(dir) or 0
+  if dir > 0 then
+    if lineStart + 1 < #lines then
+      return page, lineStart + 1
+    elseif page < #pages then
+      return page + 1, 1
+    end
+  elseif dir < 0 then
+    if lineStart > 1 then
+      return page, lineStart - 1
+    elseif page > 1 then
+      local prev = pages[page - 1] or { "" }
+      local prevStart = math.max(1, #prev <= 2 and 1 or (#prev - 1))
+      return page - 1, prevStart
+    end
+  end
+  return page, lineStart
+end
+
 return UiPreview

@@ -6,6 +6,7 @@ local Theme = require("Theme")
 local State = require("State")
 local Search = require("Search")
 local RegList = require("RegList")
+local UiPreview = require("UiPreview")
 local PAL = Theme.PAL
 
 local Dialog = {}
@@ -347,24 +348,48 @@ function Dialog.draw(S, x, y, w, h, App)
     end
   end
 
-  -- multi-line preview
+  -- Gen1 text-box preview (Font border + two lines + ▼)
   local previewY = listY + 120 * s
-  local previewH = math.max(40 * s, math.min(120 * s, listH - 200 * s))
-  Theme.col(PAL.bgBot or PAL.card, 1)
-  love.graphics.rectangle("fill", ex + 12 * s, previewY, fieldW, previewH, 8 * s, 8 * s)
-  love.graphics.setColor(1, 1, 1, 1)
-  local py = previewY + 8 * s
-  for line in (body .. "\n"):gmatch("(.-)\n") do
-    if py + 14 * s > previewY + previewH - 8 * s then
-      Kit.text("micro", "...", ex + 20 * s, py, PAL.faint)
-      break
+  local previewKey = tostring(S.dialogMapId or "") .. "/"
+    .. tostring(S.dialogTextId or "") .. "\0" .. body
+  if S._dialogPreviewKey ~= previewKey then
+    S._dialogPreviewKey = previewKey
+    S.dialogPreviewPage = 1
+    S.dialogPreviewLine = 1
+  end
+  Kit.text("micro", "PREVIEW:", ex + 12 * s, previewY, PAL.caption)
+  local boxY = previewY + 16 * s
+  local frameH, pinfo = UiPreview.drawTextBoxPreview(S, body, ex + 12 * s, boxY, fieldW, {
+    page = S.dialogPreviewPage or 1,
+    lineStart = S.dialogPreviewLine or 1,
+  })
+  if pinfo then
+    S.dialogPreviewPage = pinfo.page
+    S.dialogPreviewLine = pinfo.lineStart
+  end
+  local navY = boxY + (frameH or 48 * s) + 6 * s
+  local navH = 0
+  if pinfo and (pinfo.pageCount > 1 or pinfo.canPrev or pinfo.canNext) then
+    navH = 26 * s
+    local chipW = 36 * s
+    if Kit.chip(ex + 12 * s, navY, chipW, navH - 2 * s, "<",
+        pinfo.canPrev, PAL.blue, nil, "Previous page / line") and pinfo.canPrev then
+      local np, nl = UiPreview.stepTextBoxPreview(S, body,
+        S.dialogPreviewPage, S.dialogPreviewLine, -1)
+      S.dialogPreviewPage, S.dialogPreviewLine = np, nl
     end
-    local shown = line:gsub("\f", "[page]"):gsub("\v", " ")
-    Kit.text("mono", utf8Prefix(shown, 48), ex + 20 * s, py, PAL.detail)
-    py = py + 14 * s
+    if Kit.chip(ex + 12 * s + chipW + 4 * s, navY, chipW, navH - 2 * s, ">",
+        pinfo.canNext, PAL.blue, nil, "Next page / line") and pinfo.canNext then
+      local np, nl = UiPreview.stepTextBoxPreview(S, body,
+        S.dialogPreviewPage, S.dialogPreviewLine, 1)
+      S.dialogPreviewPage, S.dialogPreviewLine = np, nl
+    end
+    Kit.text("micro",
+      string.format("page %d/%d", pinfo.page, pinfo.pageCount),
+      ex + 12 * s + chipW * 2 + 16 * s, navY + 6 * s, PAL.muted)
   end
 
-  local by = previewY + previewH + 12 * s
+  local by = navY + navH + 8 * s
   if Kit.button(ex + 12 * s, by, 160 * s, 30 * s, "Insert {PLAYER}",
       { kind = "accent" }) then
     strId = ensureEditable(S, S.dialogMapId, S.dialogTextId, App)
