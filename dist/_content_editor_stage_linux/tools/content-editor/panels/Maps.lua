@@ -916,6 +916,20 @@ local function spritePreviewPal(S, def)
   return "MEWMON"
 end
 
+local function spriteListCacheKey(S)
+  local nProj, nData = 0, 0
+  local h = 0
+  for id in pairs((S.project and S.project.sprites) or {}) do
+    nProj = nProj + 1
+    h = h + #id
+  end
+  for id in pairs((S.data and S.data.sprites) or {}) do
+    nData = nData + 1
+    h = h + #id
+  end
+  return nProj .. ":" .. nData .. ":" .. h
+end
+
 local function spriteIds(S, customOnly)
   local proj = S.project and S.project.sprites
   if customOnly then
@@ -924,7 +938,7 @@ local function spriteIds(S, customOnly)
     table.sort(ids)
     return ids
   end
-  local key = tostring(proj and next(proj)) .. ":" .. tostring(S.data and S.data.sprites and next(S.data.sprites))
+  local key = spriteListCacheKey(S)
   if S._spriteIdList and S._spriteIdListKey == key then return S._spriteIdList end
   local seen, ids = {}, {}
   for id in pairs(proj or {}) do
@@ -2974,6 +2988,15 @@ end
 
 -- Hold WASD to pan continuously (Shift = faster).
 -- Arrow keys navigate the map list (RegList), not the camera.
+-- Drop renderer + id-list caches after undo/redo restores the project.
+function Maps.invalidateCaches(S)
+  spriteCache = {}
+  if S then
+    S._spriteIdList = nil
+    S._spriteIdListKey = nil
+  end
+end
+
 function Maps.update(S, dt)
   if not S or S.mapTilesetPicker then return end
   if Kit.focus or Kit._suppressMouse then return end

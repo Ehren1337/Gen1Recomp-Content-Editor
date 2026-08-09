@@ -515,7 +515,10 @@ function Gfx.draw(S, x, y, w, h, App)
     FormPane.finish(S, "gfxFormScroll", contentTop, fy, view)
     if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
         "Revert", { kind = "danger" }) then
-      proj[id] = nil; App.markDirty()
+      proj[id] = nil
+      SpriteUtil.invalidateIdCache(S)
+      if S.spriteEditId == id then S.spriteEditId = nil end
+      App.markDirty()
     end
     return
   end
@@ -796,7 +799,18 @@ function Gfx.draw(S, x, y, w, h, App)
   FormPane.finish(S, "gfxFormScroll", contentTop, fy, view)
   if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
       "Revert", { kind = "danger" }) then
-    proj[id] = nil; App.markDirty()
+    local dropped = proj[id]
+    proj[id] = nil
+    if S.data and S.data.tilesets and S.data.tilesets[id] == dropped then
+      local bak = S._vanillaTilesetBackup and S._vanillaTilesetBackup[id]
+      S.data.tilesets[id] = bak
+    elseif S.data and S.data.tilesets and type(S.data.tilesets[id]) == "table"
+        and S.data.tilesets[id]._isNew then
+      S.data.tilesets[id] = nil
+    end
+    if S.tilesetEditId == id then S.tilesetEditId = nil end
+    MapLoader.invalidateAll()
+    App.markDirty()
   end
 end
 
