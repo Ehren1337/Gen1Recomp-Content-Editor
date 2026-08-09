@@ -12,6 +12,8 @@ local ModWriter = require("ModWriter")
 local RegList = require("RegList")
 local SpeciesPicker = require("SpeciesPicker")
 local Autocomplete = require("Autocomplete")
+local Code = require("Code")
+local ModIO = require("ModIO")
 local PAL = Theme.PAL
 
 local Events = {}
@@ -751,6 +753,141 @@ local function drawEditableStep(S, App, steps, i, listKey, viewX, fy, innerW, ki
   return fy + rowH
 end
 
+local function revealPath(path)
+  if type(path) ~= "string" or path == "" then return false end
+  local osName = love and love.system and love.system.getOS and love.system.getOS()
+  if osName == "Windows" then
+    local win = path:gsub("/", "\\")
+    os.execute('explorer /select,"' .. win:gsub('"', "") .. '"')
+    return true
+  end
+  if osName == "OS X" then
+    os.execute('open -R "' .. path:gsub('"', "") .. '"')
+    return true
+  end
+  if osName == "Linux" then
+    local dir = path:match("^(.*)[/\\]") or path
+    os.execute('xdg-open "' .. dir:gsub('"', "") .. '"')
+    return true
+  end
+  return false
+end
+
+local function fullRepoPath(rel)
+  local sep = package.config:sub(1, 1)
+  local root = ModIO.repoRoot()
+  rel = tostring(rel or ""):gsub("\\", "/")
+  if root:sub(-1) == "/" or root:sub(-1) == "\\" then
+    return root .. rel:gsub("/", sep)
+  end
+  return root .. sep .. rel:gsub("/", sep)
+end
+
+-- Events → Advanced: resolve chain + open source for the selected TEXT_*.
+local function drawAdvancedTalk(S, App, x, y, w, h, mapId, textId)
+  local s = Kit.scale
+  local inspect = TalkIndex.inspectTalk(S, mapId, textId)
+  local layers = inspect.layers or {}
+  local sel = S.eventAdvLayer or 1
+  if sel < 1 then sel = 1 end
+  if sel > #layers then sel = #layers end
+  S.eventAdvLayer = sel
+
+  Theme.col(PAL.rowBg, 0.55)
+  love.graphics.rectangle("fill", x, y, w, h, 8 * s, 8 * s)
+  Kit.text("micro", "ADVANCED — resolve chain / source",
+    x + 8 * s, y + 4 * s, PAL.caption)
+
+  local listY = y + 18 * s
+  local listH = math.max(28 * s, math.floor(h * 0.38))
+  local rowH = 20 * s
+  local per = math.max(1, math.floor(listH / rowH))
+  S.eventAdvOffset = Kit.scroll(x + 4 * s, listY, w - 8 * s, listH,
+    S.eventAdvOffset or 0, #layers, per)
+  for i = 1, per do
+    local li = (S.eventAdvOffset or 0) + i
+    local layer = layers[li]
+    if not layer then break end
+    local ry = listY + (i - 1) * rowH
+    local on = li == sel
+    if Kit.press(x + 6 * s, ry, w - 12 * s, rowH) then
+      S.eventAdvLayer = li
+      sel = li
+    end
+    if on then
+      Theme.col(PAL.yellow, 0.14)
+      love.graphics.rectangle("fill", x + 6 * s, ry, w - 12 * s, rowH)
+    end
+    local mark = (li == 1) and "▶ " or "  "
+    Kit.text("micro",
+      fitIn("micro", mark .. layer.title
+        .. (layer.detail and (" — " .. layer.detail) or ""), w - 20 * s),
+      x + 10 * s, ry + 3 * s, on and PAL.heading or PAL.muted)
+  end
+
+  local layer = layers[sel] or layers[1]
+  local prevY = listY + listH + 4 * s
+  local btnH = 24 * s
+  local btnY = y + h - btnH - 6 * s
+  local prevH = math.max(24 * s, btnY - prevY - 4 * s)
+  Kit.pushClip(x + 8 * s, prevY, w - 16 * s, prevH)
+  local py = prevY
+  for _, line in ipairs((layer and layer.preview) or { "(no preview)" }) do
+    Kit.text("micro", fitIn("micro", tostring(line), w - 24 * s),
+      x + 10 * s, py, PAL.text)
+    py = py + 14 * s
+    if py > prevY + prevH then break end
+  end
+  Kit.popClip()
+
+  local bx = x + 8 * s
+  if layer and layer.open
+      and Kit.button(bx, btnY, 110 * s, btnH, "Open source", {
+        kind = "accent", font = "small",
+        tooltip = "Open in Code tab (engine files are read-only)",
+      }) then
+    if Code.openTarget(S, layer.open) then
+      S.status = "Opened source for " .. tostring(layer.title)
+    end
+  end
+  bx = bx + 116 * s
+  if layer and layer.open and layer.open.kind == "repo"
+      and Kit.button(bx, btnY, 90 * s, btnH, "Copy path", {
+        kind = "ghost", font = "small",
+      }) then
+    local full = fullRepoPath(layer.open.rel)
+    if love and love.system and love.system.setClipboardText then
+      love.system.setClipboardText(full)
+    end
+    S.status = "Copied " .. full
+  end
+  bx = bx + 96 * s
+  if layer and layer.open and layer.open.kind == "repo"
+      and Kit.button(bx, btnY, 80 * s, btnH, "Reveal", {
+        kind = "ghost", font = "small",
+      }) then
+    local full = fullRepoPath(layer.open.rel)
+    if revealPath(full) then
+      S.status = "Revealed " .. tostring(layer.open.rel)
+    else
+      S.status = full
+    end
+  end
+  bx = bx + 86 * s
+  local hits = inspect.hits or {}
+  if #hits > 1 and Kit.button(bx, btnY, 100 * s, btnH,
+      string.format("+%d hits", #hits - 1), {
+        kind = "ghost", font = "small",
+        tooltip = "Open next script file hit for this TEXT_*/map",
+      }) then
+    S.eventAdvHit = ((S.eventAdvHit or 1) % #hits) + 1
+    local hit = hits[S.eventAdvHit]
+    Code.openTarget(S, {
+      kind = "repo", rel = hit.path, line = hit.line, query = textId,
+    })
+  end
+end
+
 local function drawScripts(S, x, y, w, h, App)
   local s = Kit.scale
   TalkIndex.ensureScripts()
@@ -842,6 +979,9 @@ local function drawScripts(S, x, y, w, h, App)
     if Kit.row(pinScrollX, ry, pinRowW, rowH, S.eventScriptKey == e.key, PAL.yellow) then
       eventNav.activate()
       S.eventScriptKey = e.key
+      S.eventAdvLayer = 1
+      S.eventAdvOffset = 0
+      S.eventAdvHit = 1
       -- Selection only — do not invent a Hello! stub.
     end
     local badge = TalkIndex.sourceLabel(e.source)
@@ -883,6 +1023,16 @@ local function drawScripts(S, x, y, w, h, App)
   local formX = pinX + listW + 12 * s
   local formW = w - (formX - x)
   Kit.caption(formX, y, "STEPS")
+  local advOn = S.eventAdvanced == true
+  if Kit.chip(formX + formW - 100 * s, y, 100 * s, 22 * s, "ADVANCED",
+      advOn, PAL.yellow, nil,
+      "Resolve chain, injections, open mod/vanilla source") then
+    S.eventAdvanced = not advOn
+    advOn = S.eventAdvanced
+    S.eventAdvLayer = 1
+    S.eventAdvOffset = 0
+    S.eventAdvHit = 1
+  end
   Kit.card(formX, listY, formW, listH, 12 * s)
 
   if not S.eventScriptKey then
@@ -899,15 +1049,22 @@ local function drawScripts(S, x, y, w, h, App)
   end
 
   local owned = S.project.talkScripts[S.eventScriptKey]
+  if owned and TalkIndex.repairPlaceholderSteps(S, mapId, textId, owned) then
+    App.markDirty()
+    S.status = "Fixed invalid Engine placeholder steps for "
+      .. tostring(S.eventScriptKey)
+  end
   local steps, meta = TalkIndex.resolveSteps(S, mapId, textId)
   local readOnly = not owned
   -- Shortcut grid needs ~4 rows when editing; clone button is a single row.
   local footerH = readOnly and 40 * s or 120 * s
+  local advH = advOn and math.min(210 * s, math.floor(listH * 0.42)) or 0
   local pad = 12 * s
   local viewX = formX + pad
   local viewY = listY + pad + 36 * s
   local viewW = formW - 2 * pad
-  local viewH = math.max(40 * s, listH - pad - footerH - 36 * s)
+  local viewH = math.max(40 * s,
+    listH - pad - footerH - 36 * s - advH - (advOn and 6 * s or 0))
 
   Kit.text("micro", fitIn("micro", S.eventScriptKey, formW - 24 * s),
     formX + 12 * s, listY + 10 * s, PAL.faint)
@@ -985,6 +1142,11 @@ local function drawScripts(S, x, y, w, h, App)
   end
 
   FormPane.finish(S, "eventFormScroll", contentTop, fy, view)
+
+  if advOn and advH > 0 then
+    drawAdvancedTalk(S, App, viewX, viewY + viewH + 4 * s, viewW, advH,
+      mapId, textId)
+  end
 
   if readOnly then
     local by = listY + listH - 34 * s

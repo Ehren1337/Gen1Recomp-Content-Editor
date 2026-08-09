@@ -15,6 +15,7 @@ function ItemPicker.close(S)
   if not S then return end
   S.itemPicker = nil
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 function ItemPicker.allIds(S)

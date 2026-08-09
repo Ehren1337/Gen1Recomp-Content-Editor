@@ -74,7 +74,6 @@ local SCROLL_HOLD_RATE = 0.055
 
 function Kit.beginFrame(mx, my, clicked, wheel)
   Kit.mouseX, Kit.mouseY = mx, my
-  Kit.mouseClicked = clicked
   Kit.wheelY = wheel or 0
   -- Held-button state is polled, not evented: the editor is hosted both
   -- standalone and inside the launcher, and neither routes mousereleased
@@ -85,7 +84,18 @@ function Kit.beginFrame(mx, my, clicked, wheel)
   if love and love.mouse and love.mouse.isDown then
     down = love.mouse.isDown(1) and true or false
   end
+  -- After a modal closes on click, ignore the held button so the map under
+  -- the OK/Use control does not paint on the next frame.
+  if Kit._suppressMouse then
+    if not down then
+      Kit._suppressMouse = false
+    else
+      down = false
+      clicked = false
+    end
+  end
   Kit.mouseDown = down
+  Kit.mouseClicked = clicked and true or false
   if not down then
     Kit._drag = nil
     Kit._sbDrag = nil
@@ -265,8 +275,10 @@ function Kit.keypressed(key)
     edits[#edits + 1] = "\r"
     return true
   end
-  -- other keys fall through to App while a field is hot
-  return false
+  -- Ctrl/Cmd chords (Save, Undo, …) still reach App; everything else is
+  -- consumed so map zoom / pan hotkeys do not fire while typing.
+  if ctrlDown() then return false end
+  return true
 end
 
 function Kit.blur()
@@ -276,6 +288,16 @@ function Kit.blur()
   Kit.fieldScroll = 0
   focusFor = nil
   syncSoftKeyboard(nil)  -- the soft keyboard follows focus down too (#529)
+end
+
+-- Call when a modal closes via mouse so the click/drag does not hit the panel
+-- underneath (e.g. Maps paint under SpeciesPicker "Use").
+function Kit.suppressMouseUntilUp()
+  Kit._suppressMouse = true
+  Kit.mouseClicked = false
+  Kit.mouseDown = false
+  Kit._drag = nil
+  Kit._sbDrag = nil
 end
 
 -- ------------------------------------------------------------- hit testing

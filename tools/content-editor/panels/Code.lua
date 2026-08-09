@@ -121,6 +121,97 @@ local function saveFile(S)
   end
 end
 
+local function joinPath(root, rel)
+  local sep = package.config:sub(1, 1)
+  rel = tostring(rel or ""):gsub("\\", "/")
+  if root:sub(-1) == "/" or root:sub(-1) == "\\" then
+    return root .. rel:gsub("/", sep)
+  end
+  return root .. sep .. rel:gsub("/", sep)
+end
+
+local function jumpToQuery(S, query, line)
+  if type(line) == "number" and line >= 1 then
+    S.codeLine = math.min(line, #(S.codeLines or {}))
+    return
+  end
+  if type(query) ~= "string" or query == "" then
+    S.codeLine = 1
+    return
+  end
+  for i, text in ipairs(S.codeLines or {}) do
+    if tostring(text):find(query, 1, true) then
+      S.codeLine = i
+      return
+    end
+  end
+  S.codeLine = 1
+end
+
+-- Open a mod Lua file on the Code tab (Events → Advanced).
+function Code.openModFile(S, modId, rel, opts)
+  opts = opts or {}
+  if S.codeDirty and S.codeSourceKind ~= "repo" then
+    S.status = "Unsaved Code edits — Write or Reload before opening"
+    return false
+  end
+  if not modId or not rel then return false end
+  S.codeSourceKind = "mod"
+  S.codeReadOnly = false
+  S.codeRepoRel = nil
+  S.browseModId = modId
+  S.codeFile = rel
+  S._codeFor = nil
+  S._codeFiles = nil
+  loadFile(S, modId, rel)
+  S._codeFor = tostring(modId) .. "\0" .. tostring(rel)
+  jumpToQuery(S, opts.query, opts.line)
+  S.codeScroll = math.max(0, (S.codeLine or 1) - 1)
+  S.tab = "code"
+  S.status = "Opened mods/" .. modId .. "/" .. rel
+  return true
+end
+
+-- Open a repo-relative engine/vanilla file read-only on the Code tab.
+function Code.openRepoFile(S, rel, opts)
+  opts = opts or {}
+  if S.codeDirty and S.codeSourceKind ~= "repo" then
+    S.status = "Unsaved Code edits — Write or Reload before opening"
+    return false
+  end
+  rel = tostring(rel or ""):gsub("\\", "/"):gsub("^/+", "")
+  if rel == "" or rel:find("%.%.") then return false end
+  local full = joinPath(ModIO.repoRoot(), rel)
+  local body, err = ModIO.readText(full)
+  if body == nil then
+    S.status = "Open failed: " .. tostring(err or rel)
+    return false
+  end
+  S.codeSourceKind = "repo"
+  S.codeReadOnly = true
+  S.codeRepoRel = rel
+  S.codeLines = splitLines(body)
+  S.codeLoadError = nil
+  S.codeDirty = false
+  S._codeUndo, S._codeRedo = {}, {}
+  jumpToQuery(S, opts.query, opts.line)
+  S.codeScroll = math.max(0, (S.codeLine or 1) - 1)
+  S.tab = "code"
+  S.status = "Opened " .. rel .. " (read-only)"
+  return true
+end
+
+function Code.openTarget(S, target)
+  if type(target) ~= "table" then return false end
+  if target.kind == "mod" then
+    return Code.openModFile(S, target.modId, target.rel, target)
+  end
+  if target.kind == "repo" then
+    return Code.openRepoFile(S, target.rel, target)
+  end
+  return false
+end
+
 function Code.undo(S)
   if not (S._codeUndo and #S._codeUndo > 0) then return false end
   S._codeRedo = S._codeRedo or {}
@@ -152,7 +243,14 @@ end
 function Code.draw(S, x, y, w, h, App)
   local s = Kit.scale
   local mods = ensureBrowseMod(S)
-  local files = ensureFile(S) or {}
+  local repoMode = S.codeSourceKind == "repo"
+  local files = {}
+  if repoMode then
+    if S.browseModId then files = ModIO.listModLuaFiles(S.browseModId) or {} end
+    S._codeFiles = files
+  else
+    files = ensureFile(S) or {}
+  end
 
   local col1 = math.min(180 * s, w * 0.22)
   local col2 = math.min(200 * s, w * 0.24)
@@ -190,9 +288,12 @@ function Code.draw(S, x, y, w, h, App)
     local on = S.browseModId == mid
     if Kit.row(x + 6 * s, ry, col1 - 12 * s, rowH - 4 * s, on, PAL.blue) then
       modNav.activate()
-      if S.codeDirty then
+      if S.codeDirty and not repoMode then
         S.status = "Unsaved file — Write or Reload before switching"
       else
+        S.codeSourceKind = "mod"
+        S.codeReadOnly = false
+        S.codeRepoRel = nil
         S.browseModId = mid
         S.codeFile = nil
         S._codeFor = nil
@@ -228,9 +329,12 @@ function Code.draw(S, x, y, w, h, App)
     local on = S.codeFile == rel
     if Kit.row(fileX + 6 * s, ry, col2 - 12 * s, rowH - 4 * s, on, PAL.green) then
       fileNav.activate()
-      if S.codeDirty and S.codeFile ~= rel then
+      if S.codeDirty and not repoMode and S.codeFile ~= rel then
         S.status = "Unsaved file — Write or Reload before switching"
       else
+        S.codeSourceKind = "mod"
+        S.codeReadOnly = false
+        S.codeRepoRel = nil
         S.codeFile = rel
         S._codeFor = nil
       end
@@ -249,11 +353,11 @@ function Code.draw(S, x, y, w, h, App)
     end
   end
 
-  if not S.browseModId then
+  if not repoMode and not S.browseModId then
     Kit.emptyBox(mainX, listY, mainW, listH, "Select a mod under mods/")
     return
   end
-  if not S.codeFile or not S.codeLines then
+  if not repoMode and (not S.codeFile or not S.codeLines) then
     Kit.emptyBox(mainX, listY, mainW, listH, "Select or create a .lua file")
     if S._codeCreating then
       local name = Kit.textfield("code_new", mainX + 12 * s, listY + 40 * s,
@@ -281,32 +385,57 @@ function Code.draw(S, x, y, w, h, App)
     end
     return
   end
+  if repoMode and not S.codeLines then
+    Kit.emptyBox(mainX, listY, mainW, listH, "No engine file loaded")
+    return
+  end
 
-  local title = (S.codeDirty and "* " or "")
-    .. S.browseModId .. "/" .. S.codeFile
+  local title
+  if repoMode then
+    title = "ENGINE  " .. tostring(S.codeRepoRel or "?")
+  else
+    title = (S.codeDirty and "* " or "")
+      .. S.browseModId .. "/" .. S.codeFile
+  end
   Kit.caption(mainX, y, Kit.ellipsize("caption", title, mainW))
 
   local barY = listY
   local btnH = 28 * s
   local bw = 78 * s
-  if Kit.button(mainX, barY, bw, btnH, "Write", { kind = "primary" }) then
+  local readOnly = S.codeReadOnly or repoMode
+  if readOnly then
+    Kit.text("micro", "Read-only engine/vanilla source",
+      mainX, barY + 6 * s, PAL.yellow)
+  elseif Kit.button(mainX, barY, bw, btnH, "Write", { kind = "primary" }) then
     saveFile(S)
   end
-  if Kit.button(mainX + bw + 6 * s, barY, bw, btnH, "Reload", { kind = "ghost" }) then
+  if not readOnly
+      and Kit.button(mainX + bw + 6 * s, barY, bw, btnH, "Reload",
+        { kind = "ghost" }) then
     loadFile(S, S.browseModId, S.codeFile)
     S._codeFor = tostring(S.browseModId) .. "\0" .. tostring(S.codeFile)
     S.status = "Reloaded " .. S.codeFile
   end
-  if Kit.button(mainX + 2 * (bw + 6 * s), barY, 70 * s, btnH, "+ Line",
-      { kind = "accent" }) then
+  if repoMode and Kit.button(mainX + 200 * s, barY, 100 * s, btnH, "Copy path",
+      { kind = "ghost" }) then
+    local full = joinPath(ModIO.repoRoot(), S.codeRepoRel or "")
+    if love and love.system and love.system.setClipboardText then
+      love.system.setClipboardText(full)
+    end
+    S.status = "Copied " .. full
+  end
+  if not readOnly
+      and Kit.button(mainX + 2 * (bw + 6 * s), barY, 70 * s, btnH, "+ Line",
+        { kind = "accent" }) then
     pushCodeUndo(S)
     local i = S.codeLine or 1
     table.insert(S.codeLines, i + 1, "")
     S.codeLine = i + 1
     markCodeDirty(S)
   end
-  if Kit.button(mainX + 2 * (bw + 6 * s) + 76 * s, barY, 70 * s, btnH, "Del line",
-      { kind = "danger" }) then
+  if not readOnly
+      and Kit.button(mainX + 2 * (bw + 6 * s) + 76 * s, barY, 70 * s, btnH,
+        "Del line", { kind = "danger" }) then
     pushCodeUndo(S)
     local i = S.codeLine or 1
     if #S.codeLines > 1 then
@@ -327,24 +456,30 @@ function Code.draw(S, x, y, w, h, App)
   local editY = barY + btnH + 18 * s
   local editH = 30 * s
   Kit.text("micro", "Line " .. tostring(S.codeLine or 1)
-      .. "  (paste multi-line OK · Ctrl+Z undoes code edits)",
+      .. (readOnly and "  (read-only preview)"
+        or "  (paste multi-line OK · Ctrl+Z undoes code edits)"),
     mainX, editY - 14 * s, PAL.caption)
   local lineIdx = S.codeLine or 1
   local cur = S.codeLines[lineIdx] or ""
-  local edited = Kit.textfield("code_line", mainX, editY, mainW, editH, cur, "")
-  if edited ~= cur then
-    pushCodeUndo(S)
-    if edited:find("\n", 1, true) or edited:find("\r", 1, true) then
-      local parts = splitLines(edited)
-      S.codeLines[lineIdx] = parts[1] or ""
-      for i = 2, #parts do
-        table.insert(S.codeLines, lineIdx + i - 1, parts[i])
+  if readOnly then
+    Kit.text("mono", Kit.ellipsize("mono", cur, mainW),
+      mainX, editY + 6 * s, PAL.muted)
+  else
+    local edited = Kit.textfield("code_line", mainX, editY, mainW, editH, cur, "")
+    if edited ~= cur then
+      pushCodeUndo(S)
+      if edited:find("\n", 1, true) or edited:find("\r", 1, true) then
+        local parts = splitLines(edited)
+        S.codeLines[lineIdx] = parts[1] or ""
+        for i = 2, #parts do
+          table.insert(S.codeLines, lineIdx + i - 1, parts[i])
+        end
+        S.codeLine = lineIdx + #parts - 1
+      else
+        S.codeLines[lineIdx] = edited
       end
-      S.codeLine = lineIdx + #parts - 1
-    else
-      S.codeLines[lineIdx] = edited
+      markCodeDirty(S)
     end
-    markCodeDirty(S)
   end
 
   local viewY = editY + editH + 10 * s
@@ -371,7 +506,7 @@ function Code.draw(S, x, y, w, h, App)
     local on = li == lineIdx
     if Kit.press(mainX + 6 * s, ry, mainW - 12 * s, lineH) then
       S.codeLine = li
-      Kit.focus = "code_line"
+      if not readOnly then Kit.focus = "code_line" end
     end
     if on then
       Theme.col(PAL.blue, 0.18)
@@ -384,7 +519,9 @@ function Code.draw(S, x, y, w, h, App)
   end
 
   Kit.text("micro",
-    #lines .. " lines — click a line to edit, Write saves under mods/",
+    readOnly
+      and (#lines .. " lines — engine/vanilla preview (Events → Advanced)")
+      or (#lines .. " lines — click a line to edit, Write saves under mods/"),
     mainX, listY + listH + 2 * s, PAL.faint)
 end
 

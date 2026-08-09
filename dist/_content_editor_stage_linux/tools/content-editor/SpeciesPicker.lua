@@ -15,6 +15,7 @@ function SpeciesPicker.close(S)
   if not S then return end
   S.speciesPicker = nil
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 function SpeciesPicker.allIds(S)

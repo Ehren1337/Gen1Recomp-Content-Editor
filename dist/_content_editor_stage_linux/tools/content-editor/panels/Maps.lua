@@ -1343,8 +1343,12 @@ local function drawMapScrollbars(S, mapDef, vx, vy, vw, vh)
     return
   end
 
-  local trackW = needV and (vw - sb) or vw
-  local trackH = needH and (vh - sb) or vh
+  local trackW = math.max(0, needV and (vw - sb) or vw)
+  local trackH = math.max(0, needH and (vh - sb) or vh)
+  if trackW < 8 * s and trackH < 8 * s then
+    S._mapSbDrag = nil
+    return
+  end
 
   local drag = S._mapSbDrag
   if drag and not (Kit.mouseDown or Kit.mouseClicked) then
@@ -1365,12 +1369,13 @@ local function drawMapScrollbars(S, mapDef, vx, vy, vw, vh)
     clampMapCam(S, mapDef)
   end
 
-  if needV then
+  if needV and trackH >= 8 * s then
     local range = math.max(1, maxY - minY)
     local th = math.max(24 * s, trackH * (viewH / math.max(viewH, mh)))
+    th = math.min(th, trackH)
     local travel = math.max(1, trackH - th)
     local ty = vy + travel * (((S.mapCamY or 0) - minY) / range)
-    local bx = vx + vw - sb
+    local bx = vx + math.max(0, vw - sb)
     if Kit.hit(bx, vy, sb, trackH) then S._mapSbBlocking = true end
     Theme.col(PAL.cardBorder, 0.35)
     love.graphics.rectangle("fill", bx, vy, sb, trackH, sb / 2, sb / 2)
@@ -1392,12 +1397,13 @@ local function drawMapScrollbars(S, mapDef, vx, vy, vw, vh)
     end
   end
 
-  if needH then
+  if needH and trackW >= 8 * s then
     local range = math.max(1, maxX - minX)
     local tw = math.max(24 * s, trackW * (viewW / math.max(viewW, mw)))
+    tw = math.min(tw, trackW)
     local travel = math.max(1, trackW - tw)
     local tx = vx + travel * (((S.mapCamX or 0) - minX) / range)
-    local by = vy + vh - sb
+    local by = vy + math.max(0, vh - sb)
     if Kit.hit(vx, by, trackW, sb) then S._mapSbBlocking = true end
     Theme.col(PAL.cardBorder, 0.35)
     love.graphics.rectangle("fill", vx, by, trackW, sb, sb / 2, sb / 2)
@@ -1588,7 +1594,8 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
   S._worldFocusId = nil
 
   -- Pan / select (clicking a neighbor recenters World on that map)
-  if Kit.mouseDown and not Kit.blockClicks and (S._worldDrag or S._worldViewHit) then
+  if Kit.mouseDown and not Kit.blockClicks and not Kit._suppressMouse
+      and (S._worldDrag or S._worldViewHit) then
     if not S._worldDrag and Kit.mouseClicked and S._worldViewHit then
       local z = S.worldZoom
       local wx = S.worldCamX + (Kit.mouseX - viewX) / z
@@ -2620,7 +2627,14 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   S._mapViewW, S._mapViewH = vw, vh
 
   Theme.col(PAL.bgBot or PAL.card, 1)
-  love.graphics.rectangle("fill", vx, vy, vw, vh, 8 * s, 8 * s)
+  if vw > 0 and vh > 0 then
+    local rr = math.min(8 * s, vw * 0.5, vh * 0.5)
+    love.graphics.rectangle("fill", vx, vy, vw, vh, rr, rr)
+  end
+  if vw < 16 or vh < 16 then
+    Kit.text("micro", "Widen map view", vx + 4 * s, vy + 4 * s, PAL.faint)
+    return
+  end
 
   prepareLiveMap(S, S.mapId, mapDef)
   local ok, map = pcall(MapLoader.load, S.data, S.mapId)
@@ -2703,11 +2717,13 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     rmb = love.mouse.isDown(2)
     mmb = love.mouse.isDown(3)
   end
-  local spacePan = love.keyboard.isDown("space")
-    or love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt")
+  local spacePan = (not Kit.focus) and (
+    love.keyboard.isDown("space")
+    or love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt"))
   local auxPan = mmb
   local panHeld = (auxPan or spacePan)
     and not Kit.blockClicks
+    and not Kit._suppressMouse
     and (over or (S._mapDrag and S._mapDrag.pan))
 
   local function mouseWorld()
@@ -2775,7 +2791,8 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       S.mapCamY = d.camY - (Kit.mouseY - d.my) / S.mapZoom
       clampMapCam(S, mapDef)
     end
-  elseif Kit.mouseDown and not Kit.blockClicks and (S._mapDrag or over) then
+  elseif Kit.mouseDown and not Kit.blockClicks and not Kit._suppressMouse
+      and (S._mapDrag or over) then
     if brush and over then
       S._mapDrag = { brush = true }
       local z = S.mapZoom or 2
@@ -2959,8 +2976,10 @@ end
 -- Arrow keys navigate the map list (RegList), not the camera.
 function Maps.update(S, dt)
   if not S or S.mapTilesetPicker then return end
-  if Kit.focus then return end
+  if Kit.focus or Kit._suppressMouse then return end
   if Kit.blockClicks then return end
+  -- Modals set blockClicks only during draw; update runs earlier.
+  if S.speciesPicker or S.itemPicker or S.palettePicker then return end
   if not (love and love.keyboard and love.keyboard.isDown) then return end
   local dx, dy = 0, 0
   if love.keyboard.isDown("a") then dx = dx - 1 end
@@ -3040,6 +3059,8 @@ end
 function Maps.keypressed(S, key, App)
   -- Escape / typing handled at App while the tileset modal is up.
   if S.mapTilesetPicker then return true end
+  -- Never steal keys while a parameters field is focused (zoom +/- etc.).
+  if Kit.focus then return true end
   if key == "escape" and S.warpDestPick then
     clearWarpDestPick(S, "Set destination cancelled")
     return true
@@ -3099,10 +3120,16 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
   local map = resolveMapDef(S, S.mapId)
   if not map then
     S.mapTilesetPicker = nil
+    Kit.suppressMouseUntilUp()
     return
   end
   local function mutate()
     return ensureOwned(S, S.mapId)
+  end
+  local function closeTilesetPicker()
+    S.mapTilesetPicker = nil
+    Kit.blur()
+    Kit.suppressMouseUntilUp()
   end
 
   local s = Kit.scale
@@ -3121,8 +3148,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
   local px = x + (w - pw) / 2
   local py = y + (h - ph) / 2
   if Kit.press(x, y, w, h) and not Kit.hit(px, py, pw, ph) then
-    S.mapTilesetPicker = nil
-    Kit.blur()
+    closeTilesetPicker()
     return
   end
 
@@ -3134,8 +3160,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
   if Kit.button(px + pw - pad - 30 * s, cy - 2 * s, 30 * s, 26 * s, "x", {
       kind = "ghost", tooltip = "Close (Esc)",
     }) then
-    S.mapTilesetPicker = nil
-    Kit.blur()
+    closeTilesetPicker()
     return
   end
   cy = cy + 22 * s
@@ -3195,8 +3220,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
       if Kit.hover(cx, ry, innerW, rowH) then p.focus = id end
       if Kit.row(cx, ry, innerW, rowH, on or focused, PAL.blue) then
         applyMapTileset(S, map, id, App, mutate)
-        S.mapTilesetPicker = nil
-        Kit.blur()
+        closeTilesetPicker()
         Kit.popClip()
         return
       end
@@ -3229,8 +3253,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
     local _, newId, err = cloneTilesetForMap(S, m, App)
     if newId then
       S.status = "Tileset slot " .. newId .. " (Passage local to this map)"
-      S.mapTilesetPicker = nil
-      Kit.blur()
+      closeTilesetPicker()
       return
     end
     S.status = "Clone failed: " .. tostring(err)
@@ -5264,13 +5287,17 @@ function Maps.draw(S, x, y, w, h, App)
 
   -- Center + right
   local split = 6 * s
-  -- Wider props drawer so Basics / Encounters fields stay readable.
-  local rightMin = 280 * s
-  local rightMax = math.max(rightMin, (w - leftW) * 0.48)
-  local rightDefault = Theme.clamp(320 * s, rightMin, rightMax)
-  local rightW = Theme.clamp(S.mapRightW or rightDefault, rightMin, rightMax)
   local mainX = x + leftW + 10 * s
   local mainW = math.max(120 * s, w - leftW - 10 * s)
+  -- Keep a usable map canvas; Theme.clamp breaks when min > max.
+  local canvasMin = 140 * s
+  local rightMinWanted = 280 * s
+  local rightMaxByCanvas = math.max(120 * s, mainW - split - canvasMin)
+  local rightMin = math.min(rightMinWanted, rightMaxByCanvas)
+  local rightMax = math.max(rightMin, math.min(
+    rightMaxByCanvas, math.max(rightMin, (w - leftW) * 0.48)))
+  local rightDefault = Theme.clamp(320 * s, rightMin, rightMax)
+  local rightW = Theme.clamp(S.mapRightW or rightDefault, rightMin, rightMax)
 
   if S.mapViewMode == "world" then
     local propW = math.min(260 * s, rightW + 40 * s)
@@ -5575,7 +5602,8 @@ function Maps.draw(S, x, y, w, h, App)
       if drag or Kit.hit(vHitX, canvasY, split, bodyH) then
         S._mapSplits = S._mapSplits or {}
         S._mapSplits.rightW = true
-        rightW = Theme.clamp(mainX + mainW - Kit.mouseX, rightMin, rightMax)
+        local mx = tonumber(Kit.mouseX) or (mainX + mainW - rightW)
+        rightW = Theme.clamp(mainX + mainW - mx, rightMin, rightMax)
         S.mapRightW = rightW
         vHitX = mainX + mainW - rightW - split
       end
@@ -5584,11 +5612,22 @@ function Maps.draw(S, x, y, w, h, App)
     end
     S.mapRightW = rightW
   end
+  -- Re-clamp against live mainW (window resize / HiDPI scale mid-drag).
+  rightW = Theme.clamp(rightW, rightMin, rightMax)
+  S.mapRightW = rightW
   local vHitX = mainX + mainW - rightW - split
-  local canvasW = math.max(80 * s, vHitX - mainX)
+  local canvasW = math.max(canvasMin, vHitX - mainX)
+  -- If the window is too narrow, shrink the drawer instead of overlapping.
+  if canvasW + split + rightW > mainW then
+    rightW = math.max(rightMin, mainW - split - canvasW)
+    rightW = Theme.clamp(rightW, rightMin, rightMax)
+    S.mapRightW = rightW
+    vHitX = mainX + mainW - rightW - split
+    canvasW = math.max(40 * s, vHitX - mainX)
+  end
   local canvasH = bodyH
   local px = vHitX + split
-  local propW = rightW
+  local propW = math.max(120 * s, rightW)
 
   if not map then
     Kit.emptyBox(mainX, canvasY, canvasW, canvasH, "No maps -- add one or Import TMX")

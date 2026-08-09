@@ -89,7 +89,7 @@ local function restore(S, snapshot)
   S._histDirtyFrame = false
   S._histLastPush = nil
   S.dirty = true
-  S._mapCenteredFor = nil
+  -- Keep map/world camera + zoom; only rebuild tiles for the restored data.
   S._mapNeedsRebuild = S.mapId
   syncLiveMaps(S)
   syncLiveTilesets(S)

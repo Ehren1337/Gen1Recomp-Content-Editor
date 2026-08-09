@@ -321,6 +321,15 @@ function ModIO.save(modDir, project)
   mf:write(main)
   mf:close()
 
+  -- Ship Schemas.lua only when trainer party DV/moves/statExp overrides exist.
+  local schemasPath = join(modDir, "Schemas.lua")
+  if ModWriter.trainerPartyHasOverrides(project) then
+    local okS, errS = ModIO.writeText(schemasPath, ModWriter.trainerPartySchemasLua())
+    if not okS then return false, errS end
+  elseif ModIO.exists(schemasPath) then
+    os.remove(schemasPath)
+  end
+
   -- keep manifest name in sync when present
   local manifestPath = join(modDir, "manifest.json")
   if ModIO.exists(manifestPath) and project.name then

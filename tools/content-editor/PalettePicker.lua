@@ -18,6 +18,7 @@ function PalettePicker.close(S)
   if not S then return end
   S.palettePicker = nil
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 -- opts: current, allowClear, clearLabel, title, onPick(id|nil),

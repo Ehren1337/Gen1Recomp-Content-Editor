@@ -843,8 +843,12 @@ function Trainers.draw(S, x, y, w, h, App)
     do
       S.trainerBulkDvs = S.trainerBulkDvs or normalizeBulkDvs(nil, defDvs)
       S.trainerBulkSe = S.trainerBulkSe or normalizeBulkSe(nil)
-      Kit.text("micro", "Bulk DVs / Stat Exp — apply to all mons",
+      Kit.text("micro", "Bulk DVs / Stat Exp — written on Save",
         viewX, fy, PAL.caption)
+      fy = fy + 14 * s
+      Kit.text("micro",
+        "Save ships Schemas.lua + overrides vanilla trainer stats/moves",
+        viewX, fy, PAL.faint)
       fy = fy + 14 * s
       local dvGap = 8 * s
       local dvCell = numW + dvGap + 18 * s

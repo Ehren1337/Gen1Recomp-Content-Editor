@@ -43,6 +43,7 @@ end
 function PaletteEdit.close(S)
   if S then S.paletteEditAsk = nil end
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 -- True when this palette is already a private clone for the entity.

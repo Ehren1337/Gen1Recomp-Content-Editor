@@ -272,21 +272,157 @@ function TalkIndex.resolveSteps(S, mapId, textId)
   return {}, { owned = false, source = "empty", readOnly = true }
 end
 
--- Copy current resolved steps into project.talkScripts (mod override on Save).
-function TalkIndex.cloneToProject(S, mapId, textId)
-  State.ensureProjectFields(S.project)
-  local key = mapId .. "/" .. textId
-  if S.project.talkScripts[key] then return S.project.talkScripts[key] end
-  local steps, meta = TalkIndex.resolveSteps(S, mapId, textId)
+-- Display-only resolveSteps notes ("Engine item-ball: …") must not become
+-- ScriptRunner rows. Build real editable steps for Clone / Save.
+local function copyStep(step)
+  local sc = {}
+  for k, v in pairs(step) do sc[k] = v end
+  return sc
+end
+
+local function stepsFromEngineObject(S, mapId, textId, src)
+  local obj = findObject(S, mapId, textId)
+  if not obj then return nil end
+  if src == "item" and obj.item and obj.item ~= "0" and obj.item ~= 0 then
+    local out = {
+      { kind = "give_item", item = tostring(obj.item), count = 1 },
+    }
+    if type(obj.name) == "string" and obj.name ~= "" then
+      out[#out + 1] = {
+        kind = "raw",
+        note = ("hide_object %s %s"):format(mapId, obj.name),
+        row = { "hide_object", mapId, obj.name },
+      }
+    end
+    return out
+  end
+  if src == "trainer" and (obj.trainerClass or obj.trainer) then
+    return {
+      {
+        kind = "trainer_battle",
+        trainer = tostring(obj.trainerClass or obj.trainer),
+        party = tonumber(obj.trainerParty) or 1,
+      },
+    }
+  end
+  if src == "pokemon" and (obj.pokemon or obj.species) then
+    return {
+      {
+        kind = "wild_battle",
+        species = tostring(obj.pokemon or obj.species),
+        level = tonumber(obj.level) or 5,
+      },
+    }
+  end
+  return nil
+end
+
+-- True for read-only placeholder notes that are not real engine verbs.
+local function isPlaceholderRawNote(note)
+  if type(note) ~= "string" then return false end
+  return note:match("^Engine%s") ~= nil
+    or note:match("^Lua%s") ~= nil
+    or note:match("^ASM/") ~= nil
+    or note:match("^ASM%s") ~= nil
+end
+
+-- Convert a single bad "Engine …" raw step into real steps (or nil).
+local function expandPlaceholderRaw(S, mapId, textId, step)
+  local note = step and step.note
+  if type(note) ~= "string" then return nil end
+  local item = note:match("^Engine item%-ball:%s*(%S+)")
+  if item and item ~= "0" then
+    return stepsFromEngineObject(S, mapId, textId, "item")
+      or { { kind = "give_item", item = item, count = 1 } }
+  end
+  local trainer, party = note:match("^Engine trainer:%s*(%S+)%s+party%s+(%d+)")
+  if trainer then
+    return {
+      {
+        kind = "trainer_battle",
+        trainer = trainer,
+        party = tonumber(party) or 1,
+      },
+    }
+  end
+  local species, level = note:match("^Engine fixed wild:%s*(%S+)%s+Lv(%d+)")
+  if species then
+    return {
+      {
+        kind = "wild_battle",
+        species = species,
+        level = tonumber(level) or 5,
+      },
+    }
+  end
+  if isPlaceholderRawNote(note) then
+    return { { kind = "show_text", text = "Hello!" } }
+  end
+  return nil
+end
+
+-- Repair owned talkScripts that still hold display-only Engine/Lua notes.
+-- Returns true if steps were rewritten.
+function TalkIndex.repairPlaceholderSteps(S, mapId, textId, script)
+  if type(script) ~= "table" or type(script.steps) ~= "table" then
+    return false
+  end
+  local changed = false
+  local out = {}
+  for _, step in ipairs(script.steps) do
+    if (step.kind or "raw") == "raw" and isPlaceholderRawNote(step.note) then
+      local repl = expandPlaceholderRaw(S, mapId, textId, step)
+      if repl then
+        for _, r in ipairs(repl) do out[#out + 1] = r end
+        changed = true
+      else
+        out[#out + 1] = copyStep(step)
+      end
+    else
+      out[#out + 1] = copyStep(step)
+    end
+  end
+  if changed then script.steps = out end
+  return changed
+end
+
+local function editableStepsForClone(S, mapId, textId, steps, meta)
+  local src = meta and meta.source
+  if src == "item" or src == "trainer" or src == "pokemon" then
+    local built = stepsFromEngineObject(S, mapId, textId, src)
+    if built then return built end
+  end
+  if src == "lua" or src == "asm" or src == "shop" or src == "nurse"
+      or src == "pc" or src == "cable" then
+    return { { kind = "show_text", text = "Hello!" } }
+  end
   local copy = {}
-  for i, step in ipairs(steps or {}) do
-    local sc = {}
-    for k, v in pairs(step) do sc[k] = v end
-    copy[i] = sc
+  for _, step in ipairs(steps or {}) do
+    if (step.kind or "raw") == "raw" and isPlaceholderRawNote(step.note) then
+      local repl = expandPlaceholderRaw(S, mapId, textId, step)
+      if repl then
+        for _, r in ipairs(repl) do copy[#copy + 1] = r end
+      end
+    else
+      copy[#copy + 1] = copyStep(step)
+    end
   end
   if #copy == 0 then
     copy[1] = { kind = "show_text", text = "Hello!" }
   end
+  return copy
+end
+
+-- Copy current resolved steps into project.talkScripts (mod override on Save).
+function TalkIndex.cloneToProject(S, mapId, textId)
+  State.ensureProjectFields(S.project)
+  local key = mapId .. "/" .. textId
+  if S.project.talkScripts[key] then
+    TalkIndex.repairPlaceholderSteps(S, mapId, textId, S.project.talkScripts[key])
+    return S.project.talkScripts[key]
+  end
+  local steps, meta = TalkIndex.resolveSteps(S, mapId, textId)
+  local copy = editableStepsForClone(S, mapId, textId, steps, meta)
   local script = {
     mapId = mapId,
     textId = textId,
@@ -364,6 +500,355 @@ function TalkIndex.mapHasHooks(mapId)
   if next(info.hooks or {}) then return true end
   if next(info.scripts or {}) then return true end
   return false
+end
+
+-- ------- Advanced: resolve chain + file hits (Events inspector)
+
+local _scriptIndex = nil
+
+local function walkLuaFiles(rel, out)
+  if not (love and love.filesystem and love.filesystem.getDirectoryItems) then
+    return
+  end
+  local ok, items = pcall(love.filesystem.getDirectoryItems, rel)
+  if not ok or type(items) ~= "table" then return end
+  for _, name in ipairs(items) do
+    local path = (rel == "" or rel == ".") and name or (rel .. "/" .. name)
+    local info = love.filesystem.getInfo(path)
+    if info and info.type == "directory" then
+      walkLuaFiles(path, out)
+    elseif info and type(name) == "string" and name:sub(-4) == ".lua" then
+      out[#out + 1] = path
+    end
+  end
+end
+
+local function readSourceFile(rel)
+  if love and love.filesystem and love.filesystem.read then
+    local ok, body = pcall(love.filesystem.read, rel)
+    if ok and type(body) == "string" then return body end
+  end
+  local ModIO = require("ModIO")
+  local root = ModIO.repoRoot()
+  local sep = package.config:sub(1, 1)
+  local full = root .. sep .. rel:gsub("/", sep)
+  return ModIO.readText(full)
+end
+
+function TalkIndex.invalidateScriptIndex()
+  _scriptIndex = nil
+end
+
+-- Index data/scripts (+ a few engine files) by TEXT_* and coarse path hints.
+function TalkIndex.ensureScriptIndex()
+  if _scriptIndex then return _scriptIndex end
+  local byText, files = {}, {}
+  walkLuaFiles("data/scripts", files)
+  for _, path in ipairs({
+    "src/world/OverworldController.lua",
+    "src/script/Commands.lua",
+    "src/script/MapScripts.lua",
+  }) do
+    if love and love.filesystem and love.filesystem.getInfo
+        and love.filesystem.getInfo(path) then
+      files[#files + 1] = path
+    end
+  end
+  for _, path in ipairs(files) do
+    local body = readSourceFile(path)
+    if type(body) == "string" and #body > 0 and #body < 2.5e6 then
+      local lineNo = 1
+      for line in (body .. "\n"):gmatch("(.-)\n") do
+        for tid in line:gmatch("TEXT_[A-Z0-9_]+") do
+          local bucket = byText[tid]
+          if not bucket then
+            bucket = {}
+            byText[tid] = bucket
+          end
+          local last = bucket[#bucket]
+          if not (last and last.path == path and last.line == lineNo) then
+            bucket[#bucket + 1] = { path = path, line = lineNo }
+          end
+        end
+        lineNo = lineNo + 1
+      end
+    end
+  end
+  _scriptIndex = { byText = byText, files = files }
+  return _scriptIndex
+end
+
+local function findLineWith(rel, query)
+  if type(query) ~= "string" or query == "" then return 1 end
+  local body = readSourceFile(rel)
+  if type(body) ~= "string" then return 1 end
+  local lineNo = 1
+  for line in (body .. "\n"):gmatch("(.-)\n") do
+    if line:find(query, 1, true) then return lineNo end
+    lineNo = lineNo + 1
+  end
+  return 1
+end
+
+function TalkIndex.findScriptHits(mapId, textId)
+  local idx = TalkIndex.ensureScriptIndex()
+  local hits = {}
+  local seen = {}
+  local function add(path, line, why)
+    local key = path .. "\0" .. tostring(line)
+    if seen[key] then return end
+    seen[key] = true
+    hits[#hits + 1] = { path = path, line = line or 1, why = why }
+  end
+  if textId and idx.byText[textId] then
+    for _, h in ipairs(idx.byText[textId]) do
+      add(h.path, h.line, "TEXT_*")
+    end
+  end
+  if mapId then
+    local needle = mapId
+    for _, path in ipairs(idx.files or {}) do
+      if path:upper():find(needle, 1, true)
+          or path:upper():find(needle:gsub("_", ""), 1, true) then
+        add(path, findLineWith(path, needle), "map path")
+      end
+    end
+  end
+  table.sort(hits, function(a, b)
+    local am = (mapId and a.path:upper():find(mapId, 1, true)) and 0 or 1
+    local bm = (mapId and b.path:upper():find(mapId, 1, true)) and 0 or 1
+    if am ~= bm then return am < bm end
+    if a.why ~= b.why then return a.why == "TEXT_*" end
+    return a.path < b.path
+  end)
+  return hits
+end
+
+local function previewSteps(steps, limit)
+  limit = limit or 14
+  local lines = {}
+  for i, step in ipairs(steps or {}) do
+    if i > limit then
+      lines[#lines + 1] = "…"
+      break
+    end
+    local kind = step.kind or "raw"
+    local detail = step.note or step.text or step.item or step.flag
+      or step.species or step.trainer or step.name or step.label or ""
+    lines[#lines + 1] = string.format("%d. %s  %s", i, kind, tostring(detail))
+  end
+  if #lines == 0 then lines[1] = "(empty)" end
+  return lines
+end
+
+local function previewRows(rows, limit)
+  if type(rows) ~= "table" then return { tostring(rows) } end
+  return previewSteps(ModWriter.rowsToSteps(rows), limit)
+end
+
+local function modIdFromSession(S)
+  if S and S.path then
+    return S.path:match("[/\\]([^/\\]+)$")
+  end
+  return nil
+end
+
+-- Resolve chain for Events → Advanced. layers[1] is what currently wins.
+function TalkIndex.inspectTalk(S, mapId, textId)
+  local key = mapId .. "/" .. textId
+  local layers = {}
+  local hits = TalkIndex.findScriptHits(mapId, textId)
+
+  local owned = S.project and S.project.talkScripts and S.project.talkScripts[key]
+  if owned and type(owned.steps) == "table" then
+    local mid = modIdFromSession(S)
+    layers[#layers + 1] = {
+      id = "mod",
+      title = "Mod override (talkScripts)",
+      detail = "Wins at runtime · Save emits map_scripts talk",
+      form = "steps",
+      preview = previewSteps(owned.steps),
+      open = mid and {
+        kind = "mod", modId = mid, rel = "main.lua", query = textId,
+      } or nil,
+    }
+  end
+
+  TalkIndex.ensureScripts()
+  local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+  local talk = okMS and MapScripts.talkScript(mapId, textId) or nil
+  local baseTalk = okMS and MapScripts.baseTalk(mapId, textId) or nil
+  local talkSrc = okMS and MapScripts.talkSource and MapScripts.talkSource(mapId, textId)
+
+  if talk ~= nil then
+    local openHit = hits[1]
+    local open = openHit and {
+      kind = "repo", rel = openHit.path, line = openHit.line, query = textId,
+    } or nil
+    if type(talk) == "function" then
+      layers[#layers + 1] = {
+        id = "lua",
+        title = talkSrc and ("Lua talk [" .. tostring(talkSrc.modId) .. "]")
+          or "Lua talk handler",
+        detail = "Function body — not step rows",
+        form = "lua",
+        preview = {
+          "Lua function (edit in source file)",
+          openHit and ("→ " .. openHit.path .. ":" .. openHit.line) or "→ search data/scripts",
+        },
+        open = open,
+      }
+    elseif type(talk) == "table" then
+      local title = talkSrc
+        and ("map_scripts talk [" .. tostring(talkSrc.modId) .. "]")
+        or "Vanilla map_scripts talk"
+      layers[#layers + 1] = {
+        id = talkSrc and "mod_script" or "script",
+        title = title,
+        detail = string.format("%d row(s)", #talk),
+        form = "rows",
+        preview = previewRows(talk),
+        open = open,
+      }
+    end
+  end
+
+  if baseTalk ~= nil and baseTalk ~= talk then
+    local openHit = hits[1]
+    local open = openHit and {
+      kind = "repo", rel = openHit.path, line = openHit.line, query = textId,
+    } or nil
+    if type(baseTalk) == "function" then
+      layers[#layers + 1] = {
+        id = "base_lua",
+        title = "Engine base Lua talk",
+        detail = "Under mod override",
+        form = "lua",
+        preview = { "Base Lua function behind mod/map_scripts" },
+        open = open,
+      }
+    elseif type(baseTalk) == "table" then
+      layers[#layers + 1] = {
+        id = "base_script",
+        title = "Engine base talk rows",
+        detail = string.format("%d row(s) under override", #baseTalk),
+        form = "rows",
+        preview = previewRows(baseTalk),
+        open = open,
+      }
+    end
+  end
+
+  local obj = findObject(S, mapId, textId)
+  if obj and obj.item and obj.item ~= "0" and obj.item ~= 0 then
+    layers[#layers + 1] = {
+      id = "item",
+      title = "Engine item-ball",
+      detail = tostring(obj.item)
+        .. (obj.name and (" · " .. tostring(obj.name)) or ""),
+      form = "engine",
+      preview = {
+        "OverworldController item-ball branch",
+        "(no talk script → give item + itemsTaken)",
+      },
+      open = {
+        kind = "repo",
+        rel = "src/world/OverworldController.lua",
+        query = "item balls (object_event",
+      },
+    }
+  end
+  if obj and (obj.trainerClass or obj.trainer) then
+    layers[#layers + 1] = {
+      id = "trainer",
+      title = "Engine trainer",
+      detail = tostring(obj.trainerClass or obj.trainer)
+        .. " party " .. tostring(obj.trainerParty or 1),
+      form = "engine",
+      preview = { "OverworldController trainer engage branch" },
+      open = {
+        kind = "repo",
+        rel = "src/world/OverworldController.lua",
+        query = "generic trainers (object_event",
+      },
+    }
+  end
+  if obj and (obj.pokemon or obj.species) then
+    layers[#layers + 1] = {
+      id = "pokemon",
+      title = "Engine fixed wild",
+      detail = tostring(obj.pokemon or obj.species)
+        .. " Lv" .. tostring(obj.level or "?"),
+      form = "engine",
+      preview = { "OverworldController static wild branch" },
+      open = {
+        kind = "repo",
+        rel = "src/world/OverworldController.lua",
+        query = "static wild encounters",
+      },
+    }
+  end
+
+  local ptr = pointerEntry(S, mapId, textId)
+  if ptr then
+    if ptr.asm then
+      layers[#layers + 1] = {
+        id = "asm",
+        title = "ASM / engine text pointer",
+        detail = "May have a port under data/scripts",
+        form = "engine",
+        preview = { "text_pointers.asm entry", hits[1] and hits[1].path or "" },
+        open = hits[1] and {
+          kind = "repo", rel = hits[1].path, line = hits[1].line,
+        } or nil,
+      }
+    elseif ptr.mart or ptr.nurse or ptr.pc or ptr.cableClub then
+      local role = ptr.mart and "shop" or ptr.nurse and "nurse"
+        or ptr.pc and "pc" or "cable"
+      layers[#layers + 1] = {
+        id = role,
+        title = "Engine " .. role .. " interaction",
+        detail = "Hard-coded UI path",
+        form = "engine",
+        preview = { "Not a talk-script row list" },
+        open = {
+          kind = "repo",
+          rel = "src/world/OverworldController.lua",
+          query = role == "shop" and "Poké Mart" or role,
+        },
+      }
+    elseif ptr.text then
+      layers[#layers + 1] = {
+        id = "text",
+        title = "Plain dialog text",
+        detail = tostring(ptr.text),
+        form = "text",
+        preview = { resolveBody(S, ptr.text) },
+        open = nil,
+      }
+    end
+  end
+
+  if #layers == 0 then
+    layers[1] = {
+      id = "empty",
+      title = "No handler resolved",
+      detail = "Empty / unknown",
+      form = "empty",
+      preview = { "No talk script, object branch, or text pointer" },
+      open = hits[1] and {
+        kind = "repo", rel = hits[1].path, line = hits[1].line,
+      } or nil,
+    }
+  end
+
+  return {
+    mapId = mapId,
+    textId = textId,
+    key = key,
+    layers = layers,
+    hits = hits,
+  }
 end
 
 return TalkIndex

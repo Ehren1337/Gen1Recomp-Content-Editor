@@ -225,6 +225,7 @@ function BattleAnims.closePicker(S)
   if not S then return end
   S.battleAnimPicker = nil
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 -- opts: current, title, onPick(sourceId), excludeId?

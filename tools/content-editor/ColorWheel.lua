@@ -103,6 +103,7 @@ function ColorWheel.close(S)
   if not S then return end
   S.colorWheel = nil
   Kit.blur()
+  Kit.suppressMouseUntilUp()
 end
 
 -- opts: color={r,g,b}|{r,g,b as array}, title, onChange(rgb), onApply(rgb), onCancel()
