@@ -63,7 +63,9 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   )
   $excludeFiles = @(
     "*.gb", "*.gbc", "portable.txt", "*.zip", "*.tar.gz",
-    ".DS_Store", "Thumbs.db"
+    ".DS_Store", "Thumbs.db",
+    # Development-only smoke-test drivers are not part of portable builds.
+    "_check_driver.lua", "_syntax_check.lua"
   )
 
   foreach ($f in @(

@@ -19,6 +19,8 @@ local Items = require("Items")
 local Moves = require("Moves")
 local MoveEffects = require("MoveEffects")
 local Types = require("Types")
+local LayeredMap = require("LayeredMap")
+local MapBuilder = require("MapBuilder")
 local Maps = require("Maps")
 local Encounters = require("Encounters")
 local Dialog = require("Dialog")
@@ -57,8 +59,10 @@ local TABS = {
     tip = "Edit mods/<id>/manifest.json" },
   { id = "code",     label = "CODE",
     tip = "Browse and edit Lua files under mods/" },
+  { id = "mapbuilder", label = "MAP BUILDER",
+    tip = "Build 16x16 layered maps, custom tilesets, collision, and linked warps" },
   { id = "maps",     label = "MAPS",
-    tip = "Paint blocks, warps, objects, encounters, hidden items" },
+    tip = "Classic block and event editor for maps, objects, and encounters" },
   { id = "encounters", label = "ENCOUNTERS",
     tip = "Wild tables and Special gifts/battles (DVs, moves)" },
   { id = "dialog",   label = "DIALOG",
@@ -105,6 +109,7 @@ local PANELS = {
   anims = BattleAnims,
   effects = MoveEffects,
   types = Types,
+  mapbuilder = MapBuilder,
   maps = Maps,
   encounters = Encounters,
   dialog = Dialog,
@@ -391,6 +396,18 @@ function App.save()
   if not S or not S.path or not S.project then
     return say("No mod open")
   end
+  -- Layered maps are editor source. Compile them into normal map and tileset
+  -- records before ModWriter serializes the portable mod.
+  local okLayered, layeredResult, layeredErr = pcall(function()
+    return LayeredMap.compileProject(S)
+  end)
+  if not okLayered then
+    return say("Save failed: " .. tostring(layeredResult))
+  end
+  if layeredResult == false then
+    return say("Save failed: " .. tostring(layeredErr))
+  end
+
   -- Base ROM data so move/item/tileset patches emit diffs + prefer :patch.
   -- Terrain paint aliases project.tilesets into S.data.tilesets, so diff must
   -- compare against the pristine clone in _vanillaTilesetBackup.
@@ -631,6 +648,14 @@ function App.markDirty()
   History.noteDirty(S)
   S.dirty = true
   S._quitArmed = nil
+end
+
+function App.beginEditBatch()
+  if S then History.beginBatch(S) end
+end
+
+function App.endEditBatch()
+  if S then History.endBatch(S) end
 end
 
 function App.undo()
@@ -907,6 +932,13 @@ function App.update(dt)
         say("Import failed: " .. tostring(err))
       end
     end
+    return
+  end
+
+  -- Cancelling a working native picker is final. The manual path prompt is
+  -- only a fallback for systems where no native picker could be opened.
+  if status == "cancel" then
+    say("Open cancelled")
     return
   end
 
@@ -1222,6 +1254,10 @@ function App.keypressed(key)
       S.status = "Set destination cancelled"
       return
     end
+    if S.tab == "mapbuilder" and MapBuilder.keypressed
+        and MapBuilder.keypressed(S, key, App) then
+      return
+    end
     return App.close()
   end
   if key == "s" and ctrl then
@@ -1239,7 +1275,9 @@ function App.keypressed(key)
   -- Hovered scrollbar first; otherwise list selection / panel keys.
   if Kit.scrollKeypressed and Kit.scrollKeypressed(key) then return end
   if RegList.keypressed(S, key) then return end
-  if S.tab == "maps" and Maps.keypressed then
+  if S.tab == "mapbuilder" and MapBuilder.keypressed then
+    return MapBuilder.keypressed(S, key, App)
+  elseif S.tab == "maps" and Maps.keypressed then
     Maps.keypressed(S, key, App)
   elseif S.tab == "code" and Code.keypressed then
     Code.keypressed(S, key)
@@ -1257,7 +1295,14 @@ function App.mousepressed(x, y, button)
   end
 end
 
-function App.mousereleased() end
+function App.mousereleased(_, _, button)
+  -- A paint stroke may end between draw frames or after the pointer leaves
+  -- the canvas, so close its history transaction from the mouse event too.
+  if button == 1 and S and S._builderStroke then
+    App.endEditBatch()
+    S._builderStroke = nil
+  end
+end
 
 function App.wheelmoved(x, y)
   -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.

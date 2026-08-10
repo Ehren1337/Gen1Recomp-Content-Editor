@@ -66,6 +66,9 @@ function State.blankProject(id, name)
     type_matchups = {}, -- "ATK>DEF" -> multiplier (x10)
     maps = {},      -- id -> record (+ encounters)
     tilesets = {},  -- id -> record (imported or custom)
+    layeredMaps = {}, -- id -> native 16x16 layered map source
+    mapTileSources = {}, -- id -> imported 16x16 PNG tileset source
+    mapWarpNodes = {}, -- stable directed endpoints compiled to runtime warp indices
     text = {},      -- _LABEL -> string
     text_pointers = {}, -- mapLabel -> TEXT_* -> { text = "_LABEL" }
     trainers = {},  -- OPP_* -> record
@@ -106,6 +109,7 @@ function State.blankProject(id, name)
     specialEncounters = {},
     deleted = { pokemon = {}, items = {}, trainers = {} },
     nextMapIndex = 1000,
+    nextWarpNode = 1,
   }
 end
 
@@ -119,6 +123,9 @@ function State.ensureProjectFields(project)
   project.type_matchups = project.type_matchups or {}
   project.maps = project.maps or {}
   project.tilesets = project.tilesets or {}
+  project.layeredMaps = project.layeredMaps or {}
+  project.mapTileSources = project.mapTileSources or {}
+  project.mapWarpNodes = project.mapWarpNodes or {}
   project.text = project.text or {}
   project.text_pointers = project.text_pointers or {}
   project.trainers = project.trainers or {}
@@ -156,6 +163,7 @@ function State.ensureProjectFields(project)
   project.deleted.items = project.deleted.items or {}
   project.deleted.trainers = project.deleted.trainers or {}
   project.nextMapIndex = project.nextMapIndex or 1000
+  project.nextWarpNode = project.nextWarpNode or 1
   return project
 end
 

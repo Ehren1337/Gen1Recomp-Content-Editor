@@ -1,5 +1,9 @@
 # Tiled map editing (mod authoring)
 
+This is the optional legacy/export workflow. For standalone layered map
+authoring without Tiled, use **Map Builder** in the Content Editor and see
+[content-editor.md](content-editor.md#map-builder).
+
 `tools/tiled_export.py` turns the imported ROM cache into a
 [Tiled](https://www.mapeditor.org) workspace, so maps can be edited in a
 real map editor and exported back out as a mod. The original had no map

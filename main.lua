@@ -297,6 +297,9 @@ function love.load(args)
 
   -- Standalone content editor: authors maps / Pokemon / items as a mod.
   if contentEditorMode then
+    if love.window and love.window.setTitle then
+      love.window.setTitle("Gen1Recomp Content Editor")
+    end
     local version = os.getenv("POKEPORT_VERSION") or "red"
     require("src.core.GameVersion").set(version)
     require("src.import.CacheFs").mountVersion(version)

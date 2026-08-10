@@ -122,8 +122,8 @@ local function linuxPickFile(title, filter)
     if st == "cancel" then sawCancel = true end
   end
 
-  -- AppImage/host mismatch often looks like cancel with no window. Caller
-  -- should offer a path paste box for both cancel and unavailable.
+  -- Preserve cancellation as a distinct result. The caller only falls back
+  -- to manual path entry when no picker backend is available.
   if sawCancel then return nil, "cancel" end
   return nil, "unavailable"
 end
@@ -496,6 +496,41 @@ function ModIO.copyFile(src, dest)
   if not out then return false, "cannot write " .. tostring(dest) end
   out:write(data)
   out:close()
+  return true
+end
+
+-- Map Builder owns one transform recipe. Keep the manifest wiring automatic
+-- so the generated mod can derive base-game pixels from the player's cache.
+function ModIO.setMapBuilderTransform(modDir, relative)
+  if type(modDir) ~= "string" then return false, "no mod directory" end
+  local path = join(modDir, "manifest.json")
+  local body, readErr = ModIO.readText(path)
+  if not body then return false, readErr end
+  local manifest, decodeErr = Json.decode(body)
+  if not manifest then return false, decodeErr end
+
+  local owned = "mapbuilder_transforms.lua"
+  local current = manifest.assets_transforms
+  if relative and current and current ~= owned then
+    return false, "Map Builder cannot replace the existing assets_transforms file "
+      .. tostring(current)
+  end
+  if relative then
+    manifest.assets_transforms = owned
+  elseif current == owned then
+    manifest.assets_transforms = nil
+  end
+  return ModIO.writeText(path, ModIO.encodeManifest(manifest))
+end
+
+function ModIO.removeMapBuilderTransform(modDir)
+  local ok, err = ModIO.setMapBuilderTransform(modDir, nil)
+  if not ok then return false, err end
+  local path = join(modDir, "mapbuilder_transforms.lua")
+  if ModIO.exists(path) then
+    local removed, removeErr = os.remove(path)
+    if not removed then return false, removeErr end
+  end
   return true
 end
 

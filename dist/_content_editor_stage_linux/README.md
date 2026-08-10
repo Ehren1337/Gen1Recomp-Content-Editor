@@ -3,8 +3,7 @@
 Author **mods** for Gen1Recomp: maps, Pokémon, trainers, dialog, items, moves,
 palettes, and talk scripts. Edits live under `mods/<id>/` — never the ROM cache.
 
-Deep reference: [docs/content-editor.md](../../docs/content-editor.md) ·
-Tiled maps: [docs/tiled-map-editing.md](../../docs/tiled-map-editing.md)
+Deep reference: [docs/content-editor.md](docs/content-editor.md)
 
 ---
 
@@ -75,7 +74,8 @@ sprites). Do **not** ship ROM files (`.gb`) or `data/generated` /
 | **Project** | Create / open / save; game data source; boot & constants; Validate / Playtest |
 | **Manifest** | `manifest.json` (name, version, deps) |
 | **Code** | Browse / edit Lua under `mods/` |
-| **Maps** | Paint blocks, warps, NPCs, signs, encounters; Import TMX |
+| **Map Builder** | Native 16×16 layered maps, custom PNG tilesets, collision, animations, and guided warps |
+| **Maps** | Classic blocks plus NPCs, signs, encounters, connections, and optional TMX import |
 | **Dialog** | NPC / sign text (`TEXT_*`) |
 | **Trainers** | Parties, money, battle pics, palette |
 | **AI** | Trainer AI classes |
@@ -90,25 +90,70 @@ sprites). Do **not** ship ROM files (`.gb`) or `data/generated` /
 
 ---
 
-## Maps (short)
+## Native layered maps
 
-- One map → **one tileset**. The bottom dock paints that tileset’s **blocks**
-  (Gen1 / Tiled: tile = block).
-- Tools: paint / erase / pick / pan, plus warp · object · sign · trainer.
-- **SGB palette** — Basics field or click the canvas swatches to open the
-  palette picker (previews tint with the map palette).
-- **Sprite picker** — Objects section; **More…** pages wrap around.
-- For full world view, collision shapes, and blockset composition, use the
-  [Tiled fork](https://github.com/bryanthaboi/tiled_gen1recomp) +
-  `tiled_export.py` (see tiled-map-editing docs).
+Use **Map Builder** for new map work. It is built into the standalone editor;
+Tiled and changes to the Gen1Recomp workspace are not required.
 
-### TMX import
+1. Select a game map and click **Convert**, or click **+ New** and choose the
+   custom map ID, size, and starting game tileset.
+2. Click **Import PNG** to add any tileset arranged as 16×16 tiles. A map can
+   paint from several imported tilesets.
+3. Add and reorder layers. Layers are exported by default; turn **Out** off to
+   keep a reference layer in the project without putting it in the game.
+4. Paint collision and warps, then Save.
+
+The editor keeps the original layer data in `editor_project.lua`. Save also
+generates runtime blocks, collision lists, map records, and a
+`mapbuilder_transforms.lua` recipe. On first game load, that recipe composes
+the map atlas and animation frames from the player's own imported game art
+plus the custom PNGs in the mod. The shareable mod is self-contained, carries
+no copied game graphics, and runs on an unchanged Gen1Recomp installation.
+
+Paint tools are **Pencil**, **Eraser**, **Fill**, **Rectangle**, **Picker**,
+**Select**, **Collision**, **Warp**, and **Pan**. Select supports several
+rectangular ranges: hold Shift while dragging to add a range, then use
+**Clear tiles** or press Delete to erase every selected range on the active
+layer.
+
+Tileset color mode is an enum:
+
+- **True color** preserves all PNG colors and is the default for imported art.
+- **Palette** treats the PNG as four-shade graphics and applies the map palette.
+
+Animations use consecutive tiles in an imported PNG. Select the first tile,
+choose the frame count, and set the frame time in milliseconds. A composed
+cell may contain one animated source tile.
+
+### Warps without indices
+
+Choose **Warps** and select a link type:
+
+- **Two-way** — source and destination return to each other.
+- **One-way** — the destination is arrival-only and does not immediately fire.
+- **Custom return** — the destination returns to a third map or cell.
+
+Click the source cell, select the destination map from the left list, and
+click the arrival cell. Custom return asks for one final cell. The editor owns
+map IDs and destination indices and rebuilds them safely when endpoints move.
+
+Map dimensions are 16×16 cells and must be even because the game stores maps
+as 2×2-cell blocks. Resizing preserves the top-left area and removes only
+warps, NPCs, or signs that end up outside the smaller map.
+
+Use **Maps** for NPCs, signs, trainers, encounters, connections, palettes, and
+other classic map details. Its 32×32 block painter remains available for old
+projects.
+
+### Optional TMX import
 
 **Import TMX** on the Maps tab, or:
 
 ```sh
 python tools/tmx_import.py path/to/maps --mod mods/my_content
 ```
+
+TMX is retained as a migration path; it is not needed by Map Builder.
 
 ---
 
@@ -142,7 +187,8 @@ python tools/tmx_import.py path/to/maps --mod mods/my_content
 | Esc | Close picker / quit editor |
 | [ / ] or Tab | Previous / next tab |
 | Space + drag | Pan map while painting |
-| Mouse wheel | Zoom map (or scroll block dock) |
+| Mouse wheel over a list | Scroll maps, tilesets, layers, or warps |
+| Mouse wheel over the classic map | Zoom map or scroll the block dock |
 
 ---
 
