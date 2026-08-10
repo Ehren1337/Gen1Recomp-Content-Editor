@@ -3212,7 +3212,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
 
   local btnH = 24 * s
   local btnGap = 3 * s
-  local footerH = btnH * 3 + btnGap * 2 + 6 * s
+  local footerH = btnH * 4 + btnGap * 3 + 6 * s
   local listY = cy + qh + 8 * s
   local listH = py + ph - pad - listY - footerH
   local rowH = 32 * s
@@ -3262,7 +3262,7 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
 
   local focusId = p.focus or map.tileset or list[1]
   local by = listY + listH + 6 * s
-  -- Three footer actions: Clone (RM slot), Replace, New from PNG.
+  -- Footer: Clone / Replace / New from PNG / Edit in GFX.
   local row1 = btnH
   if Kit.button(cx, by, listW, row1, "Clone for this map", {
       kind = "good",
@@ -3292,6 +3292,17 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
       tooltip = "Register a new tileset from a PNG sheet",
     }) then
     importTilesetPng(S, App, nil, { createNew = true, rebuildBlocks = true })
+  end
+  if Kit.button(cx, by + (row1 + btnGap) * 3, listW, row1, "Edit in GFX", {
+      kind = "ghost",
+      tooltip = "Open flags + block editor for this tileset",
+    }) and focusId then
+    S.tab = "gfx"
+    S.gfxMode = "tilesets"
+    S.tilesetEditId = focusId
+    S.gfxTilesetPane = "flags"
+    closeTilesetPicker()
+    return
   end
 
   Kit.text("micro", Kit.ellipsize("micro", tostring(focusId or ""), prevW - 8 * s),
@@ -3962,9 +3973,10 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
   local findW = 40 * s
   local assignW = 52 * s
   local cloneW = 48 * s
+  local gfxW = 40 * s
   local btnY = narrow and (headerY + 22 * s) or headerY
   local btnX = narrow and (dx + pad)
-    or (dx + dw - pad - findW - assignW - cloneW - 8 * s)
+    or (dx + dw - pad - findW - assignW - cloneW - gfxW - 12 * s)
   if Kit.button(btnX, btnY, cloneW, 20 * s, "Clone", {
       kind = "good",
       tooltip = "Duplicate tileset for this map (RPG Maker–style local Passage)",
@@ -3987,6 +3999,15 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
       kind = "ghost", tooltip = "Search / preview tilesets to assign",
     }) then
     openTilesetPicker(S)
+  end
+  if Kit.button(btnX + cloneW + assignW + findW + 12 * s, btnY, gfxW, 20 * s, "GFX", {
+      kind = "ghost",
+      tooltip = "Open tileset editor (flags + blocks) on the GFX tab",
+    }) then
+    S.tab = "gfx"
+    S.gfxMode = "tilesets"
+    S.tilesetEditId = active
+    S.gfxTilesetPane = "flags"
   end
 
   -- Footer: 2x2 when narrow so labels stay readable.
