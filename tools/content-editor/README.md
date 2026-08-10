@@ -3,6 +3,12 @@
 LÖVE app that authors Gen1Recomp mods: maps, dialog, trainers, items,
 Pokémon, and simple quest scripts.
 
+The **Map Builder** tab provides standalone 16×16 layered map authoring,
+custom PNG tilesets, collision, animations, safe resizing, and guided warps.
+Editable layers stay in `editor_project.lua`; Save generates the normal map
+and tileset records plus a legal asset-transform recipe inside the same
+shareable mod.
+
 ```sh
 love . --content-editor
 love . --content-editor --mod mods/my_content

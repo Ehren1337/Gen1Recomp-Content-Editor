@@ -137,6 +137,12 @@ local function renameMapId(S, map, newId, App)
   S.project.maps[oldId] = nil
   map.id = newId
   S.project.maps[newId] = map
+  -- Keep native layered source and stable warp endpoints aligned with the
+  -- public map id used by the generated registry record.
+  local okLayered, LayeredMap = pcall(require, "LayeredMap")
+  if okLayered and LayeredMap.renameMap then
+    LayeredMap.renameMap(S.project, oldId, newId)
+  end
   S.mapId = newId
   if S.data and S.data.maps then
     if S.data.maps[oldId] == map then
@@ -5769,12 +5775,26 @@ function Maps.draw(S, x, y, w, h, App)
     end
     map = mutate()
     map.warps, map.objects, map.signs = {}, {}, {}
+    if S.project.layeredMaps and S.project.layeredMaps[mid] then
+      local okLayered, LayeredMap = pcall(require, "LayeredMap")
+      if okLayered then
+        local drop = {}
+        for id, node in pairs(S.project.mapWarpNodes or {}) do
+          if node.map == mid then drop[#drop + 1] = id end
+        end
+        for _, id in ipairs(drop) do
+          LayeredMap.removeWarpNode(S.project, id)
+        end
+      end
+    end
     MapLoader.invalidate(map.id)
     App.markDirty()
   end
   if owned and Kit.button(px + 10 * s, fy + 30 * s, propW - 20 * s, 26 * s, "Delete map",
       { kind = "danger" }) then
     local mid = map.id
+    local okLayered, LayeredMap = pcall(require, "LayeredMap")
+    if okLayered then LayeredMap.removeMap(S.project, mid) end
     S.project.maps[mid] = nil
     if S._vanillaMapBackup and S._vanillaMapBackup[mid] then
       S.data.maps[mid] = S._vanillaMapBackup[mid]

@@ -229,6 +229,7 @@ function History.clear(S)
   S.undoStack = {}
   S.redoStack = {}
   S._histBaseline = S.project and deepCopy(S.project) or nil
+  S._histBatch = nil
   S._histDirtyFrame = false
   S._histLastPush = nil
   S._histLastTab = nil
@@ -245,6 +246,12 @@ end
 
 function History.noteDirty(S)
   if not (S and S.project) then return end
+  -- A batch keeps one snapshot for the whole gesture. This avoids copying a
+  -- large layered map on every frame while the mouse is held down.
+  if S._histBatch then
+    S._histBatch.dirty = true
+    return
+  end
   if S._histDirtyFrame then return end
   S._histDirtyFrame = true
 
@@ -273,9 +280,38 @@ end
 
 function History.endFrame(S)
   if not (S and S.project) then return end
+  if S._histBatch then return end
   if S._histDirtyFrame or not S._histBaseline then
     S._histBaseline = deepCopy(S.project)
   end
+end
+
+function History.beginBatch(S)
+  if not (S and S.project) or S._histBatch then return false end
+  S._histBatch = {
+    baseline = deepCopy(S._histBaseline or S.project),
+    dirty = false,
+  }
+  return true
+end
+
+function History.endBatch(S)
+  if not S then return false end
+  local batch = S._histBatch
+  S._histBatch = nil
+  if not (batch and batch.dirty and S.project) then return false end
+
+  S.undoStack = S.undoStack or {}
+  S.undoStack[#S.undoStack + 1] = batch.baseline
+  while #S.undoStack > MAX_STACK do
+    table.remove(S.undoStack, 1)
+  end
+  S.redoStack = {}
+  S._histLastPush = now()
+  S._histLastTab = S.tab
+  S._histBaseline = deepCopy(S.project)
+  S._histDirtyFrame = false
+  return true
 end
 
 function History.canUndo(S)
@@ -287,6 +323,7 @@ function History.canRedo(S)
 end
 
 function History.undo(S)
+  History.endBatch(S)
   if not History.canUndo(S) then return false end
   S.redoStack = S.redoStack or {}
   S.redoStack[#S.redoStack + 1] = deepCopy(S.project)
@@ -296,6 +333,7 @@ function History.undo(S)
 end
 
 function History.redo(S)
+  History.endBatch(S)
   if not History.canRedo(S) then return false end
   S.undoStack = S.undoStack or {}
   S.undoStack[#S.undoStack + 1] = deepCopy(S.project)

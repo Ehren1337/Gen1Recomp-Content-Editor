@@ -28,9 +28,12 @@ Then on **Project** → **GAME DATA**:
 - **Import ROM** — choose a clean US Red/Blue/Yellow `.gb` (cache goes to the LÖVE save directory, not this pack), or
 - **Use fixtures** — keep stub data for light authoring.
 
-**Project** → Open `mods/New_PokemonTest`, or **Create** a new mod → edit → **Save**.
+**Project** → Open `mods/New_PokemonTest`, or **Create** a new mod. Use
+**Map Builder** to convert a game map or create a custom map, then **Save**.
 
-Save writes `mods/<id>/editor_project.lua` and `main.lua`.
+Save writes editable layers to `mods/<id>/editor_project.lua`, the runtime
+records to `main.lua`, and a transform recipe that derives flattened map art
+from each player's own imported cache on first load.
 
 ## Validate / Playtest
 
