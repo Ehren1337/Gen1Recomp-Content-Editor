@@ -1,5 +1,6 @@
 -- Dialog tab: browse every TEXT_* / string for a map (vanilla + project),
 -- edit bodies, emit text:override + text_pointers:patch on Save.
+-- Gold: pins come from object/bgEvent scriptKey → writetext keys (bank:addr).
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -7,9 +8,52 @@ local State = require("State")
 local Search = require("Search")
 local RegList = require("RegList")
 local UiPreview = require("UiPreview")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Dialog = {}
+
+-- Gen2 script ops that carry a text pointer (data/generated/text.lua key).
+local GEN2_TEXT_OPS = {
+  writetext = true,
+  jumptext = true,
+  jumptextfaceplayer = true,
+  farwritetext = true,
+}
+
+local function scriptCommands(S, scriptKey)
+  if not scriptKey or scriptKey == "" then return nil end
+  local proj = S.project and S.project.scripts and S.project.scripts[scriptKey]
+  if type(proj) == "table" then return proj end
+  local data = S.data and S.data.scripts and S.data.scripts[scriptKey]
+  if type(data) == "table" then return data end
+  return nil
+end
+
+-- Collect text keys reachable from a script (follow if*/sjump/scall lightly).
+local function collectGen2TextKeys(S, scriptKey, out, seen, depth)
+  out = out or {}
+  seen = seen or {}
+  depth = depth or 0
+  if not scriptKey or scriptKey == "" or seen[scriptKey] or depth > 5 then
+    return out
+  end
+  seen[scriptKey] = true
+  local cmds = scriptCommands(S, scriptKey)
+  if type(cmds) ~= "table" then return out end
+  for _, cmd in ipairs(cmds) do
+    if type(cmd) == "table" then
+      local tid = cmd.text
+      if type(tid) == "string" and tid ~= "" and GEN2_TEXT_OPS[cmd.op] then
+        out[#out + 1] = tid
+      end
+      if type(cmd.script) == "string" then
+        collectGen2TextKeys(S, cmd.script, out, seen, depth + 1)
+      end
+    end
+  end
+  return out
+end
 
 -- Truncate on UTF-8 codepoint boundaries (byte sub() splits POKeMON / etc).
 local function utf8Prefix(s, maxBytes)
@@ -63,9 +107,12 @@ local function pointerTable(S, label)
   return proj, base
 end
 
--- Resolve TEXT_* -> string id (_FooText) using project override, then vanilla.
+-- Resolve pin id → string id. Gen1: TEXT_* via text_pointers. Gold: id IS the key.
 local function resolveStringId(S, mapId, textId)
   if not textId then return nil end
+  if Generation.isGen2(S) then
+    return textId, State.mapLabel(S, mapId), false
+  end
   local label = State.mapLabel(S, mapId)
   local proj, base = pointerTable(S, label)
   if proj and proj[textId] and proj[textId].text then
@@ -93,9 +140,12 @@ end
 local function collectPins(S, mapId)
   local map = mapRecord(S, mapId)
   local pins, seen = {}, {}
-  local function add(kind, index, textId, label, x, y)
-    if not textId or seen[textId] then return end
-    seen[textId] = true
+  -- Dedupe by kind+index+textId so two NPCs never collapse into one pin.
+  local function add(kind, index, textId, label, x, y, scriptKey)
+    if not textId or textId == "" then return end
+    local pinKey = string.format("%s:%s:%s", tostring(kind), tostring(index), textId)
+    if seen[pinKey] then return end
+    seen[pinKey] = true
     local strId = select(1, resolveStringId(S, mapId, textId))
     local body = select(1, resolveBody(S, strId))
     if type(body) ~= "string" then body = "" end
@@ -105,7 +155,50 @@ local function collectPins(S, mapId)
       kind = kind, index = index, textId = textId,
       label = label, x = x, y = y,
       strId = strId, preview = preview,
+      scriptKey = scriptKey,
+      pinKey = pinKey,
     }
+  end
+
+  if Generation.isGen2(S) then
+    if map then
+      for i, obj in ipairs(map.objects or {}) do
+        local sk = obj.scriptKey
+        local keys = collectGen2TextKeys(S, sk)
+        local baseLabel = string.format("NPC #%d %s", obj.index or i, obj.sprite or "")
+        if #keys == 0 then
+          -- Still list the NPC so multi-event maps aren't "missing" dialog.
+          if type(sk) == "string" and sk ~= "" then
+            add("object", i, sk, baseLabel .. " (no text)", obj.x, obj.y, sk)
+          end
+        else
+          for ti, tid in ipairs(keys) do
+            local label = (#keys > 1)
+              and string.format("%s · text %d", baseLabel, ti)
+              or baseLabel
+            add("object", i, tid, label, obj.x, obj.y, sk)
+          end
+        end
+      end
+      for i, ev in ipairs(map.bgEvents or {}) do
+        local sk = ev.scriptKey
+        local keys = collectGen2TextKeys(S, sk)
+        local baseLabel = string.format("BG (%d,%d)", ev.x or 0, ev.y or 0)
+        if #keys == 0 then
+          if type(sk) == "string" and sk ~= "" then
+            add("bg", i, sk, baseLabel .. " (no text)", ev.x, ev.y, sk)
+          end
+        else
+          for ti, tid in ipairs(keys) do
+            local label = (#keys > 1)
+              and string.format("%s · text %d", baseLabel, ti)
+              or baseLabel
+            add("bg", i, tid, label, ev.x, ev.y, sk)
+          end
+        end
+      end
+    end
+    return pins
   end
 
   if map then
@@ -160,6 +253,14 @@ local function ensureOwnedMap(S, mapId)
     for k, v in pairs(s) do sc[k] = v end
     copy.signs[i] = sc
   end
+  if type(map.bgEvents) == "table" then
+    copy.bgEvents = {}
+    for i, e in ipairs(map.bgEvents) do
+      local ec = {}
+      for k, v in pairs(e) do ec[k] = v end
+      copy.bgEvents[i] = ec
+    end
+  end
   copy._isNew = false
   S.project.maps[mapId] = copy
   return copy
@@ -169,6 +270,15 @@ end
 local function ensureEditable(S, mapId, textId, App)
   State.ensureProjectFields(S.project)
   local strId, label = resolveStringId(S, mapId, textId)
+  if Generation.isGen2(S) then
+    -- Gold: text ids are bank:addr keys; Save emits text:override only.
+    if strId and S.project.text[strId] == nil then
+      local body = select(1, resolveBody(S, strId))
+      S.project.text[strId] = body
+    end
+    App.markDirty()
+    return strId
+  end
   S.project.text_pointers[label] = S.project.text_pointers[label] or {}
   if not S.project.text_pointers[label][textId] then
     local base = S.data and S.data.text_pointers and S.data.text_pointers[label]
@@ -265,7 +375,7 @@ function Dialog.draw(S, x, y, w, h, App)
   S.dialogMapOffset = Kit.scrollbar(mapScrollX, listY + 8 * s, mapScrollW,
     mapScrollH, S.dialogMapOffset or 0, #maps, perMap)
 
-  -- pins / all TEXT_* for map
+  -- pins / all TEXT_* (Gen1) or script writetext keys (Gold)
   local px = x + col1 + 12 * s
   Kit.caption(px, y, "DIALOG")
   local pinQ, pinQCh = Search.field(S, "dialogPinQuery", px, qy, col2, qh, "search dialog...")
@@ -274,6 +384,7 @@ function Dialog.draw(S, x, y, w, h, App)
   local pins = Search.filterItems(collectPins(S, S.dialogMapId), pinQ, function(p)
     return table.concat({
       p.textId or "", p.label or "", p.preview or "", p.strId or "",
+      p.scriptKey or "",
     }, " ")
   end)
   local pinRowH = 34 * s
@@ -296,6 +407,7 @@ function Dialog.draw(S, x, y, w, h, App)
     if Kit.row(pinScrollX, ry, pinRowW, pinRowH, on, PAL.green) then
       pinNav.activate()
       S.dialogTextId = pin.textId
+      S.dialogScriptKey = pin.scriptKey
       -- selection only -- do not clone / invent Hello!
     end
     local tw = pinRowW - 12 * s
@@ -326,12 +438,27 @@ function Dialog.draw(S, x, y, w, h, App)
   local strId, label = resolveStringId(S, S.dialogMapId, S.dialogTextId)
   local body, ownedText = resolveBody(S, strId)
   if type(body) ~= "string" then body = "" end
+  local selPin = nil
+  for _, p in ipairs(pins) do
+    if p.textId == S.dialogTextId then selPin = p; break end
+  end
   Kit.text("small", tostring(S.dialogTextId or ""), ex + 12 * s, listY + 12 * s, PAL.caption)
-  Kit.text("micro", string.format("%s  |  %s%s",
-      tostring(strId), tostring(label), ownedText and "" or "  (vanilla)"),
-    ex + 12 * s, listY + 32 * s, PAL.faint)
+  if Generation.isGen2(S) then
+    Kit.text("micro", string.format("%s%s%s",
+        ownedText and "mod override" or "vanilla",
+        selPin and selPin.scriptKey and ("  |  script " .. selPin.scriptKey) or "",
+        selPin and selPin.label and ("  |  " .. selPin.label) or ""),
+      ex + 12 * s, listY + 32 * s, PAL.faint)
+  else
+    Kit.text("micro", string.format("%s  |  %s%s",
+        tostring(strId), tostring(label), ownedText and "" or "  (vanilla)"),
+      ex + 12 * s, listY + 32 * s, PAL.faint)
+  end
 
-  Kit.text("micro", "Use \\n for new line, \\f for page break, {PLAYER} for name",
+  Kit.text("micro",
+    Generation.isGen2(S)
+      and "Use \\n for new line, \\f for page break, \\v for A-wait, {PLAYER} for name"
+      or "Use \\n for new line, \\f for page break, {PLAYER} for name",
     ex + 12 * s, listY + 52 * s, PAL.muted)
   local display = body:gsub("\n", "\\n"):gsub("\f", "\\f"):gsub("\v", "\\v")
   local fieldW = math.max(40 * s, col3 - 24 * s)
@@ -402,24 +529,33 @@ function Dialog.draw(S, x, y, w, h, App)
     S.tab = "events"
     S.eventsMode = "scripts"
     S.eventMapId = S.dialogMapId
-    S.eventScriptKey = (S.dialogMapId or "") .. "/" .. (S.dialogTextId or "")
+    if Generation.isGen2(S) then
+      local sk = (selPin and selPin.scriptKey) or S.dialogScriptKey
+      S.dialogScriptKey = sk
+      S.eventScriptKey = (S.dialogMapId or "") .. "/"
+        .. (sk or S.dialogTextId or "")
+    else
+      S.eventScriptKey = (S.dialogMapId or "") .. "/" .. (S.dialogTextId or "")
+    end
   end
   if ownedText and Kit.button(ex + 12 * s, by + 38 * s, 120 * s, 28 * s, "Revert",
       { kind = "danger" }) then
     if strId then S.project.text[strId] = nil end
-    local lbl = State.mapLabel(S, S.dialogMapId)
-    if S.project.text_pointers[lbl] then
-      S.project.text_pointers[lbl][S.dialogTextId] = nil
-      if not next(S.project.text_pointers[lbl]) then
-        S.project.text_pointers[lbl] = nil
+    if not Generation.isGen2(S) then
+      local lbl = State.mapLabel(S, S.dialogMapId)
+      if S.project.text_pointers[lbl] then
+        S.project.text_pointers[lbl][S.dialogTextId] = nil
+        if not next(S.project.text_pointers[lbl]) then
+          S.project.text_pointers[lbl] = nil
+        end
       end
     end
     App.markDirty()
   end
 
-  -- Mart / shop stock on this TEXT_* (same pointer.mart Maps Shop role uses).
+  -- Mart / shop stock on this TEXT_* (Gen1 only; Gold marts are script-driven).
   local ptrEntry = nil
-  do
+  if not Generation.isGen2(S) then
     local lbl = State.mapLabel(S, S.dialogMapId)
     local proj = S.project.text_pointers and S.project.text_pointers[lbl]
     if proj and proj[S.dialogTextId] then
@@ -431,18 +567,27 @@ function Dialog.draw(S, x, y, w, h, App)
   end
   local martY = by + 72 * s
   local isShop = ptrEntry and type(ptrEntry.mart) == "table"
-  if isShop then
+  if Generation.isGen2(S) then
+    Kit.text("micro",
+      "Gold: text:override for this key. Shop stock → SHOPS tab (MART_*).",
+      ex + 12 * s, martY, PAL.faint)
+  elseif isShop then
     Kit.text("micro", string.format("Shop stock (%d)", #ptrEntry.mart),
       ex + 12 * s, martY, PAL.caption)
     martY = martY + 16 * s
     local items = {}
     local seen = {}
-    for id in pairs(S.project.items or {}) do
-      seen[id] = true; items[#items + 1] = id
+    local function consider(id, rec)
+      if seen[id] or not State.isItemRecord(id, rec) then return end
+      seen[id] = true
+      items[#items + 1] = id
+    end
+    for id, rec in pairs(S.project.items or {}) do
+      consider(id, rec)
     end
     if S.data and S.data.items then
-      for id in pairs(S.data.items) do
-        if not seen[id] then seen[id] = true; items[#items + 1] = id end
+      for id, rec in pairs(S.data.items) do
+        consider(id, rec)
       end
     end
     table.sort(items)
@@ -508,6 +653,22 @@ function Dialog.draw(S, x, y, w, h, App)
   Kit.text("micro",
     "Shows vanilla dialog. First edit clones into the mod (Save = text:override).",
     ex + 12 * s, listY + listH - 28 * s, PAL.faint)
+end
+
+-- Maps → Dialog: first writetext key for a Gen2 scriptKey (or nil).
+function Dialog.firstTextForScript(S, scriptKey)
+  if not Generation.isGen2(S) then return nil end
+  local keys = collectGen2TextKeys(S, scriptKey)
+  return keys[1]
+end
+
+function Dialog.openMap(S, mapId, textId)
+  S.tab = "dialog"
+  S.dialogMapId = mapId
+  if textId then
+    S.dialogTextId = textId
+    S.dialogPinOffset = 0
+  end
 end
 
 return Dialog

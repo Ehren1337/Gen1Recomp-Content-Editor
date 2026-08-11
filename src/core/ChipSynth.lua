@@ -115,40 +115,104 @@ local function snapTicks(ticks)
   return math.floor((ticks * 1470 + 256) / 512)
 end
 
-local cachedProgramFile
+local cachedBankKey
 local cachedBanks
+
+-- Gen1/Gen2 both publish programFile = "assets/generated/audio/programs.bin"
+-- under mountVersion, so the cache key must include bankOrder (and any
+-- NX prefix) — otherwise switching Red↔Gold keeps the wrong ROM banks and
+-- Gold songs fail with "uncached audio bank 58".
+local function bankCacheKey(audio)
+  local parts = { tostring(audio.programFile or "") }
+  if audio.programPrefix and audio.programPrefix ~= "" then
+    parts[#parts + 1] = tostring(audio.programPrefix)
+  end
+  if type(audio.bankOrder) == "table" then
+    for _, bank in ipairs(audio.bankOrder) do
+      parts[#parts + 1] = tostring(bank)
+    end
+  end
+  return table.concat(parts, "\0")
+end
+
+-- Read programs.bin, rejecting undersized blobs.  The LOVE save dir often
+-- keeps a leftover Red `assets/generated/audio/programs.bin` (3 banks) beside
+-- `gold/…` (6 banks); accepting the short file makes Gold music look like a
+-- mysterious bank miss while cries that shared a warm cache still worked.
+local function readProgramBytes(audio)
+  local file = audio and audio.programFile
+  if type(file) ~= "string" or file == "" then
+    return nil, "no programFile"
+  end
+  local need = 0
+  if type(audio.bankOrder) == "table" then
+    need = #audio.bankOrder * 0x4000
+  end
+  local candidates = {}
+  local function add(path)
+    if type(path) == "string" and path ~= "" then
+      candidates[#candidates + 1] = path
+    end
+  end
+  add(audio.programPrefix and (audio.programPrefix .. file) or nil)
+  add(file)
+  local okGv, gvPrefix = pcall(function()
+    return require("src.core.GameVersion").cachePrefix()
+  end)
+  if okGv and gvPrefix and gvPrefix ~= "" then
+    add(gvPrefix .. file)
+  end
+
+  local lastErr
+  for _, path in ipairs(candidates) do
+    local raw, err = love.filesystem.read(path)
+    if type(raw) == "string" and #raw > 0 then
+      if need == 0 or #raw >= need then
+        return raw
+      end
+      lastErr = string.format("%s too small (%d < %d)", path, #raw, need)
+    elseif err then
+      lastErr = tostring(err)
+    end
+  end
+
+  local ok, bytes = pcall(function()
+    return require("src.import.CacheFs").readActive(file)
+  end)
+  if ok and type(bytes) == "string" and #bytes > 0 then
+    if need == 0 or #bytes >= need then return bytes end
+    lastErr = string.format("CacheFs active too small (%d < %d)", #bytes, need)
+  elseif not ok then
+    lastErr = tostring(bytes)
+  elseif not lastErr then
+    lastErr = "CacheFs miss"
+  end
+  return nil, lastErr
+end
 
 local function loadBanks(data)
   local audio = data.audio
-  if cachedProgramFile == audio.programFile and cachedBanks then
+  local key = bankCacheKey(audio)
+  if cachedBankKey == key and cachedBanks then
     return cachedBanks
   end
-  local raw, readError
-  -- The chip worker runs in a separate Lua state without the NX overlay;
-  -- ChipAudio hands it the versioned cache prefix explicitly.  On the main
-  -- thread the NX overlay (or desktop mountVersion) makes the plain read
-  -- resolve, so no platform branching belongs here.
-  local prefix = audio.programPrefix
-  if prefix and prefix ~= "" then
-    raw, readError = love.filesystem.read(prefix .. audio.programFile)
-  end
+  local raw, readError = readProgramBytes(audio)
   if not raw then
-    raw, readError = love.filesystem.read(audio.programFile)
+    error("could not read sound programs: " .. tostring(readError))
   end
-  if not raw then error("could not read sound programs: " .. tostring(readError)) end
   local banks = {}
   for index, bank in ipairs(audio.bankOrder) do
     local first = (index - 1) * 0x4000 + 1
     banks[bank] = raw:sub(first, first + 0x3FFF)
   end
-  cachedProgramFile, cachedBanks = audio.programFile, banks
+  cachedBankKey, cachedBanks = key, banks
   return banks
 end
 
 -- drop the single-slot bank cache; the worker keeps its own copy of this
 -- module's state, so ChipAudio.invalidate must reach it via a worker message
 function ChipSynth.invalidateBanks()
-  cachedProgramFile, cachedBanks = nil, nil
+  cachedBankKey, cachedBanks = nil, nil
 end
 
 -- test-only: exercise loadBanks without building a full engine
@@ -222,7 +286,9 @@ function Channel.new(engine, spec, options)
     hardware = hardware,
     wave = hardware == 3,
     noise = hardware == 4,
-    sfx = isSfxChannel,
+    sfx = isSfxChannel or options.sfx == true,
+    -- 1 = pokered command map; 2 = pokecrystal (Gold) command map
+    generation = options.generation or 1,
     executeMusic = not isSfxChannel,
     allowLoops = options.allowLoops ~= false,
     frequencyOffset = options.frequencyOffset or 0,
@@ -232,6 +298,8 @@ function Channel.new(engine, spec, options)
     fade = 0,
     duty = 2,
     octave = 4,
+    transposeOctaves = 0,
+    transposePitches = 0,
     waveInstrument = 0,
     waveLevel = 1,
     perfectPitch = false,
@@ -262,9 +330,25 @@ function Channel:word()
 end
 
 function Channel:frequency(note, octave)
-  local signed = PITCHES[note + 1] - 0x10000
+  note = (note or 0) + (self.transposePitches or 0)
+  octave = (octave or self.octave) - (self.transposeOctaves or 0)
+  while note > 12 do
+    note = note - 12
+    octave = octave + 1
+  end
+  while note < 1 do
+    note = note + 12
+    octave = octave - 1
+  end
+  if octave < 1 then octave = 1 end
+  if octave > 8 then octave = 8 end
+  -- Gen1 historically indexed PITCHES[note+1]; Gen2 pitch ids are 1=C_…12=B_.
+  local pitch = (self.generation == 2)
+    and (PITCHES[note] or PITCHES[((note - 1) % 12) + 1])
+    or (PITCHES[note + 1] or PITCHES[1])
+  local signed = pitch - 0x10000
   local register = bit.band(
-    bit.arshift(signed, math.max(0, (octave or self.octave) - 1)), 0x7FF)
+    bit.arshift(signed, math.max(0, octave - 1)), 0x7FF)
   if self.perfectPitch then register = bit.band(register + 1, 0x7FF) end
   return bit.band(register + self.frequencyOffset, 0x7FF)
 end
@@ -347,7 +431,54 @@ function Channel:silenceEvent(ticks)
   return self:timedEvent({ silence = true }, ticks)
 end
 
-function Channel:nextEvent()
+local function applyEnvelope(self, packed)
+  if self.wave then
+    self.waveLevel = WAVE_LEVEL[bit.band(bit.rshift(packed, 4), 3)]
+    self.waveInstrument = bit.band(packed, 0x0F)
+  else
+    self.volume = bit.rshift(packed, 4)
+    self.fade = fadeValue(bit.band(packed, 0x0F))
+  end
+end
+
+local function applyVibrato(self, delay, packed)
+  local depth = bit.rshift(packed, 4)
+  if depth == 0 then
+    self.vibrato = nil
+  else
+    self.vibrato = {
+      delay = delay,
+      above = bit.rshift(depth, 1) + bit.band(depth, 1),
+      below = bit.rshift(depth, 1),
+      rate = bit.band(packed, 0x0F),
+    }
+  end
+end
+
+local function soundLoop(self, commandAddress, count, target)
+  if count == 0 then
+    if self.allowLoops then
+      self.address = target
+    else
+      self.ended = true
+      return true
+    end
+  else
+    local remaining = self.loopCounts[commandAddress]
+    if remaining == nil then remaining = count end
+    remaining = remaining - 1
+    if remaining > 0 then
+      self.loopCounts[commandAddress] = remaining
+      self.address = target
+    else
+      self.loopCounts[commandAddress] = nil
+    end
+  end
+  return false
+end
+
+-- pokered ($D0 note_type / $E0 octave / $FD call / $FE loop)
+function Channel:nextEventGen1()
   if self.ended then return nil end
   for _ = 1, 100000 do
     local commandAddress = self.address
@@ -368,14 +499,7 @@ function Channel:nextEvent()
     elseif command >= 0xD0 and command < 0xE0 then
       self.speed = bit.band(command, 0x0F)
       if not self.noise then
-        local packed = self:byte()
-        if self.wave then
-          self.waveLevel = WAVE_LEVEL[bit.band(bit.rshift(packed, 4), 3)]
-          self.waveInstrument = bit.band(packed, 0x0F)
-        else
-          self.volume = bit.rshift(packed, 4)
-          self.fade = fadeValue(bit.band(packed, 0x0F))
-        end
+        applyEnvelope(self, self:byte())
       end
     elseif command >= 0xE0 and command <= 0xE7 then
       self.octave = 8 - bit.band(command, 7)
@@ -384,18 +508,7 @@ function Channel:nextEvent()
     elseif command == 0xE9 then
       -- Unused command.
     elseif command == 0xEA then
-      local delay, packed = self:byte(), self:byte()
-      local depth = bit.rshift(packed, 4)
-      if depth == 0 then
-        self.vibrato = nil
-      else
-        self.vibrato = {
-          delay = delay,
-          above = bit.rshift(depth, 1) + bit.band(depth, 1),
-          below = bit.rshift(depth, 1),
-          rate = bit.band(packed, 0x0F),
-        }
-      end
+      applyVibrato(self, self:byte(), self:byte())
     elseif command == 0xEB then
       local length, packed = self:byte(), self:byte()
       local octave = 8 - bit.rshift(packed, 4)
@@ -425,24 +538,8 @@ function Channel:nextEvent()
       self.callStack[#self.callStack + 1] = self.address + 2
       self.address = self:word()
     elseif command == 0xFE then
-      local count, target = self:byte(), self:word()
-      if count == 0 then
-        if self.allowLoops then
-          self.address = target
-        else
-          self.ended = true
-          return nil
-        end
-      else
-        local remaining = self.loopCounts[commandAddress]
-        if remaining == nil then remaining = count end
-        remaining = remaining - 1
-        if remaining > 0 then
-          self.loopCounts[commandAddress] = remaining
-          self.address = target
-        else
-          self.loopCounts[commandAddress] = nil
-        end
+      if soundLoop(self, commandAddress, self:byte(), self:word()) then
+        return nil
       end
     elseif command == 0xFF then
       local returnAddress = table.remove(self.callStack)
@@ -478,6 +575,151 @@ function Channel:nextEvent()
   end
   self.ended = true
   return nil
+end
+
+-- pokecrystal / Gold ($D0 octave / $D8 note_type / $FE call / $FD loop)
+-- See pret/pokecrystal macros/scripts/audio.asm MusicCommands.
+function Channel:nextEventGen2()
+  if self.ended then return nil end
+  for _ = 1, 100000 do
+    local commandAddress = self.address
+    local command = self:byte()
+
+    -- SFX note mode: first byte is raw length (not $2x), then envelope + freq.
+    if self.sfx and not self.executeMusic then
+      local length = command
+      if length == 0 then length = 256 end
+      local packed = self:byte()
+      local volume = bit.rshift(packed, 4)
+      local fade = fadeValue(bit.band(packed, 0x0F))
+      if self.noise then
+        return self:noiseEvent(
+          self:durationTicks(length), volume, fade, self:byte())
+      end
+      local register = bit.band(self:word() + self.frequencyOffset, 0x7FF)
+      return self:tone(self:durationTicks(length), register, volume, fade)
+    end
+
+    -- Notes are $00-$CF (B_ is high-nibble $C). Rests are pitch 0.
+    -- Music commands start at $D0 (FIRST_MUSIC_CMD).
+    if command < 0xD0 then
+      local note = bit.rshift(command, 4)
+      local length = bit.band(command, 0x0F) + 1
+      if note == 0 then
+        return self:silenceEvent(self:durationTicks(length))
+      end
+      if self.noise then
+        return self:drumEvent(self:durationTicks(length), note)
+      end
+      return self:tone(self:durationTicks(length), self:frequency(note))
+    elseif command >= 0xD0 and command <= 0xD7 then
+      self.octave = 8 - bit.band(command, 7)
+    elseif command == 0xD8 then
+      self.speed = self:byte()
+      if not self.noise then
+        applyEnvelope(self, self:byte())
+      end
+    elseif command == 0xD9 then
+      local packed = self:byte()
+      self.transposeOctaves = bit.rshift(packed, 4)
+      self.transposePitches = bit.band(packed, 0x0F)
+    elseif command == 0xDA then
+      self.engine.tempo = self:byte() * 0x100 + self:byte()
+    elseif command == 0xDB then
+      self.duty = bit.band(self:byte(), 3)
+    elseif command == 0xDC then
+      applyEnvelope(self, self:byte())
+    elseif command == 0xDD then
+      local packed = self:byte()
+      self.sweep = {
+        pace = bit.band(bit.rshift(packed, 4), 7),
+        subtract = bit.band(packed, 8) ~= 0,
+        shift = bit.band(packed, 7),
+      }
+    elseif command == 0xDE then
+      local packed = self:byte()
+      self.duty = {
+        bit.band(bit.rshift(packed, 6), 3),
+        bit.band(bit.rshift(packed, 4), 3),
+        bit.band(bit.rshift(packed, 2), 3),
+        bit.band(packed, 3),
+      }
+    elseif command == 0xDF then
+      self.executeMusic = not self.executeMusic
+    elseif command == 0xE0 then
+      local length, packed = self:byte(), self:byte()
+      local octave = 8 - bit.rshift(packed, 4)
+      self.pendingSlide = {
+        length = length,
+        target = self:frequency(bit.band(packed, 0x0F), octave),
+      }
+    elseif command == 0xE1 then
+      applyVibrato(self, self:byte(), self:byte())
+    elseif command == 0xE2 then
+      self:byte()
+    elseif command == 0xE3 or command == 0xF0 then
+      -- toggle_noise / sfx_toggle_noise: optional kit id when present.
+      local nextByte = romByte(self.engine.banks, self.bank, self.address)
+      if nextByte < 0xD0 then
+        self:byte()
+      end
+    elseif command == 0xE4 or command == 0xEF then
+      self.engine.pan = self:byte()
+    elseif command == 0xE5 then
+      self:byte() -- master volume; OpenAL path has no NR50 equivalent
+    elseif command == 0xE6 then
+      self.frequencyOffset = self:byte() * 0x100 + self:byte()
+      if self.frequencyOffset >= 0x8000 then
+        self.frequencyOffset = self.frequencyOffset - 0x10000
+      end
+    elseif command == 0xE7 or command == 0xE8 or command == 0xE9 then
+      self:byte()
+    elseif command == 0xEA then
+      self.address = self:word()
+    elseif command == 0xEB then
+      self:word() -- new_song id; ignore inside a channel stream
+    elseif command == 0xEC or command == 0xED then
+      -- sfx priority on/off
+    elseif command == 0xEE then
+      self:word()
+    elseif command >= 0xF1 and command <= 0xF9 then
+      -- unused / no-arg stubs in crystal
+    elseif command == 0xFA then
+      self:byte()
+    elseif command == 0xFB then
+      self:byte()
+      self:word()
+    elseif command == 0xFC then
+      self.address = self:word()
+    elseif command == 0xFD then
+      if soundLoop(self, commandAddress, self:byte(), self:word()) then
+        return nil
+      end
+    elseif command == 0xFE then
+      self.callStack[#self.callStack + 1] = self.address + 2
+      self.address = self:word()
+    elseif command == 0xFF then
+      local returnAddress = table.remove(self.callStack)
+      if returnAddress then
+        self.address = returnAddress
+      else
+        self.ended = true
+        return nil
+      end
+    else
+      self.ended = true
+      return nil
+    end
+  end
+  self.ended = true
+  return nil
+end
+
+function Channel:nextEvent()
+  if self.generation == 2 then
+    return self:nextEventGen2()
+  end
+  return self:nextEventGen1()
 end
 
 local function envelopeVolume(volume, fade, elapsed)
@@ -732,7 +974,13 @@ function Engine.new(data, header, options)
   -- may supply its own waves/drums, falling back to a ROM engine's tables
   local chip = header.chip
   local banks = engineBanks(data, chip)
-  local engineNumber = chip and (chip.engine or 1) or header.engine
+  -- Gen 1 songs set `engine` (1/2/3 wave banks).  Gold tags ROM defs with
+  -- `generation = 2` and only publishes waveBanks["1"], so missing engine
+  -- falls back to 1 rather than failing the wave-bank lookup.
+  local engineNumber = chip and (chip.engine or 1) or (header.engine or 1)
+  local generation = chip and (chip.generation or audio.generation)
+    or header.generation or audio.generation or 1
+  if generation ~= 2 then generation = 1 end
   local waves
   if chip and chip.waves then
     waves = normalizeWaves(chip.waves)
@@ -747,6 +995,7 @@ function Engine.new(data, header, options)
     tempo = 0x100,
     pan = 0xFF,
     waves = waves,
+    generation = generation,
     noiseHeaders = audio.noiseHeaders
       and audio.noiseHeaders[tostring(engineNumber)] or {},
     customDrums = chip and chip.drums or nil,
@@ -765,6 +1014,7 @@ function Engine.new(data, header, options)
     engine.channels[#engine.channels + 1] = Channel.new(engine, spec, {
       bank = chip and 0 or header.bank,
       sfx = options.sfx,
+      generation = generation,
       allowLoops = options.allowLoops,
       frequencyOffset = options.frequencyOffset,
       frameTicks = frameTicks,

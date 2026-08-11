@@ -9,6 +9,7 @@ local RegList = require("RegList")
 local SpeciesPicker = require("SpeciesPicker")
 local EncounterEdit = require("EncounterEdit")
 local Maps = require("Maps")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Encounters = {}
@@ -351,19 +352,26 @@ local function drawSpecial(S, App, x, y, w, h)
     end)
   end
 
-  row("Bind text", function(fx, fy_, fw, fh_)
+  local gen2 = Generation.isGen2(S)
+  row(gen2 and "Bind (scriptKey)" or "Bind text", function(fx, fy_, fw, fh_)
     local v = field(App, "spec_bind", fx, fy_, fw, fh_,
-      rec.bindTextId or "", "TEXT_..."):upper():gsub("%s+", "_")
+      rec.bindTextId or "", gen2 and "mod:SPECIAL_..." or "TEXT_..."):upper():gsub("%s+", "_")
     if v ~= (rec.bindTextId or "") then rec.bindTextId = v; App.markDirty() end
   end)
   Kit.text("micro",
-    "Optional TEXT_* on the map — Save wires a oneshot talk script.",
+    gen2
+      and "Gold scriptKey (project.scripts) — point a map object's"
+        .. " scriptKey here, or leave blank for mod:SPECIAL_<id>."
+      or "Optional TEXT_* on the map — Save wires a oneshot talk script.",
     viewX, fy, PAL.faint)
   fy = fy + 20 * s
 
   Kit.text("micro",
     kind == "gift"
-      and "Save emits commands:register(mod:give_special) + SPECIALS table."
+      and (gen2
+        and "Save emits a givepoke script; DVs/moves add"
+          .. " commands:register(mod:give_special) via a modcommand step."
+        or "Save emits commands:register(mod:give_special) + SPECIALS table.")
       or ("Save emits trainers:register(OPP_SPEC_" .. id
         .. ") + trainer_headers when Bind text matches a map object."),
     viewX, fy, PAL.muted)

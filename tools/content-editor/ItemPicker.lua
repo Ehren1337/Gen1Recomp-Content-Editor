@@ -19,17 +19,18 @@ function ItemPicker.close(S)
 end
 
 function ItemPicker.allIds(S)
+  local State = require("State")
   local seen, ids = {}, {}
   local deleted = (S.project and S.project.deleted and S.project.deleted.items) or {}
-  for id in pairs((S.project and S.project.items) or {}) do
-    if not deleted[id] then
+  for id, rec in pairs((S.project and S.project.items) or {}) do
+    if not deleted[id] and State.isItemRecord(id, rec) then
       seen[id] = true
       ids[#ids + 1] = id
     end
   end
   if S.data and S.data.items then
-    for id in pairs(S.data.items) do
-      if not seen[id] and not deleted[id] then
+    for id, rec in pairs(S.data.items) do
+      if not seen[id] and not deleted[id] and State.isItemRecord(id, rec) then
         seen[id] = true
         ids[#ids + 1] = id
       end

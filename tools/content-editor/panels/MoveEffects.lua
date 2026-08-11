@@ -7,11 +7,25 @@ local State = require("State")
 local Search = require("Search")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
+local Generation = require("Generation")
 local PAL = Theme.PAL
+
+local function vanillaEffectTable(S)
+  if Generation.isGen2(S) then
+    local merged = S.data and (S.data.gen2MoveEffects or S.data.move_effects)
+    if type(merged) == "table" and next(merged) then return merged end
+    local ok, Battle = pcall(require, "src.battle.gen2.Battle")
+    if ok and Battle and type(Battle.MOVE_EFFECT_RECORDS) == "table" then
+      return Battle.MOVE_EFFECT_RECORDS
+    end
+    return {}
+  end
+  return S.data and S.data.move_effects or {}
+end
 
 local MoveEffects = {}
 
-local TEMPLATES = {
+local TEMPLATES_GEN1 = {
   { id = "status_side", label = "Status side" },
   { id = "flinch_side", label = "Flinch side" },
   { id = "confuse_side", label = "Confuse side" },
@@ -29,8 +43,35 @@ local TEMPLATES = {
   { id = "empty", label = "No-op / full" },
 }
 
-local STATUSES = { "BRN", "FRZ", "PAR", "PSN", "SLP" }
+-- Gold authoring: status field on the record; secondary chance is move.effectChance.
+local TEMPLATES_GEN2 = {
+  { id = "status_primary", label = "Status move" },
+  { id = "status_secondary", label = "Status hit" },
+  { id = "empty", label = "No-op / full" },
+}
+
+local STATUSES_GEN1 = { "BRN", "FRZ", "PAR", "PSN", "SLP" }
+local STATUSES_GEN2 = {
+  "burn", "freeze", "paralyze", "poison", "sleep", "toxic", "confuse",
+}
 local STATS = { "attack", "defense", "speed", "special", "accuracy", "evasion" }
+
+local function templatesFor(S)
+  return Generation.isGen2(S) and TEMPLATES_GEN2 or TEMPLATES_GEN1
+end
+
+local function statusesFor(S)
+  return Generation.isGen2(S) and STATUSES_GEN2 or STATUSES_GEN1
+end
+
+local function normalizeGen2Status(s)
+  local map = {
+    BRN = "burn", FRZ = "freeze", PAR = "paralyze", PSN = "poison",
+    SLP = "sleep", TOX = "toxic", CONFUSE = "confuse",
+  }
+  if type(s) ~= "string" or s == "" then return "burn" end
+  return map[s] or map[s:upper()] or s:lower()
+end
 
 local function cycle(list, cur)
   local idx = 0
@@ -42,15 +83,22 @@ end
 
 local function allEffectIds(S)
   local seen, ids = {}, {}
-  for id in pairs((S.project and S.project.moveEffects) or {}) do
-    seen[id] = true
-    ids[#ids + 1] = id
+  local function add(id)
+    if type(id) == "string" and id ~= "" and not seen[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
   end
-  if S.data and S.data.move_effects then
-    for id in pairs(S.data.move_effects) do
-      if not seen[id] then
-        seen[id] = true
-        ids[#ids + 1] = id
+  for id in pairs((S.project and S.project.moveEffects) or {}) do add(id) end
+  for id in pairs(vanillaEffectTable(S)) do add(id) end
+  -- Gold: include every EFFECT_* referenced by moves, even without a record.
+  if Generation.isGen2(S) and S.data and S.data.moves then
+    for _, mv in pairs(S.data.moves) do
+      if type(mv) == "table" then add(mv.effect) end
+    end
+    if S.project and S.project.moves then
+      for _, mv in pairs(S.project.moves) do
+        if type(mv) == "table" then add(mv.effect) end
       end
     end
   end
@@ -63,8 +111,11 @@ local function resolveEffect(S, id)
   if S.project.moveEffects and S.project.moveEffects[id] then
     return S.project.moveEffects[id], true
   end
-  if S.data and S.data.move_effects and S.data.move_effects[id] then
-    return S.data.move_effects[id], false
+  local vanilla = vanillaEffectTable(S)
+  if vanilla[id] then return vanilla[id], false end
+  -- Gold unmodelled EFFECT_* (damage-path fallthrough).
+  if Generation.isGen2(S) and type(id) == "string" and id:sub(1, 7) == "EFFECT_" then
+    return { kind = "unmodelled", id = id }, false
   end
   return nil, false
 end
@@ -73,7 +124,10 @@ local function movesUsing(S, effectId)
   local out = {}
   local function scan(tbl)
     for mid, mv in pairs(tbl or {}) do
-      if mv and mv.effect == effectId then out[#out + 1] = mid end
+      -- Gold moves.lua also carries meta keys (generation, source) — skip them.
+      if type(mv) == "table" and mv.effect == effectId then
+        out[#out + 1] = mid
+      end
     end
   end
   scan(S.project and S.project.moves)
@@ -81,7 +135,7 @@ local function movesUsing(S, effectId)
     local seen = {}
     for _, mid in ipairs(out) do seen[mid] = true end
     for mid, mv in pairs(S.data.moves) do
-      if mv and mv.effect == effectId and not seen[mid] then
+      if type(mv) == "table" and mv.effect == effectId and not seen[mid] then
         out[#out + 1] = mid
       end
     end
@@ -93,6 +147,13 @@ end
 local function summarize(S, id, rec, owned)
   if owned then
     local t = rec.template or "?"
+    if Generation.isGen2(S) then
+      if t == "status_primary" or t == "status_secondary" or t == "status_side" then
+        local kind = (t == "status_primary") and "primary" or "secondary"
+        return string.format("%s  %s", kind, tostring(rec.status or "?"))
+      end
+      return t
+    end
     if t == "status_side" or t == "status_primary" then
       return string.format("%s  %s  chance=%s", t, tostring(rec.status or "?"),
         tostring(rec.chance or (t == "status_primary" and "-") or 26))
@@ -107,17 +168,39 @@ local function summarize(S, id, rec, owned)
     return t
   end
   local kind = rec and rec.kind or "?"
+  if kind == "unmodelled" then
+    local n = #movesUsing(S, id)
+    return string.format("damage path  ·  %d move%s", n, n == 1 and "" or "s")
+  end
+  local extra = ""
+  if rec and rec.status then extra = "  " .. tostring(rec.status)
+  elseif rec and rec.run then extra = "  run()" end
   local n = #movesUsing(S, id)
-  return string.format("%s  ·  %d move%s", kind, n, n == 1 and "" or "s")
+  return string.format("%s%s  ·  %d move%s", kind, extra, n, n == 1 and "" or "s")
 end
 
-local function defaultEffect(id, template)
-  template = template or "status_side"
+local function defaultEffect(S, id, template)
+  local gen2 = Generation.isGen2(S)
+  template = template or (gen2 and "status_secondary" or "status_side")
   local rec = {
     id = id,
     template = template,
     _isNew = true,
   }
+  if gen2 then
+    if template == "status_primary" then
+      rec.kind = "primary"
+      rec.status = "sleep"
+    elseif template == "status_secondary" or template == "status_side" then
+      rec.kind = "secondary"
+      rec.status = "burn"
+      rec.template = "status_secondary"
+    else
+      rec.kind = "full"
+      rec.template = "empty"
+    end
+    return rec
+  end
   if template == "status_side" then
     rec.kind = "secondary"
     rec.status = "BRN"
@@ -170,6 +253,22 @@ local function defaultEffect(id, template)
     rec.kind = "full"
   end
   return rec
+end
+
+local function draftFromVanillaGen2(S, id, vanilla)
+  local tmpl = "empty"
+  local status = vanilla and vanilla.status
+  if status then
+    tmpl = (vanilla.kind == "secondary") and "status_secondary" or "status_primary"
+  end
+  local draft = defaultEffect(S, id, tmpl)
+  draft._isNew = false
+  draft._fromVanilla = true
+  if status then draft.status = normalizeGen2Status(status) end
+  draft.kind = (tmpl == "status_primary") and "primary"
+    or (tmpl == "status_secondary") and "secondary"
+    or "full"
+  return draft
 end
 
 local function field(App, id, x, y, w, h, value, ph)
@@ -250,16 +349,18 @@ function MoveEffects.draw(S, x, y, w, h, App)
   S.moveEffectListOffset = Kit.scrollbar(scrollX, scrollY, scrollW, scrollH,
     S.moveEffectListOffset or 0, #ids, perPage)
 
+  local gen2 = Generation.isGen2(S)
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New effect",
       { kind = "good" }) then
-    local nid = "MOD_SIDE_EFFECT"
+    local nid = gen2 and "EFFECT_MOD_STATUS" or "MOD_SIDE_EFFECT"
     local n = 1
-    while S.project.moveEffects[nid]
-        or (S.data.move_effects and S.data.move_effects[nid]) do
+    local vanilla = vanillaEffectTable(S)
+    while S.project.moveEffects[nid] or vanilla[nid] do
       n = n + 1
-      nid = "MOD_SIDE_EFFECT_" .. n
+      nid = (gen2 and "EFFECT_MOD_STATUS_" or "MOD_SIDE_EFFECT_") .. n
     end
-    S.project.moveEffects[nid] = defaultEffect(nid, "status_side")
+    S.project.moveEffects[nid] = defaultEffect(S, nid,
+      gen2 and "status_secondary" or "status_side")
     S.moveEffectId = nid
     App.markDirty()
   end
@@ -277,11 +378,15 @@ function MoveEffects.draw(S, x, y, w, h, App)
 
   local function mutate()
     if owned then return S.project.moveEffects[S.moveEffectId] end
-    -- Vanilla records are functions — clone into a template draft instead.
     local id = S.moveEffectId
-    local draft = defaultEffect(id, "status_side")
-    draft._isNew = false
-    draft._fromVanilla = true
+    local draft
+    if gen2 then
+      draft = draftFromVanillaGen2(S, id, eff)
+    else
+      draft = defaultEffect(S, id, "status_side")
+      draft._isNew = false
+      draft._fromVanilla = true
+    end
     S.project.moveEffects[id] = draft
     owned = true
     App.markDirty()
@@ -312,12 +417,30 @@ function MoveEffects.draw(S, x, y, w, h, App)
   end
 
   if not owned then
-    Kit.text("micro",
-      "Vanilla engine effect (read-only). Create a mod effect, or clone to edit.",
-      viewX, fy, PAL.muted)
-    fy = fy + 20 * s
-    Kit.text("micro", "kind: " .. tostring(eff.kind or "?"), viewX, fy, PAL.detail)
-    fy = fy + 18 * s
+    local kind = tostring(eff.kind or "?")
+    if kind == "unmodelled" then
+      Kit.text("micro",
+        "No move_effects record — Gold runs the normal damage path for this id.",
+        viewX, fy, PAL.muted)
+      fy = fy + 20 * s
+      Kit.text("micro",
+        "Create a status primary/secondary record to give it a handler.",
+        viewX, fy, PAL.faint)
+      fy = fy + 18 * s
+    else
+      Kit.text("micro",
+        gen2
+          and "Vanilla Gold effect (read-only). Override in the mod to edit."
+          or "Vanilla engine effect (read-only). Create a mod effect, or clone to edit.",
+        viewX, fy, PAL.muted)
+      fy = fy + 20 * s
+      Kit.text("micro",
+        "kind: " .. kind
+          .. (eff.status and ("  status: " .. tostring(eff.status)) or "")
+          .. (eff.run and "  run()" or ""),
+        viewX, fy, PAL.detail)
+      fy = fy + 18 * s
+    end
     local users = movesUsing(S, S.moveEffectId)
     Kit.text("micro",
       (#users > 0)
@@ -325,51 +448,90 @@ function MoveEffects.draw(S, x, y, w, h, App)
         or "Not referenced by any loaded move",
       viewX, fy, PAL.faint)
     fy = fy + 22 * s
-    if Kit.button(viewX, fy, 160 * s, fh, "Clone to mod", { kind = "accent" }) then
-      local base = S.moveEffectId or "EFFECT"
-      local nid = "MOD_" .. base
-      local n = 1
-      while S.project.moveEffects[nid]
-          or (S.data.move_effects and S.data.move_effects[nid]) do
-        n = n + 1
-        nid = "MOD_" .. base .. "_" .. n
+
+    if gen2 then
+      local canOverride = (eff.status ~= nil) or (kind == "unmodelled")
+        or (eff.run ~= nil)
+      if canOverride and Kit.button(viewX, fy, 180 * s, fh,
+          kind == "unmodelled" and "Add status record" or "Override in mod",
+          { kind = "accent" }) then
+        local draft = draftFromVanillaGen2(S, S.moveEffectId, eff)
+        if kind == "unmodelled" or (eff.run and not eff.status) then
+          draft = defaultEffect(S, S.moveEffectId, "status_secondary")
+          draft._isNew = false
+          draft._fromVanilla = true
+        end
+        S.project.moveEffects[S.moveEffectId] = draft
+        App.markDirty()
+        S.status = "Override " .. tostring(S.moveEffectId)
       end
-      -- Infer a rough template from the id name
-      local tmpl = "empty"
-      if base:find("FLINCH") then tmpl = "flinch_side"
-      elseif base:find("CONFUSION_SIDE") then tmpl = "confuse_side"
-      elseif base:find("SIDE_EFFECT") and (base:find("BURN") or base:find("POISON")
-          or base:find("PARA") or base:find("FREEZE")) then
-        tmpl = "status_side"
-      elseif base:find("_UP") then tmpl = "stat_up"
-      elseif base:find("DOWN_SIDE") then tmpl = "stat_down_side"
-      elseif base:find("_DOWN") then tmpl = "stat_down"
-      elseif base:find("SLEEP") or base:find("POISON_EFFECT")
-          or base:find("PARALYZE_EFFECT") then
-        tmpl = "status_primary"
+      fy = fy + fh + 8 * s
+      if Kit.button(viewX, fy, 160 * s, fh, "Clone as new id", { kind = "ghost" }) then
+        local base = S.moveEffectId or "EFFECT"
+        local nid = base:sub(1, 7) == "EFFECT_" and (base .. "_MOD") or ("EFFECT_" .. base)
+        local n = 1
+        local vanilla = vanillaEffectTable(S)
+        while S.project.moveEffects[nid] or vanilla[nid] do
+          n = n + 1
+          nid = (base:sub(1, 7) == "EFFECT_" and (base .. "_MOD_") or ("EFFECT_" .. base .. "_")) .. n
+        end
+        local draft = draftFromVanillaGen2(S, nid, eff)
+        draft._isNew = true
+        draft._fromVanilla = nil
+        draft.id = nid
+        S.project.moveEffects[nid] = draft
+        S.moveEffectId = nid
+        App.markDirty()
+        S.status = "Cloned as " .. nid
       end
-      local draft = defaultEffect(nid, tmpl)
-      if base:find("BURN") then draft.status = "BRN" end
-      if base:find("FREEZE") or base:find("FRZ") then draft.status = "FRZ" end
-      if base:find("PARA") then draft.status = "PAR" end
-      if base:find("POISON") or base:find("PSN") then draft.status = "PSN" end
-      if base:find("SLEEP") or base:find("SLP") then draft.status = "SLP" end
-      if base:find("EFFECT1") or base:find("SIDE_EFFECT1") then draft.chance = 26 end
-      if base:find("EFFECT2") or base:find("SIDE_EFFECT2") then draft.chance = 77 end
-      if base:find("POISON_SIDE_EFFECT1") then draft.chance = 52 end
-      if base:find("POISON_SIDE_EFFECT2") then draft.chance = 103 end
-      S.project.moveEffects[nid] = draft
-      S.moveEffectId = nid
-      App.markDirty()
-      S.status = "Cloned as " .. nid
+      fy = fy + fh + 12 * s
+    else
+      if Kit.button(viewX, fy, 160 * s, fh, "Clone to mod", { kind = "accent" }) then
+        local base = S.moveEffectId or "EFFECT"
+        local nid = "MOD_" .. base
+        local n = 1
+        while S.project.moveEffects[nid]
+            or (S.data.move_effects and S.data.move_effects[nid]) do
+          n = n + 1
+          nid = "MOD_" .. base .. "_" .. n
+        end
+        local tmpl = "empty"
+        if base:find("FLINCH") then tmpl = "flinch_side"
+        elseif base:find("CONFUSION_SIDE") then tmpl = "confuse_side"
+        elseif base:find("SIDE_EFFECT") and (base:find("BURN") or base:find("POISON")
+            or base:find("PARA") or base:find("FREEZE")) then
+          tmpl = "status_side"
+        elseif base:find("_UP") then tmpl = "stat_up"
+        elseif base:find("DOWN_SIDE") then tmpl = "stat_down_side"
+        elseif base:find("_DOWN") then tmpl = "stat_down"
+        elseif base:find("SLEEP") or base:find("POISON_EFFECT")
+            or base:find("PARALYZE_EFFECT") then
+          tmpl = "status_primary"
+        end
+        local draft = defaultEffect(S, nid, tmpl)
+        if base:find("BURN") then draft.status = "BRN" end
+        if base:find("FREEZE") or base:find("FRZ") then draft.status = "FRZ" end
+        if base:find("PARA") then draft.status = "PAR" end
+        if base:find("POISON") or base:find("PSN") then draft.status = "PSN" end
+        if base:find("SLEEP") or base:find("SLP") then draft.status = "SLP" end
+        if base:find("EFFECT1") or base:find("SIDE_EFFECT1") then draft.chance = 26 end
+        if base:find("EFFECT2") or base:find("SIDE_EFFECT2") then draft.chance = 77 end
+        if base:find("POISON_SIDE_EFFECT1") then draft.chance = 52 end
+        if base:find("POISON_SIDE_EFFECT2") then draft.chance = 103 end
+        S.project.moveEffects[nid] = draft
+        S.moveEffectId = nid
+        App.markDirty()
+        S.status = "Cloned as " .. nid
+      end
+      fy = fy + fh + 12 * s
     end
-    fy = fy + fh + 12 * s
   else
     row("ID", function(fx, fy_, fw, fh_)
-      local v = field(App, "me_id", fx, fy_, fw, fh_, eff.id or S.moveEffectId, "EFFECT_ID")
+      local ph = gen2 and "EFFECT_MOD_STATUS" or "EFFECT_ID"
+      local v = field(App, "me_id", fx, fy_, fw, fh_, eff.id or S.moveEffectId, ph)
       if v ~= (eff.id or S.moveEffectId) and v:match("^[%w_]+$")
           and not S.project.moveEffects[v]
-          and not (S.data.move_effects and S.data.move_effects[v]) then
+          and not vanillaEffectTable(S)[v] then
         S.project.moveEffects[S.moveEffectId] = nil
         eff.id = v
         S.project.moveEffects[v] = eff
@@ -382,7 +544,7 @@ function MoveEffects.draw(S, x, y, w, h, App)
     fy = fy + 20 * s
     local tx, ty = viewX, fy
     local maxX = viewX + viewW - 8 * s
-    for _, t in ipairs(TEMPLATES) do
+    for _, t in ipairs(templatesFor(S)) do
       local on = (eff.template or "") == t.id
       local bw = Kit.textWidth("micro", t.label) + 16 * s
       if tx + bw > maxX then
@@ -391,8 +553,9 @@ function MoveEffects.draw(S, x, y, w, h, App)
       end
       if Kit.chip(tx, ty, bw, fh, t.label, on, PAL.yellow) then
         local id = eff.id or S.moveEffectId
-        local nextRec = defaultEffect(id, t.id)
+        local nextRec = defaultEffect(S, id, t.id)
         nextRec._isNew = eff._isNew
+        nextRec._fromVanilla = eff._fromVanilla
         S.project.moveEffects[S.moveEffectId] = nextRec
         eff = nextRec
         App.markDirty()
@@ -401,112 +564,125 @@ function MoveEffects.draw(S, x, y, w, h, App)
     end
     fy = ty + fh + 12 * s
 
-    local tmpl = eff.template or "status_side"
-    if tmpl == "status_side" or tmpl == "status_primary" then
+    local tmpl = eff.template or (gen2 and "status_secondary" or "status_side")
+    local statusList = statusesFor(S)
+    if tmpl == "status_side" or tmpl == "status_primary"
+        or tmpl == "status_secondary" then
       row("Status", function(fx, fy_, fw, fh_)
-        if Kit.button(fx, fy_, 100 * s, fh_, tostring(eff.status or "BRN"),
-            { kind = "ghost" }) then
+        local cur = tostring(eff.status or (gen2 and "burn" or "BRN"))
+        if gen2 then cur = normalizeGen2Status(cur) end
+        if Kit.button(fx, fy_, 120 * s, fh_, cur, { kind = "ghost" }) then
           eff = mutate()
-          eff.status = cycle(STATUSES, eff.status or "BRN")
+          eff.status = cycle(statusList, cur)
           App.markDirty()
         end
       end)
     end
-    if tmpl == "status_side" or tmpl == "flinch_side"
-        or tmpl == "confuse_side" or tmpl == "stat_down_side" then
-      row("Chance /256", function(fx, fy_, fw, fh_)
-        local cur = tonumber(eff.chance) or 26
-        local v = numField(App, "me_ch", fx, fy_, 80 * s, fh_, cur)
-        v = math.max(0, math.min(255, v))
-        if v ~= cur then
-          eff = mutate()
-          eff.chance = v
-        end
-      end)
+    if gen2 and (tmpl == "status_secondary" or tmpl == "status_side") then
+      Kit.text("micro",
+        "Secondary chance comes from the move's FX chance (effectChance %), not here.",
+        viewX, fy, PAL.faint)
+      fy = fy + 18 * s
     end
-    if tmpl == "stat_up" or tmpl == "stat_down" or tmpl == "stat_down_side" then
-      row("Stat", function(fx, fy_, fw, fh_)
-        if Kit.button(fx, fy_, 120 * s, fh_, tostring(eff.stat or "attack"),
-            { kind = "ghost" }) then
-          eff = mutate()
-          eff.stat = cycle(STATS, eff.stat or "attack")
-          App.markDirty()
-        end
-      end)
-      row("Stages", function(fx, fy_, fw, fh_)
-        local cur = tonumber(eff.delta) or 1
-        local v = numField(App, "me_d", fx, fy_, 60 * s, fh_, cur)
-        v = math.max(1, math.min(2, v))
-        if v ~= cur then
-          eff = mutate()
-          eff.delta = v
-        end
-      end)
-    end
-    if tmpl == "status_primary" or tmpl == "stat_down" or tmpl == "confuse_primary" then
-      row("Acc. check", function(fx, fy_, fw, fh_)
-        local on = eff.accuracyChecked ~= false
-        if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.green) then
-          eff = mutate()
-          eff.accuracyChecked = not on
-          App.markDirty()
-        end
-      end)
-    end
-    if tmpl == "recoil" then
-      row("Recoil /N", function(fx, fy_, fw, fh_)
-        local cur = tonumber(eff.recoilDiv) or 4
-        local v = numField(App, "me_rd", fx, fy_, 60 * s, fh_, cur)
-        v = math.max(2, math.min(8, v))
-        if v ~= cur then eff = mutate(); eff.recoilDiv = v end
-      end)
-    end
-    if tmpl == "fixed_damage" then
-      row("Damage", function(fx, fy_, fw, fh_)
-        local cur = tonumber(eff.fixedDamage) or 40
-        local v = numField(App, "me_fd", fx, fy_, 80 * s, fh_, cur)
-        v = math.max(1, math.min(65535, v))
-        if v ~= cur then eff = mutate(); eff.fixedDamage = v end
-      end)
-    end
-    if tmpl == "multi_hit" then
-      row("Hits CSV", function(fx, fy_, fw, fh_)
-        local dist = eff.multiHit
-        local cur
-        if type(dist) == "table" then
-          cur = table.concat(dist, ",")
-        else
-          cur = tostring(dist or "2,2,2,3,3,3,4,5")
-        end
-        local v = field(App, "me_mh", fx, fy_, fw, fh_, cur, "2,2,2,3,3,3,4,5")
-        if v ~= cur then
-          local nums = {}
-          for part in v:gmatch("%d+") do nums[#nums + 1] = tonumber(part) end
-          eff = mutate()
-          if #nums == 1 then eff.multiHit = nums[1]
-          elseif #nums > 1 then eff.multiHit = nums
+    if not gen2 then
+      if tmpl == "status_side" or tmpl == "flinch_side"
+          or tmpl == "confuse_side" or tmpl == "stat_down_side" then
+        row("Chance /256", function(fx, fy_, fw, fh_)
+          local cur = tonumber(eff.chance) or 26
+          local v = numField(App, "me_ch", fx, fy_, 80 * s, fh_, cur)
+          v = math.max(0, math.min(255, v))
+          if v ~= cur then
+            eff = mutate()
+            eff.chance = v
           end
-        end
-      end)
-    end
-    if tmpl == "charge" then
-      row("Semi-invuln", function(fx, fy_, fw, fh_)
-        local on = eff.semiInvulnerable and true or false
-        if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.blue) then
-          eff = mutate()
-          eff.semiInvulnerable = not on
-          App.markDirty()
-        end
-      end)
-      row("Charge anim", function(fx, fy_, fw, fh_)
-        local cur = tostring(eff.chargeAnim or "TELEPORT")
-        local v = field(App, "me_ca", fx, fy_, fw, fh_, cur, "TELEPORT")
-        if v ~= cur then eff = mutate(); eff.chargeAnim = v end
-      end)
+        end)
+      end
+      if tmpl == "stat_up" or tmpl == "stat_down" or tmpl == "stat_down_side" then
+        row("Stat", function(fx, fy_, fw, fh_)
+          if Kit.button(fx, fy_, 120 * s, fh_, tostring(eff.stat or "attack"),
+              { kind = "ghost" }) then
+            eff = mutate()
+            eff.stat = cycle(STATS, eff.stat or "attack")
+            App.markDirty()
+          end
+        end)
+        row("Stages", function(fx, fy_, fw, fh_)
+          local cur = tonumber(eff.delta) or 1
+          local v = numField(App, "me_d", fx, fy_, 60 * s, fh_, cur)
+          v = math.max(1, math.min(2, v))
+          if v ~= cur then
+            eff = mutate()
+            eff.delta = v
+          end
+        end)
+      end
+      if tmpl == "status_primary" or tmpl == "stat_down" or tmpl == "confuse_primary" then
+        row("Acc. check", function(fx, fy_, fw, fh_)
+          local on = eff.accuracyChecked ~= false
+          if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.green) then
+            eff = mutate()
+            eff.accuracyChecked = not on
+            App.markDirty()
+          end
+        end)
+      end
+      if tmpl == "recoil" then
+        row("Recoil /N", function(fx, fy_, fw, fh_)
+          local cur = tonumber(eff.recoilDiv) or 4
+          local v = numField(App, "me_rd", fx, fy_, 60 * s, fh_, cur)
+          v = math.max(2, math.min(8, v))
+          if v ~= cur then eff = mutate(); eff.recoilDiv = v end
+        end)
+      end
+      if tmpl == "fixed_damage" then
+        row("Damage", function(fx, fy_, fw, fh_)
+          local cur = tonumber(eff.fixedDamage) or 40
+          local v = numField(App, "me_fd", fx, fy_, 80 * s, fh_, cur)
+          v = math.max(1, math.min(65535, v))
+          if v ~= cur then eff = mutate(); eff.fixedDamage = v end
+        end)
+      end
+      if tmpl == "multi_hit" then
+        row("Hits CSV", function(fx, fy_, fw, fh_)
+          local dist = eff.multiHit
+          local cur
+          if type(dist) == "table" then
+            cur = table.concat(dist, ",")
+          else
+            cur = tostring(dist or "2,2,2,3,3,3,4,5")
+          end
+          local v = field(App, "me_mh", fx, fy_, fw, fh_, cur, "2,2,2,3,3,3,4,5")
+          if v ~= cur then
+            local nums = {}
+            for part in v:gmatch("%d+") do nums[#nums + 1] = tonumber(part) end
+            eff = mutate()
+            if #nums == 1 then eff.multiHit = nums[1]
+            elseif #nums > 1 then eff.multiHit = nums
+            end
+          end
+        end)
+      end
+      if tmpl == "charge" then
+        row("Semi-invuln", function(fx, fy_, fw, fh_)
+          local on = eff.semiInvulnerable and true or false
+          if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.blue) then
+            eff = mutate()
+            eff.semiInvulnerable = not on
+            App.markDirty()
+          end
+        end)
+        row("Charge anim", function(fx, fy_, fw, fh_)
+          local cur = tostring(eff.chargeAnim or "TELEPORT")
+          local v = field(App, "me_ca", fx, fy_, fw, fh_, cur, "TELEPORT")
+          if v ~= cur then eff = mutate(); eff.chargeAnim = v end
+        end)
+      end
     end
 
     Kit.text("micro",
-      "Save emits mod.content.move_effects:register with a generated run().",
+      gen2
+        and "Save emits move_effects:register/override({ kind, status })."
+        or "Save emits mod.content.move_effects:register with a generated run().",
       viewX, fy, PAL.faint)
     fy = fy + 18 * s
   end

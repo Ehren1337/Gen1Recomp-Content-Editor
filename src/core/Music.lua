@@ -200,10 +200,18 @@ end
 -- Returns src, loopSrc, isChip -- or nil plus the reason.
 local function startSong(data, def, wantLoop)
   if def.chip or (def.address and def.bank) then
-    local ok, src = pcall(
-      require("src.core.ChipAudio").playMusic, data, def, wantLoop)
-    if ok and src then return src, nil, true end
-    return nil, nil, nil, ok and "no source" or tostring(src)
+    -- pcall only keeps the first return; capture playMusic's err explicitly.
+    local src, err
+    local ok, a, b = pcall(function()
+      return require("src.core.ChipAudio").playMusic(data, def, wantLoop)
+    end)
+    if ok then
+      src, err = a, b
+    else
+      err = tostring(a)
+    end
+    if src then return src, nil, true end
+    return nil, nil, nil, err or "no source"
   elseif def.file then
     local src, err = newSource(def.file)
     if not src then return nil, nil, nil, err end
@@ -230,21 +238,25 @@ local function selectSong(song, ctx)
   })
 end
 
+-- Returns true on success (including "already playing this song").
+-- Returns false, err when the cue is missing, silenced, or fails to start.
 function Music.play(data, song, loop, ctx)
-  if not song then return end
-  if not love.audio then return end -- headless test stub
+  if not song then return false, "no song" end
+  if not love.audio then return false, "no audio" end -- headless test stub
   song = selectSong(song, ctx)
   -- a hook may silence the cue outright, or swap in a label the dedupe
   -- below has to compare against
-  if not song or song == state.current then return end
+  if not song then return false, "silenced" end
+  if song == state.current then return true end
   local def = songDef(data, song)
-  if not def or state.failed[song] then return end
+  if not def then return false, "unknown song" end
+  if state.failed[song] then return false, "previously failed" end
   local wantLoop = loop ~= false
   local src, loopSrc, isChip, err = startSong(data, def, wantLoop)
   if not src then
     state.failed[song] = true
     reportBadDef(data, song, err)
-    return
+    return false, err or "play failed"
   end
   stopSource(state.source)
   stopSource(state.loopSource)
@@ -266,9 +278,12 @@ function Music.play(data, song, loop, ctx)
   applyFilter(src)
   -- a fanfare owns the music channels: hold the new song until it ends
   -- (update() starts it, like the paused-song resume)
+  local ChipAudio = require("src.core.ChipAudio")
   if fanfareActive() then
     state.fanfareResume = true
-  else
+  elseif not (isChip and ChipAudio.awaitingFirstBuffer()) then
+    -- Threaded chip songs start empty; play() here races OpenAL before the
+    -- first worker buffer lands.  ChipAudio.update starts them instead.
     pcall(src.play, src)
   end
   local previous = state.current
@@ -280,6 +295,7 @@ function Music.play(data, song, loop, ctx)
       reason = ctx and ctx.reason or "direct",
     })
   end
+  return true
 end
 
 function Music.stop()
@@ -290,6 +306,10 @@ function Music.stop()
   state.current, state.source, state.loopSource, state.fade = nil, nil, nil, nil
   state.chip = false
   state.pendingRestore = nil
+  -- Preview/SFX fanfares can leave these set; clear so the next cue is not
+  -- held forever (content editor never runs Music.update during SFX preview).
+  state.fanfare = nil
+  state.fanfareResume = false
   if previous and Runtime.wants("music.stopped") then
     Runtime.emit("music.stopped", { song = previous })
   end

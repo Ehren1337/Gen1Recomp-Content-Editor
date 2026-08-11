@@ -13,6 +13,7 @@ end
 
 local MANIFEST_KEY_ORDER = {
   "id", "name", "version", "api", "entry", "profile", "game_version",
+  "games", "gen2compat",
   "category", "priority", "permissions", "dependencies", "optional_dependencies",
   "conflicts", "incompatible", "experimental", "language", "affects_link",
   "description", "github", "options_schema", "assets_transforms",
@@ -220,6 +221,14 @@ function ModIO.create(id, name)
   mkdir(dest)
   mkdir(join(dest, "assets"))
 
+  local Generation = require("Generation")
+  local games = Generation.manifestGames(nil)
+  local gamesLit = {}
+  for i, g in ipairs(games) do
+    gamesLit[i] = string.format("%q", g)
+  end
+  local gamesJson = "[" .. table.concat(gamesLit, ", ") .. "]"
+  local gen2compat = Generation.isGen2(nil) and "true" or "false"
   local manifest = string.format([[{
   "id": "%s",
   "name": "%s",
@@ -228,6 +237,8 @@ function ModIO.create(id, name)
   "entry": "main.lua",
   "profile": "content",
   "game_version": ">=%s <%d.0.0",
+  "games": %s,
+  "gen2compat": %s,
   "category": "GAMEPLAY",
   "priority": 100,
   "dependencies": [],
@@ -237,7 +248,7 @@ function ModIO.create(id, name)
   "experimental": false,
   "description": "Authored with the Gen1Recomp content editor"
 }
-]], id, display, engine, nextMajor)
+]], id, display, engine, nextMajor, gamesJson, gen2compat)
 
   local mf, err = io.open(join(dest, "manifest.json"), "wb")
   if not mf then return nil, err end
@@ -321,9 +332,11 @@ function ModIO.save(modDir, project)
   mf:write(main)
   mf:close()
 
-  -- Ship Schemas.lua only when trainer party DV/moves/statExp overrides exist.
+  -- Ship Schemas.lua only on Gen1 when trainer party DV/moves/statExp overrides
+  -- exist (main.lua only loads it when not gen2).
   local schemasPath = join(modDir, "Schemas.lua")
-  if ModWriter.trainerPartyHasOverrides(project) then
+  local Generation = require("Generation")
+  if (not Generation.isGen2(nil)) and ModWriter.trainerPartyHasOverrides(project) then
     local okS, errS = ModIO.writeText(schemasPath, ModWriter.trainerPartySchemasLua())
     if not okS then return false, errS end
   elseif ModIO.exists(schemasPath) then

@@ -1,6 +1,7 @@
 -- UI tab: title/splash branding, boot screen ids, dialogue theme, fonts,
--- engine strings, town map, and badge icons.  Writes project.title / intro /
--- theme / font / strings / townMap and project.boot.screens (+ badge icons).
+-- engine strings, town map, and badge icons.  Gen1 writes field.* via
+-- project.title / intro / theme / townMap / boot; Gold (field gated) writes
+-- data.title / gen2Intro / landmarks / gen2MenuGfx / gen2BootScreens.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -9,11 +10,12 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local UiPreview = require("UiPreview")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Ui = {}
 
-local MODES = {
+local MODES_GEN1 = {
   { id = "title", label = "Title",
     tip = "Logo, version ribbon, copyright, music, cycle species" },
   { id = "intro", label = "Intro",
@@ -32,12 +34,39 @@ local MODES = {
     tip = "Badge ids with optional icon paths" },
 }
 
+local MODES_GEN2 = {
+  { id = "title", label = "Title",
+    tip = "Gold title: logo, screen, clouds, Ho-Oh, copyright splash" },
+  { id = "intro", label = "Intro",
+    tip = "GS cinema acts: water / grass / fire tile + sprite sheets" },
+  { id = "boot", label = "Boot screens",
+    tip = "Gen2CopyrightSplash → … → Gen2TitleState / Gen2OakSpeech ids" },
+  { id = "fonts", label = "Fonts",
+    tip = "Font page sheets (image, base, glyphsPerRow)" },
+  { id = "strings", label = "Strings",
+    tip = "Engine Strings() source → override catalog" },
+  { id = "townmap", label = "Town map",
+    tip = "Pokegear landmarks (name, x, y, index)" },
+  { id = "badges", label = "Badges",
+    tip = "Trainer card badge / leader sheet paths" },
+}
+
 local BOOT_SCREEN_DEFAULTS = {
   splash = "IntroMovie", title = "TitleState", newGame = "OakSpeech",
 }
 
+local BOOT_SCREEN_DEFAULTS_GEN2 = {
+  splash = "Gen2CopyrightSplash", title = "Gen2TitleState",
+  newGame = "Gen2OakSpeech",
+}
+
 local BOOT_SCREEN_CHOICES = {
   "IntroMovie", "YellowIntro", "TitleState", "OakSpeech",
+}
+
+local BOOT_SCREEN_CHOICES_GEN2 = {
+  "Gen2CopyrightSplash", "Gen2GameFreakPresents", "Gen2GoldSilverIntro",
+  "Gen2TitleState", "Gen2OakSpeech", "Gen2MainMenu",
 }
 
 local COMMON_STRINGS = {
@@ -57,7 +86,28 @@ local function pathOf(v)
   return ""
 end
 
+local function landmarkTable(S)
+  local L = S.data and (S.data.gen2Landmarks or S.data.landmarks)
+  if type(L) ~= "table" then return {} end
+  if type(L.landmarks) == "table" then return L.landmarks end
+  return L
+end
+
 local function dataField(S, key)
+  if Generation.isGen2(S) then
+    if key == "title" then
+      return (S.data and (S.data.title or S.data.gen2Title)) or {}
+    elseif key == "intro" then
+      return (S.data and (S.data.gen2Intro or S.data.intro)) or {}
+    elseif key == "townMap" then
+      return { locations = landmarkTable(S) }
+    elseif key == "boot" then
+      local boot = S.data and S.data.gen2BootScreens
+      return { screens = (type(boot) == "table" and boot) or BOOT_SCREEN_DEFAULTS_GEN2 }
+    elseif key == "theme" then
+      return {}
+    end
+  end
   return (S.data and S.data.field and S.data.field[key]) or {}
 end
 
@@ -67,12 +117,32 @@ local function ensureBucket(S, key)
   return S.project[key]
 end
 
--- Effective value: project override else data.field[bucket][key].
+-- Effective value: project override else data bucket[key].
 local function eff(S, bucket, key)
   local p = S.project and S.project[bucket]
   if p ~= nil and p[key] ~= nil then return p[key], true end
   local d = dataField(S, bucket)
   return d[key], false
+end
+
+local function effNested(S, bucket, nest, key)
+  local p = S.project and S.project[bucket] and S.project[bucket][nest]
+  if type(p) == "table" and p[key] ~= nil then return p[key], true end
+  local d = dataField(S, bucket)[nest]
+  if type(d) == "table" then return d[key], false end
+  return nil, false
+end
+
+local function setNested(S, bucket, nest, key, val, App)
+  local b = ensureBucket(S, bucket)
+  b[nest] = b[nest] or {}
+  if val == nil or val == "" then
+    b[nest][key] = nil
+    if not next(b[nest]) then b[nest] = nil end
+  else
+    b[nest][key] = val
+  end
+  if App then App.markDirty() end
 end
 
 local function setKey(S, bucket, key, val, App)
@@ -130,7 +200,75 @@ end
 
 -- ---- Title ----
 
+local function drawTitleGen2(S, x, y, w, h, App)
+  local s = Kit.scale
+  ensureBucket(S, "title")
+  local fy, view, viewX, viewW = RegList.beginForm(S, x, y, w, h,
+    "uiTitleScroll", "title-g2", 12 * s)
+  local contentTop = fy
+  local labelW = 120 * s
+  local fh = 28 * s
+  local fieldW = viewW - labelW - 12 * s
+
+  Kit.caption(viewX, fy, "GOLD TITLE")
+  fy = fy + 24 * s
+  fy = UiPreview.draw(S, "title", viewX, fy, viewW, s)
+
+  local rows = {
+    { "image", "Logo" },
+    { "screen", "Screen BG" },
+    { "clouds", "Clouds" },
+    { "trail", "Trail" },
+    { "hooh", "Ho-Oh" },
+    { "copyright", "Copyright" },
+    { "copyrightSplash", "© splash" },
+  }
+  for _, row in ipairs(rows) do
+    local key, label = row[1], row[2]
+    local p = pathOf(select(1, eff(S, "title", key)))
+    fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, label,
+      "ui_title_" .. key, p, function(path)
+        setKey(S, "title", key, path, App)
+      end)
+  end
+
+  Kit.text("small", "Layout", viewX, fy + 6 * s, PAL.caption)
+  do
+    local cur = tostring(select(1, eff(S, "title", "layout")) or "gold_title")
+    local v = RegList.field(App, "ui_title_layout", viewX + labelW, fy, fieldW, fh,
+      cur, "gold_title")
+    if v ~= cur then setKey(S, "title", "layout", v ~= "" and v or nil, App) end
+  end
+  fy = fy + fh + 8 * s
+
+  for _, row in ipairs({
+    { "hoohX", "Ho-Oh X", 48 },
+    { "hoohY", "Ho-Oh Y", 56 },
+    { "cloudY", "Cloud Y", 88 },
+  }) do
+    Kit.text("small", row[2], viewX, fy + 6 * s, PAL.caption)
+    local cur = select(1, eff(S, "title", row[1]))
+    if type(cur) ~= "number" then cur = row[3] end
+    local v = RegList.num(App, "ui_title_" .. row[1], viewX + labelW, fy, 80 * s, fh, cur)
+    if v ~= cur then setKey(S, "title", row[1], v, App) end
+    fy = fy + fh + 6 * s
+  end
+
+  if next(S.project.title) and Kit.button(viewX, fy, 120 * s, fh, "Clear all", {
+      kind = "danger", tooltip = "Remove project.title overrides",
+    }) then
+    S.project.title = {}
+    App.markDirty()
+  end
+  fy = fy + fh + 8 * s
+
+  FormPane.finish(S, "uiTitleScroll", contentTop, fy, view)
+end
+
 local function drawTitle(S, x, y, w, h, App)
+  if Generation.isGen2(S) then
+    return drawTitleGen2(S, x, y, w, h, App)
+  end
   local s = Kit.scale
   ensureBucket(S, "title")
   local fy, view, viewX, viewW = RegList.beginForm(S, x, y, w, h,
@@ -222,7 +360,49 @@ end
 
 -- ---- Intro ----
 
+local function drawIntroGen2(S, x, y, w, h, App)
+  local s = Kit.scale
+  ensureBucket(S, "intro")
+  local fy, view, viewX, viewW = RegList.beginForm(S, x, y, w, h,
+    "uiIntroScroll", "intro-g2", 12 * s)
+  local contentTop = fy
+  local labelW = 120 * s
+  local fh = 28 * s
+  local fieldW = viewW - labelW - 12 * s
+
+  Kit.caption(viewX, fy, "GS INTRO CINEMA")
+  fy = fy + 22 * s
+  Kit.text("micro", "Water → grass → fire acts (data.gen2Intro)",
+    viewX, fy, PAL.muted)
+  fy = fy + 20 * s
+  fy = UiPreview.draw(S, "intro", viewX, fy, viewW, s)
+
+  for _, act in ipairs({ "water", "grass", "fire" }) do
+    Kit.caption(viewX, fy, string.upper(act))
+    fy = fy + 22 * s
+    for _, key in ipairs({ "tiles", "sprites" }) do
+      local p = pathOf(select(1, effNested(S, "intro", act, key)))
+      fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s,
+        act .. " " .. key, "ui_intro_" .. act .. "_" .. key, p, function(path)
+          setNested(S, "intro", act, key, path, App)
+        end)
+    end
+  end
+
+  if next(S.project.intro) and Kit.button(viewX, fy, 120 * s, fh, "Clear all", {
+      kind = "danger" }) then
+    S.project.intro = {}
+    App.markDirty()
+  end
+  fy = fy + fh + 8 * s
+
+  FormPane.finish(S, "uiIntroScroll", contentTop, fy, view)
+end
+
 local function drawIntro(S, x, y, w, h, App)
+  if Generation.isGen2(S) then
+    return drawIntroGen2(S, x, y, w, h, App)
+  end
   local s = Kit.scale
   local intro = ensureBucket(S, "intro")
   intro.studio = intro.studio or {}
@@ -318,7 +498,16 @@ end
 
 -- ---- Boot screens ----
 
+local function bootDefaults(S)
+  return Generation.isGen2(S) and BOOT_SCREEN_DEFAULTS_GEN2 or BOOT_SCREEN_DEFAULTS
+end
+
+local function bootChoices(S)
+  return Generation.isGen2(S) and BOOT_SCREEN_CHOICES_GEN2 or BOOT_SCREEN_CHOICES
+end
+
 local function screenField(S, key)
+  local defaults = bootDefaults(S)
   local boot = S.project and S.project.boot
   if boot and type(boot.screens) == "table" and boot.screens[key] then
     return boot.screens[key], true
@@ -327,14 +516,15 @@ local function screenField(S, key)
   if type(d.screens) == "table" and d.screens[key] then
     return d.screens[key], false
   end
-  return BOOT_SCREEN_DEFAULTS[key], false
+  return defaults[key], false
 end
 
 local function setScreen(S, key, val, App)
+  local defaults = bootDefaults(S)
   State.ensureProjectFields(S.project)
   S.project.boot = S.project.boot or {}
   S.project.boot.screens = S.project.boot.screens or {}
-  if val == nil or val == "" or val == BOOT_SCREEN_DEFAULTS[key] then
+  if val == nil or val == "" or val == defaults[key] then
     S.project.boot.screens[key] = nil
     if not next(S.project.boot.screens) then S.project.boot.screens = nil end
   else
@@ -350,11 +540,14 @@ local function drawBoot(S, x, y, w, h, App)
   local contentTop = fy
   local labelW = 120 * s
   local fh = 28 * s
+  local gen2 = Generation.isGen2(S)
 
-  Kit.caption(viewX, fy, "BOOT SCREENS")
+  Kit.caption(viewX, fy, gen2 and "GOLD BOOT SCREENS" or "BOOT SCREENS")
   fy = fy + 22 * s
   fy = UiPreview.draw(S, "boot", viewX, fy, viewW, s)
-  Kit.text("micro", "Registry ids for splash → title → new game (Code tab for custom factories)",
+  Kit.text("micro", gen2
+      and "data.gen2BootScreens: splash / title / newGame (movie & gamefreak stay vanilla unless set in Code)"
+      or "Registry ids for splash → title → new game (Code tab for custom factories)",
     viewX, fy, PAL.muted)
   fy = fy + 20 * s
 
@@ -363,13 +556,14 @@ local function drawBoot(S, x, y, w, h, App)
     { id = "title", label = "Title" },
     { id = "newGame", label = "New game" },
   }
+  local choices = bootChoices(S)
   for _, slot in ipairs(slots) do
     local cur, owned = screenField(S, slot.id)
     cur = tostring(cur or "")
     Kit.text("small", slot.label, viewX, fy + 6 * s, PAL.caption)
     local fx = viewX + labelW
     local chipX = fx
-    for _, choice in ipairs(BOOT_SCREEN_CHOICES) do
+    for _, choice in ipairs(choices) do
       local on = cur == choice
       local bw = Kit.textWidth("micro", choice) + 14 * s
       if Kit.chip(chipX, fy, bw, fh, choice, on, PAL.green) then
@@ -691,8 +885,7 @@ end
 
 local function townLocIds(S)
   local seen, ids = {}, {}
-  local function addFrom(bucket)
-    local locs = bucket and bucket.locations
+  local function addFrom(locs)
     if type(locs) ~= "table" then return end
     for k in pairs(locs) do
       if type(k) == "string" and not seen[k] then
@@ -701,8 +894,8 @@ local function townLocIds(S)
       end
     end
   end
-  addFrom(S.project and S.project.townMap)
-  addFrom(dataField(S, "townMap"))
+  addFrom(S.project and S.project.townMap and S.project.townMap.locations)
+  addFrom(dataField(S, "townMap").locations)
   table.sort(ids)
   return ids
 end
@@ -724,6 +917,8 @@ local function ensureLoc(S, id, App)
       x = (src and src.x) or 0,
       y = (src and src.y) or 0,
       name = (src and src.name) or id,
+      index = src and src.index,
+      id = (src and src.id) or id,
     }
     if App then App.markDirty() end
   end
@@ -733,11 +928,12 @@ end
 local function drawTownMap(S, x, y, w, h, App)
   local s = Kit.scale
   local tm = ensureBucket(S, "townMap")
+  local gen2 = Generation.isGen2(S)
   local ids = townLocIds(S)
-  if #ids == 0 then ids = { "PALLET_TOWN" } end
+  if #ids == 0 then ids = { gen2 and "LANDMARK_NEW_BARK_TOWN" or "PALLET_TOWN" } end
 
   local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, y, w, h,
-    "LOCATIONS", ids, {
+    gen2 and "LANDMARKS" or "LOCATIONS", ids, {
       queryKey = "uiTmQuery", offsetKey = "uiTmOffset", selKey = "uiTmLoc",
       accent = PAL.green,
       isOwned = function(id)
@@ -752,30 +948,53 @@ local function drawTownMap(S, x, y, w, h, App)
   local labelW = 110 * s
   local fh = 28 * s
 
-  Kit.caption(viewX, fy, "TOWN MAP")
+  Kit.caption(viewX, fy, gen2 and "POKEGEAR LANDMARKS" or "TOWN MAP")
   fy = fy + 24 * s
   fy = UiPreview.draw(S, "townmap", viewX, fy, viewW, s)
 
-  Kit.text("small", "Grid px", viewX, fy + 6 * s, PAL.caption)
-  do
-    local d = dataField(S, "townMap")
-    local cur = tm.gridPixelSize or d.gridPixelSize or 8
-    local v = RegList.num(App, "ui_tm_grid", viewX + labelW, fy, 80 * s, fh, cur)
-    if v ~= cur then tm.gridPixelSize = v; App.markDirty() end
-  end
-  fy = fy + fh + 8 * s
+  if not gen2 then
+    Kit.text("small", "Grid px", viewX, fy + 6 * s, PAL.caption)
+    do
+      local d = dataField(S, "townMap")
+      local cur = tm.gridPixelSize or d.gridPixelSize or 8
+      local v = RegList.num(App, "ui_tm_grid", viewX + labelW, fy, 80 * s, fh, cur)
+      if v ~= cur then tm.gridPixelSize = v; App.markDirty() end
+    end
+    fy = fy + fh + 8 * s
 
-  local bg = pathOf(tm.background or dataField(S, "townMap").background)
-  fy = imageRow(S, App, viewX, fy, labelW, viewW - labelW - 12 * s, fh, s,
-    "Background", "ui_tm_bg", bg, function(p)
-      tm.background = p
-      App.markDirty()
-    end)
+    local bg = pathOf(tm.background or dataField(S, "townMap").background)
+    fy = imageRow(S, App, viewX, fy, labelW, viewW - labelW - 12 * s, fh, s,
+      "Background", "ui_tm_bg", bg, function(p)
+        tm.background = p
+        App.markDirty()
+      end)
+  else
+    Kit.text("micro", "Edits emit mod.content.landmarks:patch · coords are screen px",
+      viewX, fy, PAL.muted)
+    fy = fy + 18 * s
+    Kit.text("small", "Region", viewX, fy + 6 * s, PAL.caption)
+    do
+      local cur = S.uiTmRegion or "auto"
+      local opts = { "auto", "johto", "kanto" }
+      if Kit.button(viewX + labelW, fy, 120 * s, fh,
+          Kit.ellipsize("small", cur:upper(), 110 * s), {
+            kind = "ghost",
+            tooltip = "Pokegear map tilemap (auto follows landmark index)",
+          }) then
+        local i = 1
+        for n, o in ipairs(opts) do if o == cur then i = n; break end end
+        S.uiTmRegion = opts[(i % #opts) + 1]
+        if S.uiTmRegion == "auto" then S.uiTmRegion = nil end
+        pcall(function() require("UiPreview").rebuild(S) end)
+      end
+    end
+    fy = fy + fh + 8 * s
+  end
 
   if not S.uiTmLoc then S.uiTmLoc = shown[1] end
   local id = S.uiTmLoc
   if id then
-    Kit.caption(viewX, fy, "LOCATION  " .. id)
+    Kit.caption(viewX, fy, (gen2 and "LANDMARK  " or "LOCATION  ") .. id)
     fy = fy + 22 * s
     local rec = locRec(S, id)
     Kit.text("small", "Name", viewX, fy + 6 * s, PAL.caption)
@@ -790,16 +1009,37 @@ local function drawTownMap(S, x, y, w, h, App)
     do
       local cur = rec.x or 0
       local v = RegList.num(App, "ui_tm_x", viewX + labelW, fy, 80 * s, fh, cur)
-      if v ~= cur then ensureLoc(S, id, App).x = v end
+      if v ~= cur then
+        ensureLoc(S, id, App).x = v
+        pcall(function() require("UiPreview").rebuild(S) end)
+      end
     end
     fy = fy + fh + 6 * s
     Kit.text("small", "Y", viewX, fy + 6 * s, PAL.caption)
     do
       local cur = rec.y or 0
       local v = RegList.num(App, "ui_tm_y", viewX + labelW, fy, 80 * s, fh, cur)
-      if v ~= cur then ensureLoc(S, id, App).y = v end
+      if v ~= cur then
+        ensureLoc(S, id, App).y = v
+        pcall(function() require("UiPreview").rebuild(S) end)
+      end
     end
-    fy = fy + fh + 8 * s
+    fy = fy + fh + 6 * s
+    if gen2 then
+      Kit.text("small", "Index", viewX, fy + 6 * s, PAL.caption)
+      do
+        local cur = tonumber(rec.index) or 0
+        local v = RegList.num(App, "ui_tm_idx", viewX + labelW, fy, 80 * s, fh, cur)
+        Kit.text("micro", "≥46 = Kanto map", viewX + labelW + 90 * s, fy + 8 * s, PAL.faint)
+        if v ~= cur then
+          ensureLoc(S, id, App).index = v
+          pcall(function() require("UiPreview").rebuild(S) end)
+        end
+      end
+      fy = fy + fh + 8 * s
+    else
+      fy = fy + 2 * s
+    end
 
     if tm.locations and tm.locations[id]
         and Kit.button(viewX, fy, 120 * s, fh, "Revert loc", { kind = "danger" }) then
@@ -809,17 +1049,32 @@ local function drawTownMap(S, x, y, w, h, App)
     fy = fy + fh + 8 * s
   end
 
-  Kit.text("micro", "Add location id:", viewX, fy, PAL.caption)
+  Kit.text("micro", gen2 and "Add landmark id:" or "Add location id:", viewX, fy, PAL.caption)
   fy = fy + 16 * s
   local newId = RegList.field(App, "ui_tm_new", viewX, fy, viewW - 100 * s, fh,
-    S.uiTmNewId or "", "MAP_ID")
+    S.uiTmNewId or "", gen2 and "LANDMARK_…" or "MAP_ID")
   if newId ~= (S.uiTmNewId or "") then S.uiTmNewId = newId end
   if Kit.button(viewX + viewW - 92 * s, fy, 92 * s, fh, "Add", { kind = "good" }) then
     local k = tostring(S.uiTmNewId or ""):match("^%s*(.-)%s*$")
     if k and k ~= "" then
-      ensureLoc(S, k, App)
+      local row = ensureLoc(S, k, App)
+      if gen2 and (row.index == nil) then
+        local maxIdx = 0
+        for _, e in pairs(dataField(S, "townMap").locations or {}) do
+          if type(e) == "table" and tonumber(e.index) then
+            maxIdx = math.max(maxIdx, tonumber(e.index))
+          end
+        end
+        for _, e in pairs(tm.locations or {}) do
+          if type(e) == "table" and tonumber(e.index) then
+            maxIdx = math.max(maxIdx, tonumber(e.index))
+          end
+        end
+        row.index = maxIdx + 1
+      end
       S.uiTmLoc = k
       S.uiTmNewId = ""
+      pcall(function() require("UiPreview").rebuild(S) end)
     end
   end
   fy = fy + fh + 8 * s
@@ -858,7 +1113,81 @@ local function badgeRows(S)
   return dataBadges(S)
 end
 
+local JOHTO_BADGE_NAMES = {
+  "ZEPHYR", "HIVE", "PLAIN", "FOG", "STORM", "MINERAL", "GLACIER", "RISING",
+}
+local KANTO_BADGE_NAMES = {
+  "BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VOLCANO", "EARTH",
+}
+
+local function trainerCardGfx(S)
+  local gfx = S.data and (S.data.gen2MenuGfx or S.data.menu_gfx)
+  return (gfx and gfx.trainerCard) or {}
+end
+
+local function drawBadgesGen2(S, x, y, w, h, App)
+  local s = Kit.scale
+  State.ensureProjectFields(S.project)
+  S.project.trainerCard = S.project.trainerCard or {}
+  local proj = S.project.trainerCard
+  local base = trainerCardGfx(S)
+
+  local fy, view, viewX, viewW = RegList.beginForm(S, x, y, w, h,
+    "uiBdgScroll", "badges-g2", 12 * s)
+  local contentTop = fy
+  local labelW = 110 * s
+  local fh = 28 * s
+  local fieldW = viewW - labelW - 12 * s
+
+  Kit.caption(viewX, fy, "TRAINER CARD BADGES")
+  fy = fy + 22 * s
+  Kit.text("micro", "Sheets → gen2MenuGfx.trainerCard (Save merges on mods.loaded)",
+    viewX, fy, PAL.muted)
+  fy = fy + 18 * s
+  fy = UiPreview.draw(S, "badges", viewX, fy, viewW, s)
+
+  local function setSheet(key, p)
+    proj[key] = p
+    App.markDirty()
+    pcall(function() require("UiPreview").rebuild(S) end)
+  end
+
+  local badges = pathOf(proj.badges or base.badges)
+  local leaders = pathOf(proj.leaders or base.leaders)
+  local card = pathOf(proj.card or base.card)
+  local status = pathOf(proj.status or base.status)
+  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Badges",
+    "ui_bdg_sheet", badges, function(p) setSheet("badges", p) end)
+  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Leaders",
+    "ui_bdg_leaders", leaders, function(p) setSheet("leaders", p) end)
+  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Card",
+    "ui_bdg_card", card, function(p) setSheet("card", p) end)
+  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Status",
+    "ui_bdg_status", status, function(p) setSheet("status", p) end)
+
+  Kit.caption(viewX, fy, "JOHTO")
+  fy = fy + 20 * s
+  Kit.text("micro", table.concat(JOHTO_BADGE_NAMES, " · "), viewX, fy, PAL.muted)
+  fy = fy + 18 * s
+  Kit.caption(viewX, fy, "KANTO")
+  fy = fy + 20 * s
+  Kit.text("micro", table.concat(KANTO_BADGE_NAMES, " · "), viewX, fy, PAL.muted)
+  fy = fy + 22 * s
+
+  if next(proj) and Kit.button(viewX, fy, 120 * s, fh, "Clear", { kind = "danger" }) then
+    S.project.trainerCard = {}
+    App.markDirty()
+    pcall(function() require("UiPreview").rebuild(S) end)
+  end
+  fy = fy + fh + 8 * s
+
+  FormPane.finish(S, "uiBdgScroll", contentTop, fy, view)
+end
+
 local function drawBadges(S, x, y, w, h, App)
+  if Generation.isGen2(S) then
+    return drawBadgesGen2(S, x, y, w, h, App)
+  end
   local s = Kit.scale
   local badges = badgeRows(S)
   local ids = {}
@@ -964,7 +1293,11 @@ function Ui.draw(S, x, y, w, h, App)
   end
   State.ensureProjectFields(S.project)
 
-  local modeY = RegList.modeChips(S, "uiMode", MODES, x, y, s)
+  local modes = Generation.isGen2(S) and MODES_GEN2 or MODES_GEN1
+  if S.uiMode == "theme" and Generation.isGen2(S) then
+    S.uiMode = "title"
+  end
+  local modeY = RegList.modeChips(S, "uiMode", modes, x, y, s)
   local mode = S.uiMode or "title"
   local bh = h - (modeY - y)
   if mode == "title" then

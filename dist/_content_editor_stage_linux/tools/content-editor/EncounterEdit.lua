@@ -4,6 +4,7 @@ local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
 local SpeciesPicker = require("SpeciesPicker")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local EncounterEdit = {}
@@ -16,6 +17,15 @@ EncounterEdit.KINDS = {
   { id = "good", label = "GOOD" },
 }
 
+EncounterEdit.KINDS_GEN2 = {
+  { id = "grass", label = "GRASS" },
+  { id = "water", label = "WATER" },
+  { id = "fish", label = "FISH" },
+  { id = "tree", label = "TREE" },
+}
+
+local TOD = { "MORN", "DAY", "NITE" }
+
 function EncounterEdit.cloneSlots(slots)
   local out = {}
   for i, slot in ipairs(slots or {}) do
@@ -24,16 +34,48 @@ function EncounterEdit.cloneSlots(slots)
   return out
 end
 
+local function cloneTodSlots(slots)
+  if type(slots) ~= "table" then return { MORN = {}, DAY = {}, NITE = {} } end
+  if slots.MORN or slots.DAY or slots.NITE then
+    local out = {}
+    for _, tod in ipairs(TOD) do
+      out[tod] = EncounterEdit.cloneSlots(slots[tod])
+    end
+    return out
+  end
+  -- Flat Gen1-style list → copy into all ToD buckets.
+  local flat = EncounterEdit.cloneSlots(slots)
+  return { MORN = flat, DAY = EncounterEdit.cloneSlots(flat),
+    NITE = EncounterEdit.cloneSlots(flat) }
+end
+
 function EncounterEdit.cloneEncounters(enc)
   if type(enc) ~= "table" then return nil end
   local out = {}
   for _, kind in ipairs({ "grass", "water" }) do
     local band = enc[kind]
     if type(band) == "table" then
-      out[kind] = {
-        rate = band.rate or 0,
-        slots = EncounterEdit.cloneSlots(band.slots),
-      }
+      if band.rates or (band.slots and band.slots.MORN) then
+        out[kind] = {
+          map = band.map,
+          rates = band.rates and {
+            MORN = band.rates.MORN, DAY = band.rates.DAY, NITE = band.rates.NITE,
+          } or nil,
+          rate = band.rate,
+          slots = cloneTodSlots(band.slots),
+        }
+        if kind == "water" then
+          out[kind].slots = EncounterEdit.cloneSlots(
+            type(band.slots) == "table" and not band.slots.MORN and band.slots
+              or (band.slots and band.slots.DAY) or band.slots)
+          out[kind].rates = nil
+        end
+      else
+        out[kind] = {
+          rate = band.rate or 0,
+          slots = EncounterEdit.cloneSlots(band.slots),
+        }
+      end
     end
   end
   return out
@@ -41,6 +83,16 @@ end
 
 function EncounterEdit.resolveEncounters(S, mapId, mapDef)
   if mapDef and mapDef.encounters then return mapDef.encounters, true end
+  if Generation.isGen2(S) then
+    local root = S.data and (S.data.gen2Encounters or S.data.encounters)
+    if type(root) == "table" and (root.grass or root.water) then
+      return {
+        grass = root.grass and root.grass[mapId],
+        water = root.water and root.water[mapId],
+      }, false
+    end
+    return nil, false
+  end
   if S.data and S.data.encounters and S.data.encounters[mapId] then
     return S.data.encounters[mapId], false
   end
@@ -84,6 +136,66 @@ local function ensureEncounterBand(map, kind)
   end
   map.encounters[kind].slots = map.encounters[kind].slots or {}
   return map.encounters[kind]
+end
+
+local function seedGen2Band(S, map, mapId, kind)
+  if map.encounters and type(map.encounters[kind]) == "table" then
+    return map.encounters[kind]
+  end
+  -- Prefer the global Gold grass/water tables even if map.encounters is an
+  -- empty owned stub (resolveEncounters would otherwise short-circuit).
+  local root = S and S.data and (S.data.gen2Encounters or S.data.encounters)
+  local band = type(root) == "table" and root[kind] and root[kind][mapId]
+  if type(band) == "table" then
+    local cloned = EncounterEdit.cloneEncounters({ [kind] = band })
+    return cloned and cloned[kind]
+  end
+  return nil
+end
+
+local function ensureGen2Grass(map, mapId, S)
+  map.encounters = map.encounters or {}
+  local g = map.encounters.grass
+  if type(g) ~= "table" or not g.rates then
+    g = seedGen2Band(S, map, mapId, "grass")
+    if type(g) ~= "table" or not g.rates then
+      g = {
+        map = mapId,
+        rates = { MORN = 25, DAY = 25, NITE = 25 },
+        slots = {
+          MORN = { { level = 3, species = "PIDGEY" } },
+          DAY = { { level = 3, species = "PIDGEY" } },
+          NITE = { { level = 3, species = "HOOTHOOT" } },
+        },
+      }
+    end
+    map.encounters.grass = g
+  end
+  g.slots = cloneTodSlots(g.slots)
+  g.rates = g.rates or { MORN = 25, DAY = 25, NITE = 25 }
+  return g
+end
+
+local function ensureGen2Water(map, mapId, S)
+  map.encounters = map.encounters or {}
+  local w = map.encounters.water
+  local needs = type(w) ~= "table" or type(w.slots) ~= "table"
+    or (type(w.slots) == "table" and w.slots.MORN ~= nil)
+  if needs then
+    w = seedGen2Band(S, map, mapId, "water")
+    local flatOk = type(w) == "table" and type(w.slots) == "table"
+      and w.slots.MORN == nil
+    if not flatOk then
+      w = {
+        map = mapId,
+        rate = 5,
+        slots = { { level = 5, species = "TENTACOOL" } },
+      }
+    end
+    map.encounters.water = w
+  end
+  w.slots = w.slots or {}
+  return w
 end
 
 local function field(App, id, x, y, w, h, value, ph)
@@ -130,6 +242,376 @@ local function drawSlotRows(S, App, px, py, propW, listBottom, fh, s,
   return py
 end
 
+-- Fishing / headbutt-tree slots carry a chance (0-255) alongside level+species.
+local function drawChanceSlotRows(S, App, px, py, propW, listBottom, fh, s,
+    kindKey, slots, onChange, onDelete, maxSlots)
+  Kit.text("micro", "Slots (chance, level, species)", px + 10 * s, py, PAL.caption)
+  py = py + 16 * s
+  for si = 1, #(slots or {}) do
+    if py + fh > listBottom - 36 * s then break end
+    local slot = slots[si]
+    local lx = px + 10 * s
+    local chance = tonumber(field(App, "enc_ch_" .. kindKey .. si, lx, py, 44 * s, fh,
+      tostring(slot.chance or 0), "0")) or 0
+    local lvl = tonumber(field(App, "enc_cl_" .. kindKey .. si, lx + 48 * s, py, 40 * s, fh,
+      tostring(slot.level or 1), "1")) or 1
+    local spW = math.max(80 * s, propW - (lx - px) - 96 * s - 42 * s - 8 * s)
+    local sp = slot.species or "MAGIKARP"
+    SpeciesPicker.field(S, {
+      x = lx + 92 * s, y = py, w = spW, h = fh,
+      current = sp,
+      title = "ENCOUNTER SPECIES",
+      onPick = function(id)
+        onChange(si, {
+          chance = math.max(0, math.min(255, slot.chance or 0)),
+          level = math.max(1, slot.level or 1), species = id,
+        })
+      end,
+    })
+    if chance ~= (slot.chance or 0) or lvl ~= (slot.level or 1) then
+      onChange(si, {
+        chance = math.max(0, math.min(255, chance)),
+        level = math.max(1, lvl), species = sp,
+      })
+    end
+    if Kit.button(px + propW - 42 * s, py, 28 * s, fh, "X", { kind = "danger" }) then
+      onDelete(si)
+      break
+    end
+    py = py + math.max(fh, 26 * s) + 4 * s
+  end
+  if #(slots or {}) < (maxSlots or 10) and py + 30 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, 100 * s, 28 * s, "+ Slot", { kind = "accent" }) then
+      onChange(#(slots or {}) + 1, { chance = 0, level = 5, species = "MAGIKARP" }, true)
+    end
+    py = py + 32 * s
+  end
+  return py
+end
+
+local FISH_RODS = { "old", "good", "super" }
+
+-- Clone project.fishGroups[group] from data.gen2Encounters/encounters on
+-- first edit so authored slots start from the vanilla table.
+local function ensureFishGroup(S, group)
+  S.project.fishGroups = S.project.fishGroups or {}
+  if S.project.fishGroups[group] then return S.project.fishGroups[group] end
+  local root = S.data and (S.data.gen2Encounters or S.data.encounters)
+  local base = type(root) == "table" and root.fishGroups and root.fishGroups[group]
+  local cloned = { old = {}, good = {}, super = {} }
+  if type(base) == "table" then
+    for _, rod in ipairs(FISH_RODS) do
+      local rows = base[rod]
+      if type(rows) == "table" then
+        for i, row in ipairs(rows) do
+          cloned[rod][i] = { chance = row.chance, level = row.level, species = row.species }
+        end
+      end
+    end
+  end
+  S.project.fishGroups[group] = cloned
+  return cloned
+end
+
+-- Clone project.treeSets[setId] from data.gen2Encounters/encounters on
+-- first edit (shared by headbutt trees and Rock Smash rocks).
+local function ensureTreeSet(S, setId)
+  S.project.treeSets = S.project.treeSets or {}
+  if S.project.treeSets[setId] then return S.project.treeSets[setId] end
+  local root = S.data and (S.data.gen2Encounters or S.data.encounters)
+  local base = type(root) == "table" and root.treeSets and root.treeSets[setId]
+  local cloned = { common = {}, rare = {} }
+  if type(base) == "table" then
+    for _, listName in ipairs({ "common", "rare" }) do
+      local rows = base[listName]
+      if type(rows) == "table" then
+        for i, row in ipairs(rows) do
+          cloned[listName][i] = { chance = row.chance, level = row.level, species = row.species }
+        end
+      end
+    end
+  end
+  S.project.treeSets[setId] = cloned
+  return cloned
+end
+
+local function collectTreeSetIds(S, root)
+  local seen, ids = {}, {}
+  if type(root) == "table" and type(root.treeSets) == "table" then
+    for id in pairs(root.treeSets) do
+      if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+    end
+  end
+  for id in pairs(S.project.treeSets or {}) do
+    if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  return ids
+end
+
+-- Advance to the next known set id; starts at the first id when cur is
+-- unset or unrecognized (e.g. "(none)").
+local function cycleSetId(list, cur)
+  if not list or #list == 0 then return cur end
+  local idx = 0
+  for i, v in ipairs(list) do
+    if v == cur then idx = i; break end
+  end
+  local n = idx + 1
+  if n > #list then n = 1 end
+  return list[n]
+end
+
+local function isKindKnown(list, id)
+  for _, k in ipairs(list) do
+    if k.id == id then return true end
+  end
+  return false
+end
+
+local function drawGen2Wild(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  local mapId = map.id or S.mapId
+  local enc = EncounterEdit.resolveEncounters(S, mapId, map)
+  S.mapEncKind = isKindKnown(EncounterEdit.KINDS_GEN2, S.mapEncKind)
+    and S.mapEncKind or "grass"
+  S.mapEncTod = S.mapEncTod or "DAY"
+  local sx, sy = px + 10 * s, py
+  for _, kind in ipairs(EncounterEdit.KINDS_GEN2) do
+    local on = S.mapEncKind == kind.id
+    local bw = Kit.textWidth("micro", kind.label) + 14 * s
+    if Kit.chip(sx, sy, bw, fh, kind.label, on, PAL.green) then
+      S.mapEncKind = kind.id
+    end
+    sx = sx + bw + 4 * s
+  end
+  py = sy + fh + 8 * s
+
+  local kind = S.mapEncKind
+  if kind == "grass" then
+    local band = enc and enc.grass
+    if not band then
+      Kit.text("micro", "No grass encounters (ToD) on this map.",
+        px + 10 * s, py, PAL.faint)
+      py = py + 18 * s
+      if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "+ Add grass",
+          { kind = "good" }) then
+        map = mutate()
+        ensureGen2Grass(map, mapId, S)
+        App.markDirty()
+      end
+      return py + 36 * s
+    end
+    Kit.text("micro", "Rates MORN / DAY / NITE", px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    local rates = band.rates or {}
+    local rx = px + 10 * s
+    for _, tod in ipairs(TOD) do
+      local cur = rates[tod] or 0
+      local v = tonumber(field(App, "enc_g2r_" .. tod, rx, py, 50 * s, fh,
+        tostring(cur), "0")) or 0
+      if v ~= cur then
+        map = mutate()
+        local g = ensureGen2Grass(map, mapId, S)
+        g.rates = g.rates or {}
+        g.rates[tod] = math.max(0, math.min(255, v))
+      end
+      Kit.text("micro", tod, rx, py + fh + 2 * s, PAL.faint)
+      rx = rx + 58 * s
+    end
+    py = py + fh + 18 * s
+    sx = px + 10 * s
+    for _, tod in ipairs(TOD) do
+      local on = S.mapEncTod == tod
+      local bw = Kit.textWidth("micro", tod) + 14 * s
+      if Kit.chip(sx, py, bw, fh, tod, on, PAL.blue) then
+        S.mapEncTod = tod
+      end
+      sx = sx + bw + 4 * s
+    end
+    py = py + fh + 8 * s
+    local tod = S.mapEncTod
+    local slots = (band.slots and band.slots[tod]) or {}
+    py = drawSlotRows(S, App, px, py, propW, listBottom, fh, s,
+      "g2g_" .. tod, slots,
+      function(si, slot, isAdd)
+        map = mutate()
+        local g = ensureGen2Grass(map, mapId, S)
+        g.slots[tod] = g.slots[tod] or {}
+        if isAdd then g.slots[tod][#g.slots[tod] + 1] = slot
+        else g.slots[tod][si] = slot end
+        App.markDirty()
+      end,
+      function(si)
+        map = mutate()
+        local g = ensureGen2Grass(map, mapId, S)
+        table.remove(g.slots[tod], si)
+        App.markDirty()
+      end, 7)
+    if py + 36 * s <= listBottom then
+      if Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Clear grass",
+          { kind = "ghost" }) then
+        map = mutate()
+        if map.encounters then map.encounters.grass = nil end
+        App.markDirty()
+      end
+      py = py + 36 * s
+    end
+    return py
+  end
+
+  if kind == "fish" then
+    local group = map.fishGroup
+    Kit.text("micro", "Map fish group: " .. tostring(group or "FISHGROUP_NONE")
+      .. " (edit on the Group / Map header row above)", px + 10 * s, py, PAL.muted)
+    py = py + 20 * s
+    if not group or group == "" or group == "FISHGROUP_NONE" then
+      Kit.text("micro", "No fish group set on this map.", px + 10 * s, py, PAL.faint)
+      return py + 20 * s
+    end
+    S.mapEncRod = (S.mapEncRod == "old" or S.mapEncRod == "good" or S.mapEncRod == "super")
+      and S.mapEncRod or "old"
+    sx = px + 10 * s
+    for _, rod in ipairs(FISH_RODS) do
+      local on = S.mapEncRod == rod
+      local label = rod:upper()
+      local bw = Kit.textWidth("micro", label) + 14 * s
+      if Kit.chip(sx, py, bw, fh, label, on, PAL.blue) then
+        S.mapEncRod = rod
+      end
+      sx = sx + bw + 4 * s
+    end
+    py = py + fh + 8 * s
+    local fg = ensureFishGroup(S, group)
+    local rod = S.mapEncRod
+    return drawChanceSlotRows(S, App, px, py, propW, listBottom, fh, s,
+      "fish_" .. group .. "_" .. rod, fg[rod],
+      function(si, slot, isAdd)
+        fg[rod] = fg[rod] or {}
+        if isAdd then fg[rod][#fg[rod] + 1] = slot else fg[rod][si] = slot end
+        App.markDirty()
+      end,
+      function(si)
+        table.remove(fg[rod], si)
+        App.markDirty()
+      end, 10)
+  end
+
+  if kind == "tree" then
+    S.project.trees = S.project.trees or {}
+    S.project.rocks = S.project.rocks or {}
+    local root = S.data and (S.data.gen2Encounters or S.data.encounters)
+    local setIds = collectTreeSetIds(S, root)
+
+    Kit.text("micro", "Tree set (headbutt)", px + 10 * s, py, PAL.caption)
+    py = py + 16 * s
+    local curTree = S.project.trees[mapId]
+      or (type(root) == "table" and root.trees and root.trees[mapId])
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s,
+        Kit.ellipsize("small", tostring(curTree or "(none)"), propW - 30 * s),
+        { kind = "ghost", tooltip = "Cycle headbutt tree set for this map" }) then
+      S.project.trees[mapId] = cycleSetId(setIds, curTree)
+      App.markDirty()
+    end
+    py = py + 32 * s
+
+    Kit.text("micro", "Rock set (Rock Smash, optional)", px + 10 * s, py, PAL.caption)
+    py = py + 16 * s
+    local curRock = S.project.rocks[mapId]
+      or (type(root) == "table" and root.rocks and root.rocks[mapId])
+    if Kit.button(px + 10 * s, py, propW - 92 * s, 28 * s,
+        Kit.ellipsize("small", tostring(curRock or "(none)"), propW - 102 * s),
+        { kind = "ghost", tooltip = "Cycle Rock Smash set for this map" }) then
+      S.project.rocks[mapId] = cycleSetId(setIds, curRock)
+      App.markDirty()
+    end
+    if S.project.rocks[mapId] and Kit.button(px + propW - 78 * s, py, 68 * s, 28 * s,
+        "Clear", { kind = "danger" }) then
+      S.project.rocks[mapId] = nil
+      App.markDirty()
+    end
+    py = py + 32 * s
+
+    local setId = S.project.trees[mapId]
+      or (type(root) == "table" and root.trees and root.trees[mapId])
+    if not setId then
+      Kit.text("micro", "No tree set on this map.", px + 10 * s, py, PAL.faint)
+      return py + 20 * s
+    end
+    local ts = ensureTreeSet(S, setId)
+    S.mapEncTreeList = (S.mapEncTreeList == "common" or S.mapEncTreeList == "rare")
+      and S.mapEncTreeList or "common"
+    sx = px + 10 * s
+    for _, listName in ipairs({ "common", "rare" }) do
+      local on = S.mapEncTreeList == listName
+      local label = listName:upper()
+      local bw = Kit.textWidth("micro", label) + 14 * s
+      if Kit.chip(sx, py, bw, fh, label, on, PAL.blue) then
+        S.mapEncTreeList = listName
+      end
+      sx = sx + bw + 4 * s
+    end
+    py = py + fh + 8 * s
+    local listName = S.mapEncTreeList
+    return drawChanceSlotRows(S, App, px, py, propW, listBottom, fh, s,
+      "tree_" .. setId .. "_" .. listName, ts[listName],
+      function(si, slot, isAdd)
+        ts[listName] = ts[listName] or {}
+        if isAdd then ts[listName][#ts[listName] + 1] = slot else ts[listName][si] = slot end
+        App.markDirty()
+      end,
+      function(si)
+        table.remove(ts[listName], si)
+        App.markDirty()
+      end, 10)
+  end
+
+  -- water
+  local band = enc and enc.water
+  if not band then
+    Kit.text("micro", "No water encounters on this map.",
+      px + 10 * s, py, PAL.faint)
+    py = py + 18 * s
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "+ Add water",
+        { kind = "good" }) then
+      map = mutate()
+      ensureGen2Water(map, mapId, S)
+      App.markDirty()
+    end
+    return py + 36 * s
+  end
+  Kit.text("micro", "Rate (0-255)", px + 10 * s, py, PAL.caption)
+  py = py + 14 * s
+  local rate = tonumber(field(App, "enc_g2w_rate", px + 10 * s, py, 70 * s, fh,
+    tostring(band.rate or 0), "0")) or 0
+  if rate ~= (band.rate or 0) then
+    map = mutate()
+    ensureGen2Water(map, mapId, S).rate = math.max(0, math.min(255, rate))
+  end
+  py = py + fh + 8 * s
+  py = drawSlotRows(S, App, px, py, propW, listBottom, fh, s, "g2w", band.slots,
+    function(si, slot, isAdd)
+      map = mutate()
+      local w = ensureGen2Water(map, mapId, S)
+      if isAdd then w.slots[#w.slots + 1] = slot else w.slots[si] = slot end
+      App.markDirty()
+    end,
+    function(si)
+      map = mutate()
+      table.remove(ensureGen2Water(map, mapId, S).slots, si)
+      App.markDirty()
+    end, 3)
+  if py + 36 * s <= listBottom then
+    if Kit.button(px + 10 * s, py, 100 * s, 28 * s, "Clear water",
+        { kind = "ghost" }) then
+      map = mutate()
+      if map.encounters then map.encounters.water = nil end
+      App.markDirty()
+    end
+    py = py + 36 * s
+  end
+  return py
+end
+
 -- Draw wild encounter editor for a map. mutate() must return an owned map def.
 function EncounterEdit.drawWild(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   if not map then
@@ -137,6 +619,9 @@ function EncounterEdit.drawWild(S, map, mutate, App, px, py, propW, listBottom, 
     return py + 20 * s
   end
   State.ensureProjectFields(S.project)
+  if Generation.isGen2(S) then
+    return drawGen2Wild(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  end
   local mapId = map.id or S.mapId
   local enc = EncounterEdit.resolveEncounters(S, mapId, map)
   local superSlots = EncounterEdit.resolveSuperRod(S, mapId, map)

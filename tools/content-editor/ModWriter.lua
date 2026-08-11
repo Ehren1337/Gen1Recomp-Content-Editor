@@ -1,5 +1,7 @@
 -- Serialize editor_project.lua and emit a loadable mod main.lua.
 
+local Generation = require("Generation")
+
 local ModWriter = {}
 
 local function isArray(t)
@@ -177,7 +179,8 @@ end
 local EDITOR_ONLY = {
   effectTemplate = true, healAmount = true, statusCures = true,
   ballRandMax = true, ballHpFactor = true, ballWobble = true,
-  ballAutoCatch = true, vitaminStat = true, xStat = true,
+  ballAutoCatch = true, ballMultiplier = true,
+  vitaminStat = true, xStat = true,
   ppFull = true, ppAllMoves = true, encounters = true, superRod = true,
   source = true,
 }
@@ -195,6 +198,203 @@ local function stripEditorFields(rec)
   end
   scrubRomCachePaths(out)
   return out
+end
+
+local GROWTH_TO_GEN2 = {
+  MEDIUM_FAST = "GROWTH_MEDIUM_FAST", MEDIUM_SLOW = "GROWTH_MEDIUM_SLOW",
+  FAST = "GROWTH_FAST", SLOW = "GROWTH_SLOW",
+  SLIGHTLY_FAST = "GROWTH_SLIGHTLY_FAST", SLIGHTLY_SLOW = "GROWTH_SLIGHTLY_SLOW",
+}
+local GROWTH_RATE_IDS = {
+  GROWTH_MEDIUM_FAST = 0, GROWTH_SLIGHTLY_FAST = 1, GROWTH_SLIGHTLY_SLOW = 2,
+  GROWTH_MEDIUM_SLOW = 3, GROWTH_FAST = 4, GROWTH_SLOW = 5,
+}
+local EVO_METHOD_TO_GEN2 = {
+  LEVEL = "EVOLVE_LEVEL", ITEM = "EVOLVE_ITEM", TRADE = "EVOLVE_TRADE",
+  HAPPINESS = "EVOLVE_HAPPINESS", HAPPINESS_DAY = "EVOLVE_HAPPINESS",
+  HAPPINESS_NITE = "EVOLVE_HAPPINESS", STAT = "EVOLVE_STAT",
+}
+
+-- Remap editor Gen1 keys to Gen2 schema shapes when authoring Gold.
+local function shapePokemonForEmit(rec, gen2)
+  if not gen2 or type(rec) ~= "table" then return rec end
+  local bs = rec.baseStats
+  if type(bs) == "table" then
+    if bs.special ~= nil then
+      if bs.specialAttack == nil then bs.specialAttack = bs.special end
+      if bs.specialDefense == nil then bs.specialDefense = bs.special end
+      bs.special = nil
+    end
+  end
+  if rec.learnset and not rec.levelMoves then
+    rec.levelMoves = rec.learnset
+  end
+  rec.learnset = nil
+  rec.level1Moves = nil
+  if rec.frontSize and not rec.picSize then
+    rec.picSize = rec.frontSize
+  end
+  rec.frontSize = nil
+  if type(rec.growthRate) == "string" then
+    if rec.growthRate:sub(1, 7) ~= "GROWTH_" then
+      rec.growthRate = GROWTH_TO_GEN2[rec.growthRate]
+        or ("GROWTH_" .. rec.growthRate)
+    end
+    if rec.growthRateId == nil then
+      rec.growthRateId = GROWTH_RATE_IDS[rec.growthRate]
+    end
+  end
+  for _, evo in ipairs(rec.evolutions or {}) do
+    if type(evo) == "table" then
+      if evo.species and not evo.into then
+        evo.into = evo.species
+      end
+      evo.species = nil
+      if type(evo.method) == "string" and evo.method:sub(1, 7) ~= "EVOLVE_" then
+        local prev = evo.method
+        evo.method = EVO_METHOD_TO_GEN2[prev] or evo.method
+        if prev == "HAPPINESS_DAY" then evo.time = evo.time or "MORNDAY" end
+        if prev == "HAPPINESS_NITE" then evo.time = evo.time or "NITE" end
+        if prev == "HAPPINESS" then evo.time = evo.time or "ANYTIME" end
+      end
+    end
+  end
+  -- Dex / Gen1 icon live elsewhere on Gold.
+  rec.dexEntry = nil
+  rec.icon = nil
+  rec.palette = nil
+  return rec
+end
+
+local POCKET_IDS = { ITEM = 1, KEY_ITEM = 2, BALL = 3, TM_HM = 4 }
+
+-- Gold items use canToss / teaches / pocket — not Gen1 tossable / machine / effect.
+local function shapeItemForEmit(rec, gen2)
+  if not gen2 or type(rec) ~= "table" then return rec end
+  if rec.canToss == nil and rec.tossable ~= nil then
+    rec.canToss = rec.tossable and true or false
+  end
+  if rec.keyItem then
+    rec.canToss = false
+    rec.pocket = rec.pocket or "KEY_ITEM"
+  end
+  if type(rec.machine) == "table" then
+    if rec.teaches == nil and type(rec.machine.move) == "string" then
+      rec.teaches = rec.machine.move
+    end
+    if rec.tmNumber == nil and type(rec.machine.number) == "number" then
+      rec.tmNumber = rec.machine.number
+    end
+    if rec.tmLabel == nil and type(rec.machine.kind) == "string"
+        and type(rec.machine.number) == "number" then
+      rec.tmLabel = string.format("%s%02d", rec.machine.kind, rec.machine.number)
+    end
+    if rec.pocket == nil and rec.teaches then rec.pocket = "TM_HM" end
+  end
+  if rec.pocket and POCKET_IDS[rec.pocket] then
+    rec.pocketId = POCKET_IDS[rec.pocket]
+  end
+  rec.tossable = nil
+  rec.keyItem = nil
+  rec.machine = nil
+  rec.effect = nil
+  rec.ball = nil
+  rec.needsTarget = nil
+  -- Gen1 editor stand-ins; Gold pack never draws per-item icons.
+  rec.icon = nil
+  rec.palette = nil
+  rec.trueColor = nil
+  return rec
+end
+
+-- Gold moves: percent ↔ raw bytes, drop Gen1-only flags / anim tables.
+local function shapeMoveForEmit(rec, gen2)
+  if not gen2 or type(rec) ~= "table" then return rec end
+  local acc = tonumber(rec.accuracy)
+  if acc ~= nil then
+    rec.accuracyRaw = math.floor(math.max(0, math.min(100, acc)) * 255 / 100 + 0.5)
+  end
+  local ech = tonumber(rec.effectChance)
+  if ech ~= nil then
+    rec.effectChanceRaw = math.floor(math.max(0, math.min(100, ech)) * 255 / 100 + 0.5)
+  end
+  rec.category = nil
+  rec.priority = nil
+  rec.highCrit = nil
+  rec.fixedDamage = nil
+  rec.chargeText = nil
+  rec.semiInvulnerable = nil
+  rec.multiHit = nil
+  rec.counterable = nil
+  rec.anim = nil
+  return rec
+end
+
+local function shapeGen2PartyMon(mon, trainerType)
+  if type(mon) ~= "table" then return nil end
+  local out = {
+    level = mon.level or 5,
+    species = mon.species or "PIDGEY",
+  }
+  local ttype = trainerType or "TRAINERTYPE_NORMAL"
+  if type(ttype) == "string" and ttype:find("ITEM", 1, true)
+      and type(mon.item) == "string" and mon.item ~= "" then
+    out.item = mon.item
+  end
+  if type(ttype) == "string" and ttype:find("MOVES", 1, true)
+      and type(mon.moves) == "table" then
+    local moves = {}
+    for i = 1, math.min(4, #mon.moves) do
+      local id = mon.moves[i]
+      if type(id) == "string" and id ~= "" then
+        moves[#moves + 1] = id
+      end
+    end
+    if #moves > 0 then out.moves = moves end
+  end
+  return out
+end
+
+local function shapeTrainerForEmit(rec, gen2)
+  if not gen2 or type(rec) ~= "table" then return rec end
+  local parties = rec.parties
+  rec.parties = nil
+  rec.battleTheme = nil
+  rec.aiClass = nil
+  rec.basePic = nil
+  -- Gold pics live in gen2MenuGfx.battleHud.trainerPics, not trainers schema.
+  rec.pic = nil
+  rec.paletteSource = nil
+  rec.trueColor = nil
+  if type(rec.trainers) == "table" and #rec.trainers > 0 then
+    for _, named in ipairs(rec.trainers) do
+      if type(named) == "table" and type(named.party) == "table" then
+        local party = {}
+        for mi, mon in ipairs(named.party) do
+          party[mi] = shapeGen2PartyMon(mon, named.trainerType)
+        end
+        named.party = party
+      end
+    end
+    return rec
+  end
+  -- Promote Gen1 parties into named trainers for Gold.
+  if type(parties) == "table" and #parties > 0 then
+    local trainers = {}
+    for i, party in ipairs(parties) do
+      local mons = {}
+      for mi, mon in ipairs(party or {}) do
+        mons[mi] = shapeGen2PartyMon(mon, "TRAINERTYPE_NORMAL")
+      end
+      trainers[i] = {
+        name = rec.name or ("TRAINER" .. i),
+        trainerType = "TRAINERTYPE_NORMAL",
+        party = mons,
+      }
+    end
+    rec.trainers = trainers
+  end
+  return rec
 end
 
 -- Only brand-new ids should register.  Missing/_isNew=false → patch.
@@ -237,13 +437,48 @@ local function effectIdFor(item)
   return (item.id or "ITEM") .. "_EFFECT"
 end
 
--- Authorable move_effects templates -> register() with a generated run().
-local function emitMoveEffectRegister(eff)
+-- Gold statuses use lowercase names on mon.status (burn/sleep/…), not BRN/SLP.
+local GEN2_STATUS_FROM_GEN1 = {
+  BRN = "burn", FRZ = "freeze", PAR = "paralyze", PSN = "poison",
+  SLP = "sleep", TOX = "toxic", CONFUSE = "confuse",
+  burn = "burn", freeze = "freeze", paralyze = "paralyze", poison = "poison",
+  sleep = "sleep", toxic = "toxic", confuse = "confuse",
+}
+
+-- Authorable move_effects templates -> register()/override() with generated body.
+-- Gen1 templates emit a run(ctx) for the Red battle pipeline.
+-- Gold templates emit { kind, status } records Battle.moveEffectRecordFor reads.
+local function emitMoveEffectRegister(eff, gen2)
   if type(eff) ~= "table" then return nil end
   local eid = eff.id
   if type(eid) ~= "string" or eid == "" then return nil end
-  local tmpl = eff.template or "status_side"
+  local tmpl = eff.template or (gen2 and "status_secondary" or "status_side")
   local qeid = string.format("%q", eid)
+  local verb = (eff._isNew == false) and "override" or "register"
+
+  if gen2 then
+    if tmpl == "status_primary" or tmpl == "status_secondary"
+        or tmpl == "status_side" then
+      local kind = (tmpl == "status_primary") and "primary" or "secondary"
+      local raw = tostring(eff.status or "burn")
+      local status = GEN2_STATUS_FROM_GEN1[raw] or GEN2_STATUS_FROM_GEN1[raw:upper()]
+        or raw:lower()
+      return string.format([[
+  mod.content.move_effects:%s(%s, {
+    kind = %q,
+    status = %q,
+  })]], verb, qeid, kind, status)
+    end
+    if tmpl == "empty" then
+      return string.format([[
+  mod.content.move_effects:%s(%s, {
+    kind = "full",
+  })]], verb, qeid)
+    end
+    -- Other Gen1 templates are not valid on Gold; skip rather than emit broken run().
+    return nil
+  end
+
   local chance = tonumber(eff.chance) or 26
   local status = tostring(eff.status or "BRN")
   local stat = tostring(eff.stat or "attack")
@@ -815,8 +1050,11 @@ end
 
 function ModWriter.emitMain(project, baseData)
   baseData = baseData or {}
+  local gen2 = Generation.isGen2(nil)
   -- Seed trainer_headers / trainerClass before maps + headers are emitted.
-  ModWriter.ensureTrainerHeaders(project)
+  if not gen2 then
+    ModWriter.ensureTrainerHeaders(project)
+  end
   local id = project.id or "content_mod"
   local out = {
     string.format("-- %s: generated by tools/content-editor (do not hand-edit;", id),
@@ -826,37 +1064,80 @@ function ModWriter.emitMain(project, baseData)
   }
 
   -- palettes (before sprites / pokemon that may reference them)
-  local palIds = {}
-  for pid in pairs(project.palettes or {}) do palIds[#palIds + 1] = pid end
-  table.sort(palIds)
-  for _, pid in ipairs(palIds) do
-    local raw = project.palettes[pid]
-    local colors = raw and (raw.colors or raw)
-    if type(colors) == "table" then
-      local named, triples = {}, {}
-      for i = 1, 4 do
-        local c = colors[i] or { 0, 0, 0 }
-        local r, g, b
-        if c.r then r, g, b = c.r, c.g, c.b
-        else r, g, b = c[1] or 0, c[2] or 0, c[3] or 0 end
-        named[i] = { r = r, g = g, b = b }
-        triples[i] = { r, g, b }
+  if gen2 then
+    -- Gold: project.palettes[context] = patch payload (pokemon/trainers/…)
+    local GEN2_PAL_CONTEXTS = {
+      "pokemon", "trainers", "objects", "bg", "environments", "roofs",
+      "hpBar", "expBar", "partyMenu", "battleObjects",
+    }
+    local function cleanPalValue(val)
+      if type(val) ~= "table" then return val end
+      -- colour row: list of {r,g,b}
+      if type(val[1]) == "table" and (val[1][1] ~= nil or val[1].r ~= nil) then
+        local row = {}
+        for i, c in ipairs(val) do
+          if type(c) == "table" then
+            if c.r then row[i] = { c.r, c.g, c.b }
+            else row[i] = { c[1] or 0, c[2] or 0, c[3] or 0 } end
+          end
+        end
+        return row
       end
-      if raw._isNew == true then
-        out[#out + 1] = string.format(
-          "  mod.content.palettes:register(%q, { colors = %s })",
-          pid, emitTableLiteral(named, 1))
-      else
-        out[#out + 1] = string.format(
-          "  mod.content.palettes:override(%q, %s)",
-          pid, emitTableLiteral(triples, 1))
+      local outv = {}
+      for k, v in pairs(val) do
+        if type(k) == "string" and k:sub(1, 1) ~= "_" then
+          outv[k] = cleanPalValue(v)
+        elseif type(k) == "number" then
+          outv[k] = cleanPalValue(v)
+        end
       end
-      out[#out + 1] = ""
+      return outv
+    end
+    for _, ctx in ipairs(GEN2_PAL_CONTEXTS) do
+      local raw = project.palettes and project.palettes[ctx]
+      if raw ~= nil then
+        local payload = cleanPalValue(raw)
+        if type(payload) == "table" then
+          local lit = rewriteModPaths(emitTableLiteral(payload, 1))
+          out[#out + 1] = string.format(
+            "  mod.content.palettes:patch(%q, %s)", ctx, lit)
+          out[#out + 1] = ""
+        end
+      end
+    end
+  else
+    local palIds = {}
+    for pid in pairs(project.palettes or {}) do palIds[#palIds + 1] = pid end
+    table.sort(palIds)
+    for _, pid in ipairs(palIds) do
+      local raw = project.palettes[pid]
+      local colors = raw and (raw.colors or raw)
+      if type(colors) == "table" then
+        local named, triples = {}, {}
+        for i = 1, 4 do
+          local c = colors[i] or { 0, 0, 0 }
+          local r, g, b
+          if c.r then r, g, b = c.r, c.g, c.b
+          else r, g, b = c[1] or 0, c[2] or 0, c[3] or 0 end
+          named[i] = { r = r, g = g, b = b }
+          triples[i] = { r, g, b }
+        end
+        if raw._isNew == true then
+          out[#out + 1] = string.format(
+            "  mod.content.palettes:register(%q, { colors = %s })",
+            pid, emitTableLiteral(named, 1))
+        else
+          out[#out + 1] = string.format(
+            "  mod.content.palettes:override(%q, %s)",
+            pid, emitTableLiteral(triples, 1))
+        end
+        out[#out + 1] = ""
+      end
     end
   end
 
-  -- GBC ADVANCED tileset BG groups (8×4). Applied after pack load via PaletteFX.
-  do
+  -- GBC ADVANCED tileset BG groups (8×4). Gen1 only (Gold uses palettes.bg).
+  if not gen2 then
     local gw = project.gbcWorld and project.gbcWorld.groupColors
     local tsIds = {}
     if type(gw) == "table" then
@@ -898,12 +1179,24 @@ function ModWriter.emitMain(project, baseData)
   end
 
   -- overworld sprites
+  local function shapeSpriteForEmit(rec)
+    if gen2 then
+      rec.paletteSource = nil
+    else
+      rec.palette = nil
+      rec.paletteId = nil
+      rec.spriteType = nil
+      rec.species = nil
+      rec.icon = nil
+    end
+    return rec
+  end
   local sprIds = {}
   for sid in pairs(project.sprites or {}) do sprIds[#sprIds + 1] = sid end
   table.sort(sprIds)
   for _, sid in ipairs(sprIds) do
     local raw = project.sprites[sid]
-    local rec = stripEditorFields(raw)
+    local rec = shapeSpriteForEmit(stripEditorFields(raw))
     rec.id = rec.id or sid
     local verb = emitVerb(raw)
     local lit = rewriteModPaths(emitTableLiteral(rec, 1))
@@ -915,19 +1208,42 @@ function ModWriter.emitMain(project, baseData)
   -- tilesets (maps may reference them). Patch only fields that differ from
   -- vanilla — a full OVERWORLD clone (terrain paint) must not dump animation /
   -- water tile sheets into the mod (ROM-cache / water-anim side effects).
+  local function shapeTilesetForEmit(rec)
+    if gen2 then
+      rec.walkable = nil
+      rec.waterTiles = nil
+      rec.shoreTiles = nil
+      rec.doorTiles = nil
+      rec.warpTiles = nil
+      rec.counterTiles = nil
+      rec.animation = nil
+      rec.grassTile = nil
+    else
+      rec.collision = nil
+      rec.anim = nil
+      rec.tilePalettes = nil
+      rec.palMap = nil
+      rec.generation = nil
+    end
+    return rec
+  end
   local tsIds = {}
   for tid in pairs(project.tilesets or {}) do tsIds[#tsIds + 1] = tid end
   table.sort(tsIds)
   local baseTilesets = baseData.tilesets or {}
   for _, tid in ipairs(tsIds) do
     local raw = project.tilesets[tid]
-    local rec = stripEditorFields(raw)
+    local rec = shapeTilesetForEmit(stripEditorFields(raw))
     rec.id = rec.id or tid
     local verb = emitVerb(raw)
     local payload = rec
     local skip = false
     if verb == "patch" then
-      local diff = diffAgainstBase(baseTilesets[tid], rec)
+      local base = baseTilesets[tid]
+      if base then
+        base = shapeTilesetForEmit(stripEditorFields(base))
+      end
+      local diff = diffAgainstBase(base, rec)
       if not diff then
         skip = true
       else
@@ -943,6 +1259,22 @@ function ModWriter.emitMain(project, baseData)
   end
 
   -- types before pokemon/moves so f.id("type_chart") resolves
+  local baseChart = baseData.type_chart or {}
+  local baseTypeTbl = baseChart.types or {}
+  local baseMatch = {}
+  for _, row in ipairs(baseChart.matchups or {}) do
+    if row.attacker and row.defender then
+      baseMatch[row.attacker .. ">" .. row.defender] = true
+    end
+  end
+  -- Gen1 TypeChart literals also count as vanilla when the chart has no types.
+  if not next(baseTypeTbl) then
+    local okTc, TypeChart = pcall(require, "src.battle.TypeChart")
+    if okTc and TypeChart and TypeChart.TYPES then
+      baseTypeTbl = TypeChart.TYPES
+    end
+  end
+
   local typeIds = {}
   for tid in pairs(project.types or {}) do typeIds[#typeIds + 1] = tid end
   table.sort(typeIds)
@@ -953,9 +1285,13 @@ function ModWriter.emitMain(project, baseData)
       category = raw.category or "special",
     }
     if raw.index ~= nil then rec.index = raw.index end
+    local verb = emitVerb(raw)
+    if verb == "register" and baseTypeTbl[tid] then
+      verb = "override"
+    end
     out[#out + 1] = string.format(
-      "  mod.content.type_chart:register(%q, %s)",
-      tid, emitTableLiteral(rec, 1))
+      "  mod.content.type_chart:%s(%q, %s)",
+      verb, tid, emitTableLiteral(rec, 1))
     out[#out + 1] = ""
   end
   local matchKeys = {}
@@ -963,9 +1299,54 @@ function ModWriter.emitMain(project, baseData)
   table.sort(matchKeys)
   for _, key in ipairs(matchKeys) do
     local mult = project.type_matchups[key]
+    local verb = baseMatch[key] and "override" or "register"
     out[#out + 1] = string.format(
-      "  mod.content.type_chart:register(%q, { multiplier = %d })",
-      key, tonumber(mult) or 10)
+      "  mod.content.type_chart:%s(%q, { multiplier = %d })",
+      verb, key, tonumber(mult) or 10)
+    out[#out + 1] = ""
+  end
+
+  -- Gold foresightMatchups (TypeMatchups block after $FE) — not a registry id.
+  if gen2 and type(project.type_foresight) == "table"
+      and next(project.type_foresight) then
+    local fKeys = {}
+    for key in pairs(project.type_foresight) do fKeys[#fKeys + 1] = key end
+    table.sort(fKeys)
+    out[#out + 1] = "  -- Gold foresightMatchups (post-$FE TypeMatchups rows)"
+    out[#out + 1] = "  do"
+    out[#out + 1] = "    local _fs = {"
+    for _, key in ipairs(fKeys) do
+      local atk, def = key:match("^([^>]+)>([^>]+)$")
+      local mult = tonumber(project.type_foresight[key]) or 0
+      if atk and def then
+        out[#out + 1] = string.format(
+          "      { attacker = %q, defender = %q, multiplier = %d },",
+          atk, def, mult)
+      end
+    end
+    out[#out + 1] = "    }"
+    out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+    out[#out + 1] = "      local data = ev and ev.data"
+    out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+    out[#out + 1] = "      local chart = data.type_chart"
+    out[#out + 1] = "      if type(chart) ~= \"table\" then"
+    out[#out + 1] = "        chart = {}; data.type_chart = chart"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "      local rows = {}"
+    out[#out + 1] = "      for _, row in ipairs(chart.foresightMatchups or {}) do"
+    out[#out + 1] = "        local key = tostring(row.attacker) .. \">\" .. tostring(row.defender)"
+    out[#out + 1] = "        local keep = true"
+    out[#out + 1] = "        for _, patch in ipairs(_fs) do"
+    out[#out + 1] = "          if patch.attacker == row.attacker and patch.defender == row.defender then"
+    out[#out + 1] = "            keep = false; break"
+    out[#out + 1] = "          end"
+    out[#out + 1] = "        end"
+    out[#out + 1] = "        if keep then rows[#rows + 1] = row end"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "      for _, patch in ipairs(_fs) do rows[#rows + 1] = patch end"
+    out[#out + 1] = "      chart.foresightMatchups = rows"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "  end"
     out[#out + 1] = ""
   end
 
@@ -974,7 +1355,7 @@ function ModWriter.emitMain(project, baseData)
   table.sort(pIds)
   for _, pid in ipairs(pIds) do
     local raw = project.pokemon[pid]
-    local rec = stripEditorFields(raw)
+    local rec = shapePokemonForEmit(stripEditorFields(raw), gen2)
     rec.id = rec.id or pid
     local verb = emitVerb(raw)
     -- New species need sprite paths for schema; patches omit ROM-cache paths
@@ -986,11 +1367,34 @@ function ModWriter.emitMain(project, baseData)
       if not rec.spriteBack or rec.spriteBack == "" then
         rec.spriteBack = "assets/" .. pid:lower() .. "_back.png"
       end
+      if gen2 and not rec.picSize then rec.picSize = 5 end
     end
     local lit = rewriteModPaths(emitTableLiteral(rec, 1))
     out[#out + 1] = string.format("  mod.content.pokemon:%s(%q, %s)",
       verb, pid, lit)
     out[#out + 1] = ""
+
+    -- Gold party icons live in the icons registry (species → ICON_* sheet).
+    if gen2 then
+      local icon = raw.icon
+      if type(icon) == "string" and icon:sub(1, 5) == "ICON_" then
+        out[#out + 1] = string.format(
+          "  mod.content.icons:override(%q, %q)", pid, icon)
+        out[#out + 1] = ""
+      elseif type(icon) == "table" and type(icon.image) == "string"
+          and icon.image ~= "" then
+        local sheetId = "ICON_MOD_" .. pid
+        local frames = tonumber(icon.frames) or 2
+        local sheetLit = rewriteModPaths(string.format(
+          "{ image = %s, width = 16, height = 32, frames = %d }",
+          escapeStr(icon.image), frames))
+        out[#out + 1] = string.format(
+          "  mod.content.icons:register(%q, %s)", sheetId, sheetLit)
+        out[#out + 1] = string.format(
+          "  mod.content.icons:override(%q, %q)", pid, sheetId)
+        out[#out + 1] = ""
+      end
+    end
   end
   local delP = {}
   for pid in pairs((project.deleted and project.deleted.pokemon) or {}) do
@@ -1002,12 +1406,58 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
+  -- Gold pokedex entries (kind / height / weight / text) — not on the mon.
+  if gen2 and type(project.pokedex) == "table" then
+    local dIds = {}
+    for did in pairs(project.pokedex) do dIds[#dIds + 1] = did end
+    table.sort(dIds)
+    if #dIds > 0 then
+      out[#out + 1] = "  -- Gold pokedex entries (gen2Pokedex.entries)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _dex = {"
+      for _, did in ipairs(dIds) do
+        local row = project.pokedex[did]
+        if type(row) == "table" then
+          local patch = {
+            id = row.id or did,
+            kind = row.kind,
+            height = row.height,
+            weight = row.weight,
+            text = row.text,
+            text2 = row.text2,
+            dex = row.dex,
+          }
+          out[#out + 1] = string.format("      [%q] = %s,",
+            did, emitTableLiteral(patch, 3))
+        end
+      end
+      out[#out + 1] = "    }"
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local dex = data.gen2Pokedex or data.pokedex"
+      out[#out + 1] = "      if type(dex) ~= \"table\" then"
+      out[#out + 1] = "        dex = { entries = {} }"
+      out[#out + 1] = "        data.gen2Pokedex = dex; data.pokedex = dex"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "      dex.entries = dex.entries or {}"
+      out[#out + 1] = "      for id, patch in pairs(_dex) do"
+      out[#out + 1] = "        local row = dex.entries[id] or {}"
+      out[#out + 1] = "        for k, v in pairs(patch) do row[k] = v end"
+      out[#out + 1] = "        dex.entries[id] = row"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+  end
+
   -- Custom move effects before moves so f.id("move_effects") resolves.
   local meIds = {}
   for eid in pairs(project.moveEffects or {}) do meIds[#meIds + 1] = eid end
   table.sort(meIds)
   for _, eid in ipairs(meIds) do
-    local chunk = emitMoveEffectRegister(project.moveEffects[eid])
+    local chunk = emitMoveEffectRegister(project.moveEffects[eid], gen2)
     if chunk and chunk ~= "" then
       out[#out + 1] = chunk
       out[#out + 1] = ""
@@ -1020,13 +1470,17 @@ function ModWriter.emitMain(project, baseData)
   local baseMoves = baseData.moves or {}
   for _, mid in ipairs(mvIds) do
     local raw = project.moves[mid]
-    local rec = stripEditorFields(raw)
+    local rec = shapeMoveForEmit(stripEditorFields(raw), gen2)
     rec.id = rec.id or mid
     local verb = emitVerb(raw)
     local payload = rec
     local skip = false
     if verb == "patch" then
-      local diff = diffAgainstBase(baseMoves[mid], rec)
+      local base = baseMoves[mid]
+      if gen2 and type(base) == "table" then
+        base = shapeMoveForEmit(stripEditorFields(base), true)
+      end
+      local diff = diffAgainstBase(base, rec)
       if not diff then
         skip = true -- identical to vanilla; no-op
       else
@@ -1040,16 +1494,66 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
-  local baIds = {}
-  for bid in pairs(project.battle_anims or {}) do baIds[#baIds + 1] = bid end
-  table.sort(baIds)
-  for _, bid in ipairs(baIds) do
-    local raw = project.battle_anims[bid]
-    local rec = stripEditorFields(raw)
-    local verb = emitVerb(raw)
-    out[#out + 1] = string.format("  mod.content.battle_anims:%s(%q, %s)",
-      verb, bid, emitTableLiteral(rec, 1))
-    out[#out + 1] = ""
+  -- Gen1: one record per moveAnim / subanim:N / tilesheet:N.
+  -- Gold: patch top-level buckets (moves/scripts/ids/objects/gfx/…).
+  if gen2 then
+    -- stripEditorFields only keeps string keys — scripts/framesets are arrays.
+    local function cleanBaEntry(v)
+      if type(v) ~= "table" then return v end
+      if v[1] ~= nil then
+        local outRows = {}
+        for i, row in ipairs(v) do
+          if type(row) == "table" then
+            local copy = {}
+            for j = 1, #row do copy[j] = row[j] end
+            outRows[i] = copy
+          else
+            outRows[i] = row
+          end
+        end
+        return outRows
+      end
+      return stripEditorFields(v)
+    end
+    local GEN2_BA = {
+      "moves", "scripts", "ids", "objects", "gfx", "framesets", "oamsets",
+    }
+    local ba = project.battle_anims or {}
+    for _, bucket in ipairs(GEN2_BA) do
+      local patch = ba[bucket]
+      if type(patch) == "table" then
+        local clean = {}
+        local n = 0
+        for k, v in pairs(patch) do
+          if type(k) == "string" and k:sub(1, 1) ~= "_" then
+            if type(v) == "table" then
+              clean[k] = cleanBaEntry(v)
+            elseif v ~= nil and v ~= "" then
+              clean[k] = v
+            end
+            n = n + 1
+          end
+        end
+        if n > 0 then
+          out[#out + 1] = string.format(
+            "  mod.content.battle_anims:patch(%q, %s)",
+            bucket, rewriteModPaths(emitTableLiteral(clean, 1)))
+          out[#out + 1] = ""
+        end
+      end
+    end
+  else
+    local baIds = {}
+    for bid in pairs(project.battle_anims or {}) do baIds[#baIds + 1] = bid end
+    table.sort(baIds)
+    for _, bid in ipairs(baIds) do
+      local raw = project.battle_anims[bid]
+      local rec = stripEditorFields(raw)
+      local verb = emitVerb(raw)
+      out[#out + 1] = string.format("  mod.content.battle_anims:%s(%q, %s)",
+        verb, bid, rewriteModPaths(emitTableLiteral(rec, 1)))
+      out[#out + 1] = ""
+    end
   end
 
   local iIds = {}
@@ -1069,46 +1573,85 @@ function ModWriter.emitMain(project, baseData)
   for _, iid in ipairs(iIds) do
     local raw = project.items[iid]
     local tmpl = raw.effectTemplate or (raw._isNew == false and "none" or "heal")
-    if tmpl == "ball" then
-      local ballId = raw.ball or iid
-      out[#out + 1] = string.format([[
+    if gen2 then
+      -- Gold: no Gen1 item_effects use() shape. Balls use multiplier.
+      if tmpl == "ball" then
+        local ballId = raw.ball or iid
+        local mult = raw.ballMultiplier
+        if raw.ballAutoCatch or mult == math.huge then
+          out[#out + 1] = string.format([[
+  mod.content.balls:register(%q, {
+    randMax = 255, multiplier = math.huge,
+  })]], ballId)
+        else
+          out[#out + 1] = string.format([[
+  mod.content.balls:register(%q, {
+    randMax = 255, multiplier = %s,
+  })]], ballId, tostring(tonumber(mult) or 1))
+        end
+        out[#out + 1] = ""
+      end
+      local rec = shapeItemForEmit(stripEditorFields(raw), true)
+      rec.id = rec.id or iid
+      if tmpl == "key" then
+        rec.canToss = false
+        rec.pocket = rec.pocket or "KEY_ITEM"
+        rec.pocketId = POCKET_IDS.KEY_ITEM
+      end
+      if tmpl == "ball" then
+        rec.pocket = rec.pocket or "BALL"
+        rec.pocketId = POCKET_IDS.BALL
+      end
+      if tmpl == "machine" then
+        rec.pocket = rec.pocket or "TM_HM"
+        rec.pocketId = POCKET_IDS.TM_HM
+      end
+      local verb = emitVerb(raw)
+      out[#out + 1] = string.format("  mod.content.items:%s(%q, %s)",
+        verb, iid, rewriteModPaths(emitTableLiteral(rec, 1)))
+      out[#out + 1] = ""
+    else
+      if tmpl == "ball" then
+        local ballId = raw.ball or iid
+        out[#out + 1] = string.format([[
   mod.content.balls:register(%q, {
     randMax = %d, hpFactor = %d, wobbleFactor = %d, autoCatch = %s,
     tossAnim = "TOSS_ANIM",
   })]], ballId,
-        tonumber(raw.ballRandMax) or 255,
-        tonumber(raw.ballHpFactor) or 12,
-        tonumber(raw.ballWobble) or 255,
-        raw.ballAutoCatch and "true" or "false")
-      out[#out + 1] = ""
-    elseif EMIT_EFFECT[tmpl] then
-      local chunk = emitEffectRegister(raw)
-      if chunk and chunk ~= "" then
-        out[#out + 1] = chunk
+          tonumber(raw.ballRandMax) or 255,
+          tonumber(raw.ballHpFactor) or 12,
+          tonumber(raw.ballWobble) or 255,
+          raw.ballAutoCatch and "true" or "false")
         out[#out + 1] = ""
+      elseif EMIT_EFFECT[tmpl] then
+        local chunk = emitEffectRegister(raw)
+        if chunk and chunk ~= "" then
+          out[#out + 1] = chunk
+          out[#out + 1] = ""
+        end
       end
+      local rec = stripEditorFields(raw)
+      rec.id = rec.id or iid
+      if EMIT_EFFECT[tmpl] or tmpl == "custom" then
+        rec.effect = raw.effect or effectIdFor(raw)
+      end
+      if NEEDS_TARGET[tmpl] then
+        rec.needsTarget = true
+      end
+      if tmpl == "ball" then
+        rec.ball = raw.ball or iid
+      end
+      if tmpl == "key" then
+        rec.tossable = false
+      end
+      if tmpl == "x_item" then
+        rec.needsTarget = false
+      end
+      local verb = emitVerb(raw)
+      out[#out + 1] = string.format("  mod.content.items:%s(%q, %s)",
+        verb, iid, emitTableLiteral(rec, 1))
+      out[#out + 1] = ""
     end
-    local rec = stripEditorFields(raw)
-    rec.id = rec.id or iid
-    if EMIT_EFFECT[tmpl] or tmpl == "custom" then
-      rec.effect = raw.effect or effectIdFor(raw)
-    end
-    if NEEDS_TARGET[tmpl] then
-      rec.needsTarget = true
-    end
-    if tmpl == "ball" then
-      rec.ball = raw.ball or iid
-    end
-    if tmpl == "key" then
-      rec.tossable = false
-    end
-    if tmpl == "x_item" then
-      rec.needsTarget = false
-    end
-    local verb = emitVerb(raw)
-    out[#out + 1] = string.format("  mod.content.items:%s(%q, %s)",
-      verb, iid, emitTableLiteral(rec, 1))
-    out[#out + 1] = ""
   end
   local delI = {}
   for iid in pairs((project.deleted and project.deleted.items) or {}) do
@@ -1123,59 +1666,106 @@ function ModWriter.emitMain(project, baseData)
   local mIds = {}
   for mid in pairs(project.maps or {}) do mIds[#mIds + 1] = mid end
   table.sort(mIds)
+  local gen2Grass, gen2Water = {}, {}
   for _, mid in ipairs(mIds) do
     local raw = project.maps[mid]
     local rec = stripEditorFields(raw)
+    -- Encounters are emitted separately (Gen2: by kind; Gen1: by map).
+    rec.encounters = nil
+    rec.superRod = nil
     rec.id = rec.id or mid
     local verb = emitVerb(raw)
     out[#out + 1] = string.format("  mod.content.maps:%s(%q, %s)",
       verb, mid, emitTableLiteral(rec, 1))
     out[#out + 1] = ""
-    if raw.encounters then
+    if not gen2 and raw.encounters then
       local everb = emitVerb(raw)
       out[#out + 1] = string.format("  mod.content.encounters:%s(%q, %s)",
         everb, mid, emitTableLiteral(raw.encounters, 1))
       out[#out + 1] = ""
+    elseif gen2 and type(raw.encounters) == "table" then
+      if raw.encounters.grass then gen2Grass[mid] = raw.encounters.grass end
+      if raw.encounters.water then gen2Water[mid] = raw.encounters.water end
+    end
+  end
+  if gen2 then
+    if next(gen2Grass) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "grass", emitTableLiteral(gen2Grass, 1))
+      out[#out + 1] = ""
+    end
+    if next(gen2Water) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "water", emitTableLiteral(gen2Water, 1))
+      out[#out + 1] = ""
+    end
+    -- Gold fishing groups + headbutt trees / Rock Smash rocks.
+    if next(project.fishGroups or {}) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "fishGroups", emitTableLiteral(project.fishGroups, 1))
+      out[#out + 1] = ""
+    end
+    if next(project.treeSets or {}) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "treeSets", emitTableLiteral(project.treeSets, 1))
+      out[#out + 1] = ""
+    end
+    if next(project.trees or {}) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "trees", emitTableLiteral(project.trees, 1))
+      out[#out + 1] = ""
+    end
+    if next(project.rocks or {}) then
+      out[#out + 1] = string.format(
+        "  mod.content.encounters:patch(%q, %s)",
+        "rocks", emitTableLiteral(project.rocks, 1))
+      out[#out + 1] = ""
     end
   end
 
-  -- Super Rod groups live under field.superRod[mapId]
-  local superRod = {}
-  local superRodDelete = {}
-  for _, mid in ipairs(mIds) do
-    local slots = project.maps[mid] and project.maps[mid].superRod
-    if type(slots) == "table" then
-      if #slots == 0 then
-        superRodDelete[#superRodDelete + 1] = mid
-      else
-        local clean = {}
-        for i, slot in ipairs(slots) do
-          clean[i] = { level = slot.level, species = slot.species }
+  -- Super Rod / fishing are Gen1 field registries (gated on Gold).
+  if not gen2 then
+    local superRod = {}
+    local superRodDelete = {}
+    for _, mid in ipairs(mIds) do
+      local slots = project.maps[mid] and project.maps[mid].superRod
+      if type(slots) == "table" then
+        if #slots == 0 then
+          superRodDelete[#superRodDelete + 1] = mid
+        else
+          local clean = {}
+          for i, slot in ipairs(slots) do
+            clean[i] = { level = slot.level, species = slot.species }
+          end
+          superRod[mid] = clean
         end
-        superRod[mid] = clean
       end
     end
-  end
-  if next(superRod) then
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "superRod", emitTableLiteral(superRod, 1))
-    out[#out + 1] = ""
-  end
-  table.sort(superRodDelete)
-  for _, mid in ipairs(superRodDelete) do
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, { [%q] = mod.DELETE })",
-      "superRod", mid)
-    out[#out + 1] = ""
-  end
+    if next(superRod) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "superRod", emitTableLiteral(superRod, 1))
+      out[#out + 1] = ""
+    end
+    table.sort(superRodDelete)
+    for _, mid in ipairs(superRodDelete) do
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, { [%q] = mod.DELETE })",
+        "superRod", mid)
+      out[#out + 1] = ""
+    end
 
-  -- Old / Good Rod tables (global field.fishing)
-  if type(project.fishing) == "table" and next(project.fishing) then
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "fishing", emitTableLiteral(project.fishing, 1))
-    out[#out + 1] = ""
+    if type(project.fishing) == "table" and next(project.fishing) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "fishing", emitTableLiteral(project.fishing, 1))
+      out[#out + 1] = ""
+    end
   end
 
   -- text strings (_LABEL -> string); override so vanilla labels replace cleanly
@@ -1191,17 +1781,108 @@ function ModWriter.emitMain(project, baseData)
   end
   if #textIds > 0 then out[#out + 1] = "" end
 
-  -- text_pointers keyed by map label
-  local ptrLabels = {}
-  for lbl in pairs(project.text_pointers or {}) do ptrLabels[#ptrLabels + 1] = lbl end
-  table.sort(ptrLabels)
-  for _, lbl in ipairs(ptrLabels) do
-    local ptrs = project.text_pointers[lbl]
-    if type(ptrs) == "table" and next(ptrs) then
-      out[#out + 1] = string.format(
-        "  mod.content.text_pointers:patch(%q, %s)",
-        lbl, emitTableLiteral(ptrs, 1))
+  -- Gold overworld scripts (scriptKey → opcode rows). No content.scripts
+  -- registry (ALIASES scripts→map_scripts); merge into data.scripts on load.
+  -- Recompile scriptSteps bags first so Save never ships stale opcodes.
+  local goldMapHooksIndex = {}
+  if gen2 then
+    local Gen2Talk = require("Gen2Talk")
+    goldMapHooksIndex = ModWriter.commitGoldMapHooks(project)
+    ModWriter.applySpecialEncounterBindsGold(project)
+    Gen2Talk.commitAllSteps({ project = project, data = nil })
+  end
+  if gen2 and type(project.scripts) == "table" and next(project.scripts) then
+    local skIds = {}
+    for sk in pairs(project.scripts) do
+      if type(sk) == "string" and sk ~= "" then skIds[#skIds + 1] = sk end
+    end
+    table.sort(skIds)
+    if #skIds > 0 then
+      local clean = {}
+      for _, sk in ipairs(skIds) do
+        local cmds = project.scripts[sk]
+        if type(cmds) == "table" then clean[sk] = cmds end
+      end
+      out[#out + 1] = "  -- Gold talk scripts (editor-placed NPCs / signs)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _scripts = "
+        .. rewriteModPaths(emitTableLiteral(clean, 1))
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      data.scripts = data.scripts or {}"
+      out[#out + 1] = "      for k, v in pairs(_scripts) do"
+      out[#out + 1] = "        data.scripts[k] = v"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
       out[#out + 1] = ""
+    end
+  end
+
+  -- Gold map hooks (map.entered / world.stepped / battle.ended → vm:start)
+  if gen2 and next(goldMapHooksIndex) then
+    out[#out + 1] = "  -- Gold map hooks (map.entered / world.stepped / battle.ended → vm:start)"
+    out[#out + 1] = "  do"
+    out[#out + 1] = "    local hooks = "
+      .. rewriteModPaths(emitTableLiteral(goldMapHooksIndex, 1))
+    out[#out + 1] = "    mod.events:on(\"map.entered\", function(ev)"
+    out[#out + 1] = "      local h = ev and hooks[ev.mapId]"
+    out[#out + 1] = "      if not (h and h.onEnter) then return end"
+    out[#out + 1] = "      local ow = mod.world and mod.world:overworld and mod.world:overworld()"
+    out[#out + 1] = "      if ow and ow.vm then ow.vm:start(h.onEnter) end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "    mod.events:on(\"world.stepped\", function(ev)"
+    out[#out + 1] = "      local h = ev and hooks[ev.mapId]"
+    out[#out + 1] = "      if not (h and h.onStep) then return end"
+    out[#out + 1] = "      for _, c in ipairs(h.onStep) do"
+    out[#out + 1] = "        if c.x == ev.x and c.y == ev.y then"
+    out[#out + 1] = "          local ow = mod.world and mod.world:overworld and mod.world:overworld()"
+    out[#out + 1] = "          if ow and ow.vm then ow.vm:start(c.key) end"
+    out[#out + 1] = "          return"
+    out[#out + 1] = "        end"
+    out[#out + 1] = "      end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "    mod.events:on(\"battle.ended\", function(ev)"
+    out[#out + 1] = "      if not ev or (ev.result ~= \"win\" and ev.result ~= \"caught\") then return end"
+    out[#out + 1] = "      local ow = mod.world and mod.world:overworld and mod.world:overworld()"
+    out[#out + 1] = "      if not (ow and ow.map and ow.vm) then return end"
+    out[#out + 1] = "      local h = hooks[ow.map.id]"
+    out[#out + 1] = "      if h and h.onVictory then ow.vm:start(h.onVictory) end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "  end"
+    out[#out + 1] = ""
+  end
+
+  -- text_pointers keyed by map label (Gen1 only; Gold text ids ARE pointers)
+  if not gen2 then
+    local ptrLabels = {}
+    for lbl in pairs(project.text_pointers or {}) do ptrLabels[#ptrLabels + 1] = lbl end
+    table.sort(ptrLabels)
+    for _, lbl in ipairs(ptrLabels) do
+      local ptrs = project.text_pointers[lbl]
+      if type(ptrs) == "table" and next(ptrs) then
+        out[#out + 1] = string.format(
+          "  mod.content.text_pointers:patch(%q, %s)",
+          lbl, emitTableLiteral(ptrs, 1))
+        out[#out + 1] = ""
+      end
+    end
+  end
+
+  -- Gold Poké Mart shelves (MART_* lists + BARGAIN rows)
+  if gen2 then
+    local martIds = {}
+    for mid in pairs(project.marts or {}) do martIds[#martIds + 1] = mid end
+    table.sort(martIds)
+    for _, mid in ipairs(martIds) do
+      local stock = project.marts[mid]
+      if type(stock) == "table" then
+        out[#out + 1] = string.format(
+          "  mod.content.marts:override(%q, %s)",
+          mid, emitTableLiteral(stock, 1))
+        out[#out + 1] = ""
+      end
     end
   end
 
@@ -1210,7 +1891,7 @@ function ModWriter.emitMain(project, baseData)
   -- overwrite learnset moves and constants.trainerDvs when present (BattleState).
   -- When any override is present, main.lua loads mod Schemas.lua first so
   -- stock engines that only list { level, species } still validate.
-  if ModWriter.trainerPartyHasOverrides(project) then
+  if (not gen2) and ModWriter.trainerPartyHasOverrides(project) then
     out[#out + 1] = "  -- Trainer party schema (moves / dvs / statExp) from Schemas.lua"
     out[#out + 1] = "  do"
     out[#out + 1] = "    local body = mod:read(\"Schemas.lua\")"
@@ -1286,14 +1967,15 @@ function ModWriter.emitMain(project, baseData)
   local trainerTrueColor = {}
   for _, tid in ipairs(trIds) do
     local raw = project.trainers[tid]
-    local rec = sanitizeTrainerParties(stripEditorFields(raw))
+    local rec = shapeTrainerForEmit(
+      sanitizeTrainerParties(stripEditorFields(raw)), gen2)
     rec.id = rec.id or tid
     local verb = emitVerb(raw)
     local lit = rewriteModPaths(emitTableLiteral(rec, 1))
     out[#out + 1] = string.format("  mod.content.trainers:%s(%q, %s)",
       verb, tid, lit)
     out[#out + 1] = ""
-    if type(raw.battleTheme) == "string" and raw.battleTheme ~= "" then
+    if (not gen2) and type(raw.battleTheme) == "string" and raw.battleTheme ~= "" then
       trainerThemes[#trainerThemes + 1] = { tid, raw.battleTheme }
     end
     if raw.trueColor then
@@ -1308,6 +1990,38 @@ function ModWriter.emitMain(project, baseData)
   for _, tid in ipairs(delT) do
     out[#out + 1] = string.format("  mod.content.trainers:remove(%q)", tid)
     out[#out + 1] = ""
+  end
+
+  -- Gold class frontpics (editor stores override on project.trainers[id].pic).
+  if gen2 then
+    local picPatch = {}
+    for _, tid in ipairs(trIds) do
+      local raw = project.trainers[tid]
+      if type(raw) == "table" and type(raw.pic) == "string" and raw.pic ~= "" then
+        picPatch[tid] = raw.pic
+      end
+    end
+    if next(picPatch) then
+      local lit = rewriteModPaths(emitTableLiteral(picPatch, 1))
+      out[#out + 1] = "  -- Gold trainer class pics → gen2MenuGfx.battleHud.trainerPics"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _pics = " .. lit
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local gfx = data.gen2MenuGfx or data.menu_gfx"
+      out[#out + 1] = "      if type(gfx) ~= \"table\" then"
+      out[#out + 1] = "        gfx = {}; data.gen2MenuGfx = gfx; data.menu_gfx = gfx"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "      gfx.battleHud = gfx.battleHud or {}"
+      out[#out + 1] = "      gfx.battleHud.trainerPics = gfx.battleHud.trainerPics or {}"
+      out[#out + 1] = "      for classId, path in pairs(_pics) do"
+      out[#out + 1] = "        gfx.battleHud.trainerPics[classId] = path"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
   end
 
   -- Stock Gen1Recomp keeps battleTheme / trainer trueColor in the schema but
@@ -1370,9 +2084,10 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- Stock engines ignore slot.dvs / slot.statExp even when schema accepts them.
-  -- Re-apply from the merged trainer party once the battle object exists.
-  if ModWriter.trainerPartyHasStatOverrides(project) then
+  -- Stock Gen1 engines ignore slot.dvs / slot.statExp even when schema accepts
+  -- them. Re-apply from the merged trainer party once the battle object exists.
+  -- Gen2: skip — Gen1 battle shape (oppClass / Stats) and src.pokemon.Stats.
+  if (not gen2) and ModWriter.trainerPartyHasStatOverrides(project) then
     out[#out + 1] = "  -- Apply trainer party DVs / Stat Exp on stock Gen1Recomp"
     out[#out + 1] = "  mod.events:on(\"battle.started\", function(ev)"
     out[#out + 1] = "    local b = ev and ev.battle"
@@ -1430,145 +2145,181 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- Special encounters (Encounters tab): synthetic trainers + gift command
-  ModWriter.emitSpecialEncounters(project, out)
+  -- Special encounters (Encounters tab): synthetic trainers + gift command.
+  -- Gift path uses Gen1 src.script.Commands / Party / Boxes — Gen2 gets battle
+  -- trainers only (gift command gated inside emitSpecialEncounters).
+  ModWriter.emitSpecialEncounters(project, out, gen2)
 
-  -- trainer_headers keyed by map label.
+  -- trainer_headers keyed by map label (Gen1 only — no Gold counterpart).
   -- Newer engines expose mod.content.trainer_headers. Older Gen1Recomp still
   -- loads Data.trainer_headers at runtime but has no registry — apply the
   -- same rows on mods.loaded so sight/dialogue/beat flags work there too.
-  local thLabels = {}
-  for lbl in pairs(project.trainer_headers or {}) do
-    thLabels[#thLabels + 1] = lbl
-  end
-  table.sort(thLabels)
-  local thTable = {}
-  for _, lbl in ipairs(thLabels) do
-    local headers = project.trainer_headers[lbl]
-    if type(headers) == "table" and next(headers) then
-      local idxs = {}
-      for idx in pairs(headers) do
-        if type(idx) == "number" and idx > 0 then idxs[#idxs + 1] = idx end
-      end
-      table.sort(idxs)
-      if #idxs > 0 then
-        local bucket = {}
-        for _, idx in ipairs(idxs) do
-          local hdr = headers[idx]
-          if type(hdr) == "table" then
-            bucket[idx] = stripEditorFields(hdr)
-          end
+  if not gen2 then
+    local thLabels = {}
+    for lbl in pairs(project.trainer_headers or {}) do
+      thLabels[#thLabels + 1] = lbl
+    end
+    table.sort(thLabels)
+    local thTable = {}
+    for _, lbl in ipairs(thLabels) do
+      local headers = project.trainer_headers[lbl]
+      if type(headers) == "table" and next(headers) then
+        local idxs = {}
+        for idx in pairs(headers) do
+          if type(idx) == "number" and idx > 0 then idxs[#idxs + 1] = idx end
         end
-        if next(bucket) then thTable[lbl] = bucket end
+        table.sort(idxs)
+        if #idxs > 0 then
+          local bucket = {}
+          for _, idx in ipairs(idxs) do
+            local hdr = headers[idx]
+            if type(hdr) == "table" then
+              bucket[idx] = stripEditorFields(hdr)
+            end
+          end
+          if next(bucket) then thTable[lbl] = bucket end
+        end
       end
     end
-  end
-  if next(thTable) then
-    local lit = emitTableLiteral(thTable, 2)
-    out[#out + 1] = "  do"
-    out[#out + 1] = "    local _ceTrainerHeaders = " .. lit
-    out[#out + 1] = "    if mod.content.trainer_headers then"
-    out[#out + 1] = "      for label, bucket in pairs(_ceTrainerHeaders) do"
-    -- [0]=DELETE forces dictionary merge (avoids array-concat duplicates).
-    out[#out + 1] = "        local patch = { [0] = mod.DELETE }"
-    out[#out + 1] = "        for idx, hdr in pairs(bucket) do patch[idx] = hdr end"
-    out[#out + 1] = "        mod.content.trainer_headers:patch(label, patch)"
-    out[#out + 1] = "      end"
-    out[#out + 1] = "    else"
-    out[#out + 1] = "      mod.events:on(\"mods.loaded\", function(ev)"
-    out[#out + 1] = "        local th = ev.data and ev.data.trainer_headers"
-    out[#out + 1] = "        if type(th) ~= \"table\" then return end"
-    out[#out + 1] = "        for label, bucket in pairs(_ceTrainerHeaders) do"
-    out[#out + 1] = "          local dest = th[label]"
-    out[#out + 1] = "          if type(dest) ~= \"table\" then"
-    out[#out + 1] = "            dest = {}"
-    out[#out + 1] = "            th[label] = dest"
-    out[#out + 1] = "          end"
-    out[#out + 1] = "          for idx, hdr in pairs(bucket) do"
-    out[#out + 1] = "            if type(idx) == \"number\" and type(hdr) == \"table\" then"
-    out[#out + 1] = "              dest[idx] = hdr"
-    out[#out + 1] = "            end"
-    out[#out + 1] = "          end"
-    out[#out + 1] = "        end"
-    out[#out + 1] = "      end)"
-    out[#out + 1] = "    end"
-    out[#out + 1] = "  end"
-    out[#out + 1] = ""
+    if next(thTable) then
+      local lit = emitTableLiteral(thTable, 2)
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _ceTrainerHeaders = " .. lit
+      out[#out + 1] = "    if mod.content.trainer_headers then"
+      out[#out + 1] = "      for label, bucket in pairs(_ceTrainerHeaders) do"
+      -- [0]=DELETE forces dictionary merge (avoids array-concat duplicates).
+      out[#out + 1] = "        local patch = { [0] = mod.DELETE }"
+      out[#out + 1] = "        for idx, hdr in pairs(bucket) do patch[idx] = hdr end"
+      out[#out + 1] = "        mod.content.trainer_headers:patch(label, patch)"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    else"
+      out[#out + 1] = "      mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "        local th = ev.data and ev.data.trainer_headers"
+      out[#out + 1] = "        if type(th) ~= \"table\" then return end"
+      out[#out + 1] = "        for label, bucket in pairs(_ceTrainerHeaders) do"
+      out[#out + 1] = "          local dest = th[label]"
+      out[#out + 1] = "          if type(dest) ~= \"table\" then"
+      out[#out + 1] = "            dest = {}"
+      out[#out + 1] = "            th[label] = dest"
+      out[#out + 1] = "          end"
+      out[#out + 1] = "          for idx, hdr in pairs(bucket) do"
+      out[#out + 1] = "            if type(idx) == \"number\" and type(hdr) == \"table\" then"
+      out[#out + 1] = "              dest[idx] = hdr"
+      out[#out + 1] = "            end"
+      out[#out + 1] = "          end"
+      out[#out + 1] = "        end"
+      out[#out + 1] = "      end)"
+      out[#out + 1] = "    end"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
   end
 
-  -- Compile talkScripts + mapHooks into map_scripts registers (talk / scripts /
-  -- onEnter / onVictory / onStep), then emit.
-  local scripts = ModWriter.compileTalkScripts(project)
-  ModWriter.applySpecialEncounterBinds(project, scripts)
-  local hooksByMap = ModWriter.compileMapHooks(project)
-  local msSeen, msIds = {}, {}
-  local function addMs(mid)
-    if mid and not msSeen[mid] then
-      msSeen[mid] = true
-      msIds[#msIds + 1] = mid
+  -- Compile talkScripts + mapHooks into map_scripts registers.
+  -- Gold: map_scripts is gated (Schemas.GEN2); the Gen2 VM does not run Lua
+  -- row-lists, so never emit this family on Gen 2.
+  if not gen2 then
+    local scripts = ModWriter.compileTalkScripts(project)
+    ModWriter.applySpecialEncounterBinds(project, scripts)
+    local hooksByMap = ModWriter.compileMapHooks(project)
+    local msSeen, msIds = {}, {}
+    local function addMs(mid)
+      if mid and not msSeen[mid] then
+        msSeen[mid] = true
+        msIds[#msIds + 1] = mid
+      end
+    end
+    for mid in pairs(scripts) do addMs(mid) end
+    for mid in pairs(hooksByMap) do addMs(mid) end
+    for mid in pairs(project.map_scripts or {}) do addMs(mid) end
+    table.sort(msIds)
+    for _, mid in ipairs(msIds) do
+      local talk = (scripts[mid] and scripts[mid].talk) or {}
+      local hand = project.map_scripts and project.map_scripts[mid]
+      if hand and type(hand.talk) == "table" then
+        for textId, rows in pairs(hand.talk) do
+          if not talk[textId] then talk[textId] = rows end
+        end
+      end
+      local hooks = hooksByMap[mid] or {}
+      if hand and type(hand.scripts) == "table" then
+        hooks.scripts = hooks.scripts or {}
+        for name, rows in pairs(hand.scripts) do
+          if not hooks.scripts[name] then hooks.scripts[name] = rows end
+        end
+      end
+      local hasTalk = next(talk) ~= nil
+      local hasScripts = type(hooks.scripts) == "table" and next(hooks.scripts) ~= nil
+      local hasEnter = type(hooks.onEnterRows) == "table" and #hooks.onEnterRows > 0
+      local hasVictory = type(hooks.onVictoryRows) == "table" and #hooks.onVictoryRows > 0
+      local hasStep = type(hooks.onStepCells) == "table" and #hooks.onStepCells > 0
+      if hasTalk or hasScripts or hasEnter or hasVictory or hasStep then
+        out[#out + 1] = string.format(
+          "  mod.content.map_scripts:register(%q, {", mid)
+        if hasTalk then
+          out[#out + 1] = "    talk = "
+            .. rewriteModPaths(emitTableLiteral(talk, 2)) .. ","
+        end
+        if hasScripts then
+          out[#out + 1] = "    scripts = "
+            .. rewriteModPaths(emitTableLiteral(hooks.scripts, 2)) .. ","
+        end
+        if hasEnter then
+          out[#out + 1] = "    onEnter = function(game, ow)"
+          out[#out + 1] = "      ow:queueScript("
+            .. rewriteModPaths(emitTableLiteral(hooks.onEnterRows, 3)) .. ")"
+          out[#out + 1] = "    end,"
+        end
+        if hasVictory then
+          out[#out + 1] = "    onVictory = function(game, ow)"
+          out[#out + 1] = "      ow:queueScript("
+            .. rewriteModPaths(emitTableLiteral(hooks.onVictoryRows, 3)) .. ")"
+          out[#out + 1] = "    end,"
+        end
+        if hasStep then
+          out[#out + 1] = "    onStep = function(game, ow, x, y)"
+          out[#out + 1] = "      local cells = "
+            .. rewriteModPaths(emitTableLiteral(hooks.onStepCells, 3))
+          out[#out + 1] = "      for _, c in ipairs(cells) do"
+          out[#out + 1] = "        if c.x == x and c.y == y then"
+          out[#out + 1] = "          ow:queueScript(c.rows)"
+          out[#out + 1] = "          return true"
+          out[#out + 1] = "        end"
+          out[#out + 1] = "      end"
+          out[#out + 1] = "    end,"
+        end
+        out[#out + 1] = "  })"
+        out[#out + 1] = ""
+      end
     end
   end
-  for mid in pairs(scripts) do addMs(mid) end
-  for mid in pairs(hooksByMap) do addMs(mid) end
-  for mid in pairs(project.map_scripts or {}) do addMs(mid) end
-  table.sort(msIds)
-  for _, mid in ipairs(msIds) do
-    local talk = (scripts[mid] and scripts[mid].talk) or {}
-    local hand = project.map_scripts and project.map_scripts[mid]
-    if hand and type(hand.talk) == "table" then
-      for textId, rows in pairs(hand.talk) do
-        if not talk[textId] then talk[textId] = rows end
+
+  -- Gold phone book (Pokegear contacts)
+  if gen2 and type(project.phoneContacts) == "table" then
+    local ids = {}
+    for pid in pairs(project.phoneContacts) do ids[#ids + 1] = pid end
+    table.sort(ids)
+    for _, pid in ipairs(ids) do
+      local raw = project.phoneContacts[pid]
+      if type(raw) == "table" then
+        local rec = stripEditorFields(raw)
+        if type(rec.index) ~= "number" then
+          -- keep emit honest: Phone.applyRegistryRows keys by index
+          local order = (baseData.gen2Constants or baseData.constants
+            or {}).phoneContactOrder
+          if type(order) == "table" then
+            for i, name in ipairs(order) do
+              if name == pid then rec.index = i - 1; break end
+            end
+          end
+        end
+        if type(rec.index) == "number" then
+          local lit = rewriteModPaths(emitTableLiteral(rec, 1))
+          out[#out + 1] = string.format(
+            "  mod.content.phone_contacts:patch(%q, %s)", pid, lit)
+          out[#out + 1] = ""
+        end
       end
-    end
-    local hooks = hooksByMap[mid] or {}
-    if hand and type(hand.scripts) == "table" then
-      hooks.scripts = hooks.scripts or {}
-      for name, rows in pairs(hand.scripts) do
-        if not hooks.scripts[name] then hooks.scripts[name] = rows end
-      end
-    end
-    local hasTalk = next(talk) ~= nil
-    local hasScripts = type(hooks.scripts) == "table" and next(hooks.scripts) ~= nil
-    local hasEnter = type(hooks.onEnterRows) == "table" and #hooks.onEnterRows > 0
-    local hasVictory = type(hooks.onVictoryRows) == "table" and #hooks.onVictoryRows > 0
-    local hasStep = type(hooks.onStepCells) == "table" and #hooks.onStepCells > 0
-    if hasTalk or hasScripts or hasEnter or hasVictory or hasStep then
-      out[#out + 1] = string.format(
-        "  mod.content.map_scripts:register(%q, {", mid)
-      if hasTalk then
-        out[#out + 1] = "    talk = "
-          .. rewriteModPaths(emitTableLiteral(talk, 2)) .. ","
-      end
-      if hasScripts then
-        out[#out + 1] = "    scripts = "
-          .. rewriteModPaths(emitTableLiteral(hooks.scripts, 2)) .. ","
-      end
-      if hasEnter then
-        out[#out + 1] = "    onEnter = function(game, ow)"
-        out[#out + 1] = "      ow:queueScript("
-          .. rewriteModPaths(emitTableLiteral(hooks.onEnterRows, 3)) .. ")"
-        out[#out + 1] = "    end,"
-      end
-      if hasVictory then
-        out[#out + 1] = "    onVictory = function(game, ow)"
-        out[#out + 1] = "      ow:queueScript("
-          .. rewriteModPaths(emitTableLiteral(hooks.onVictoryRows, 3)) .. ")"
-        out[#out + 1] = "    end,"
-      end
-      if hasStep then
-        out[#out + 1] = "    onStep = function(game, ow, x, y)"
-        out[#out + 1] = "      local cells = "
-          .. rewriteModPaths(emitTableLiteral(hooks.onStepCells, 3))
-        out[#out + 1] = "      for _, c in ipairs(cells) do"
-        out[#out + 1] = "        if c.x == x and c.y == y then"
-        out[#out + 1] = "          ow:queueScript(c.rows)"
-        out[#out + 1] = "          return true"
-        out[#out + 1] = "        end"
-        out[#out + 1] = "      end"
-        out[#out + 1] = "    end,"
-      end
-      out[#out + 1] = "  })"
-      out[#out + 1] = ""
     end
   end
 
@@ -1588,7 +2339,30 @@ function ModWriter.emitMain(project, baseData)
 
   -- audio: music / cries / sfx / map_songs
   local audio = project.audio or {}
-  local function emitAudioBucket(regName, bucket, preferOverride)
+  local baseAudio = baseData.audio or {}
+  local function shapeAudioForEmit(rec, kind)
+    if type(rec) ~= "table" then return rec end
+    if not gen2 then
+      rec.generation = nil
+      if type(rec.header) == "table" then rec.header.generation = nil end
+      return rec
+    end
+    -- Gold ROM chip refs use `generation`, not Gen 1's multi-bank `engine`.
+    if rec.address and rec.bank then
+      rec.engine = nil
+      if rec.generation == nil then rec.generation = 2 end
+    end
+    if type(rec.header) == "table" then
+      rec.header.engine = nil
+      if rec.header.address and rec.header.bank
+          and rec.header.generation == nil then
+        rec.header.generation = 2
+      end
+    end
+    if kind ~= "sfx" then rec.fanfare = nil end
+    return rec
+  end
+  local function emitAudioBucket(regName, bucket, preferOverride, baseBucket)
     local ids = {}
     for aid in pairs(bucket or {}) do ids[#ids + 1] = aid end
     table.sort(ids)
@@ -1598,20 +2372,27 @@ function ModWriter.emitMain(project, baseData)
       if type(val) == "string" then
         lit = escapeStr(val)
       else
-        local clean = stripEditorFields(val)
+        local clean = shapeAudioForEmit(stripEditorFields(val), regName)
         lit = rewriteModPaths(emitTableLiteral(clean, 1))
       end
-      local verb = preferOverride and "override" or "register"
-      if type(val) == "table" and val._isNew == false then
+      local isNew = type(val) == "table" and val._isNew == true
+      local inBase = baseBucket and baseBucket[aid] ~= nil
+      local verb
+      if isNew then
+        verb = "register"
+      elseif preferOverride or inBase
+          or (type(val) == "table" and val._isNew == false) then
         verb = "override"
+      else
+        verb = "register"
       end
       out[#out + 1] = string.format("  mod.content.%s:%s(%q, %s)",
         regName, verb, aid, lit)
       out[#out + 1] = ""
     end
   end
-  emitAudioBucket("music", audio.songs, false)
-  emitAudioBucket("cries", audio.cries, true)
+  emitAudioBucket("music", audio.songs, false, baseAudio.songs)
+  emitAudioBucket("cries", audio.cries, true, baseAudio.cries)
   -- Pokemon panel Cry field: when a species sets cry = "ABRA" but has no
   -- audio.cries[species] of its own, emit a derived cry so playCry /
   -- validators see the species key too (Sound also aliases at runtime).
@@ -1633,10 +2414,10 @@ function ModWriter.emitMain(project, baseData)
       out[#out + 1] = ""
     end
   end
-  emitAudioBucket("sfx", audio.sfx, false)
-  emitAudioBucket("map_songs", audio.mapSongs, true)
+  emitAudioBucket("sfx", audio.sfx, false, baseAudio.sfx)
+  emitAudioBucket("map_songs", audio.mapSongs, true, baseAudio.mapSongs)
 
-  -- AI classes
+  -- AI classes (Gen1 item/switch) / Gold scoring-layer metadata
   local aiIds = {}
   for aid in pairs(project.aiClasses or {}) do aiIds[#aiIds + 1] = aid end
   table.sort(aiIds)
@@ -1644,6 +2425,13 @@ function ModWriter.emitMain(project, baseData)
     local raw = project.aiClasses[aid]
     local rec = stripEditorFields(raw)
     if rec.item == "" then rec.item = nil end
+    if gen2 then
+      -- score/choose/brain are engine functions; never emit nil stubs.
+      rec.score = nil
+      rec.choose = nil
+      rec.brain = nil
+      if rec.flag == "" then rec.flag = nil end
+    end
     local verb = emitVerb(raw)
     out[#out + 1] = string.format("  mod.content.ai_classes:%s(%q, %s)",
       verb, aid, emitTableLiteral(rec, 1))
@@ -1671,22 +2459,128 @@ function ModWriter.emitMain(project, baseData)
     out[#out + 1] = ""
   end
 
-  -- field.boot (includes boot.screens when set)
-  if type(project.boot) == "table" and next(project.boot) then
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "boot", emitTableLiteral(project.boot, 1))
-    out[#out + 1] = ""
-  end
-
-  -- field.title / intro / theme / townMap (UI tab)
-  for _, key in ipairs({ "title", "intro", "theme", "townMap" }) do
-    local rec = project[key]
-    if type(rec) == "table" and next(rec) then
-      local lit = rewriteModPaths(emitTableLiteral(stripEditorFields(rec), 1))
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)", key, lit)
+  -- Boot screens + UI field buckets.
+  -- Gen1: field.boot / field.title / intro / theme / townMap.
+  -- Gold: field is gated — title/intro → data.title + data.gen2Intro,
+  -- landmarks → mod.content.landmarks, boot → data.gen2BootScreens,
+  -- trainer card sheets → gen2MenuGfx.trainerCard.
+  if gen2 then
+    if type(project.boot) == "table" and type(project.boot.screens) == "table"
+        and next(project.boot.screens) then
+      local lit = emitTableLiteral(project.boot.screens, 2)
+      out[#out + 1] = "  -- Gold boot screen ids (Game2:showCopyright / Title / Oak)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _boot = " .. lit
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      data.gen2BootScreens = data.gen2BootScreens or {}"
+      out[#out + 1] = "      for k, v in pairs(_boot) do data.gen2BootScreens[k] = v end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
       out[#out + 1] = ""
+    end
+
+    if type(project.title) == "table" and next(project.title) then
+      local lit = rewriteModPaths(emitTableLiteral(stripEditorFields(project.title), 2))
+      out[#out + 1] = "  -- Gold title art (game.titleData == data.title)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _title = " .. lit
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local t = data.title or data.gen2Title"
+      out[#out + 1] = "      if type(t) ~= \"table\" then t = {}; data.title = t; data.gen2Title = t end"
+      out[#out + 1] = "      for k, v in pairs(_title) do t[k] = v end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+
+    if type(project.intro) == "table" and next(project.intro) then
+      local lit = rewriteModPaths(emitTableLiteral(stripEditorFields(project.intro), 2))
+      out[#out + 1] = "  -- Gold intro cinema (data.gen2Intro)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _intro = " .. lit
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local intro = data.gen2Intro or data.intro"
+      out[#out + 1] = "      if type(intro) ~= \"table\" then"
+      out[#out + 1] = "        intro = {}; data.gen2Intro = intro; data.intro = intro"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "      for act, patch in pairs(_intro) do"
+      out[#out + 1] = "        if type(patch) == \"table\" then"
+      out[#out + 1] = "          intro[act] = intro[act] or {}"
+      out[#out + 1] = "          for k, v in pairs(patch) do intro[act][k] = v end"
+      out[#out + 1] = "        else"
+      out[#out + 1] = "          intro[act] = patch"
+      out[#out + 1] = "        end"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+
+    local locs = project.townMap and project.townMap.locations
+    if type(locs) == "table" then
+      local ids = {}
+      for lid in pairs(locs) do ids[#ids + 1] = lid end
+      table.sort(ids)
+      local wrote = false
+      for _, lid in ipairs(ids) do
+        local row = locs[lid]
+        if type(row) == "table" then
+          local patch = { id = row.id or lid }
+          if row.name ~= nil then patch.name = row.name end
+          if row.x ~= nil then patch.x = row.x end
+          if row.y ~= nil then patch.y = row.y end
+          if row.index ~= nil then patch.index = row.index end
+          -- landmarks schema requires name; fall back to the id token
+          if patch.name == nil then patch.name = lid end
+          local lit = emitTableLiteral(patch, 1)
+          out[#out + 1] = string.format(
+            "  mod.content.landmarks:patch(%q, %s)", lid, lit)
+          wrote = true
+        end
+      end
+      if wrote then out[#out + 1] = "" end
+    end
+
+    if type(project.trainerCard) == "table" and next(project.trainerCard) then
+      local lit = rewriteModPaths(emitTableLiteral(project.trainerCard, 2))
+      out[#out + 1] = "  -- Gold trainer-card badge / leader sheets"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _tc = " .. lit
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local gfx = data.gen2MenuGfx or data.menu_gfx"
+      out[#out + 1] = "      if type(gfx) ~= \"table\" then"
+      out[#out + 1] = "        gfx = {}; data.gen2MenuGfx = gfx; data.menu_gfx = gfx"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "      gfx.trainerCard = gfx.trainerCard or {}"
+      out[#out + 1] = "      for k, v in pairs(_tc) do gfx.trainerCard[k] = v end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
+      out[#out + 1] = ""
+    end
+  else
+    if type(project.boot) == "table" and next(project.boot) then
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "boot", emitTableLiteral(project.boot, 1))
+      out[#out + 1] = ""
+    end
+
+    for _, key in ipairs({ "title", "intro", "theme", "townMap" }) do
+      local rec = project[key]
+      if type(rec) == "table" and next(rec) then
+        local lit = rewriteModPaths(emitTableLiteral(stripEditorFields(rec), 1))
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)", key, lit)
+        out[#out + 1] = ""
+      end
     end
   end
 
@@ -1719,7 +2613,9 @@ function ModWriter.emitMain(project, baseData)
   end
   if #strIds > 0 then out[#out + 1] = "" end
 
-  -- field.playerSprites (walk / bike / surf / fly / surfPikachu remaps)
+  -- Player overworld remaps + battle/intro pics.
+  -- Gen1: field.playerSprites / field.playerPics (Schemas.field).
+  -- Gold: field is gated; write gen2PlayerSprites + gen2MenuGfx / playerPic.
   if type(project.playerSprites) == "table" then
     local ps = {}
     for k, v in pairs(project.playerSprites) do
@@ -1728,14 +2624,27 @@ function ModWriter.emitMain(project, baseData)
       end
     end
     if next(ps) then
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "playerSprites", emitTableLiteral(ps, 1))
-      out[#out + 1] = ""
+      if gen2 then
+        out[#out + 1] = "  -- Gold player state sprites (FieldMoves.spriteId)"
+        out[#out + 1] = "  do"
+        out[#out + 1] = "    local _ps = " .. emitTableLiteral(ps, 2)
+        out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+        out[#out + 1] = "      local data = ev and ev.data"
+        out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+        out[#out + 1] = "      data.gen2PlayerSprites = data.gen2PlayerSprites or {}"
+        out[#out + 1] = "      for k, v in pairs(_ps) do data.gen2PlayerSprites[k] = v end"
+        out[#out + 1] = "    end)"
+        out[#out + 1] = "  end"
+        out[#out + 1] = ""
+      else
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "playerSprites", emitTableLiteral(ps, 1))
+        out[#out + 1] = ""
+      end
     end
   end
 
-  -- field.playerPics (battle / trainer-card art paths)
   if type(project.playerPics) == "table" then
     local pp = {}
     for k, v in pairs(project.playerPics) do
@@ -1745,134 +2654,228 @@ function ModWriter.emitMain(project, baseData)
     end
     if next(pp) then
       local lit = rewriteModPaths(emitTableLiteral(pp, 1))
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "playerPics", lit)
-      out[#out + 1] = ""
-    end
-  end
-
-  -- field.ledges (deep-merge lists append; emit only author-added rows)
-  if type(project.ledges) == "table" and #project.ledges > 0 then
-    local rows = {}
-    for _, ledge in ipairs(project.ledges) do
-      if type(ledge) == "table" then
-        rows[#rows + 1] = stripEditorFields(ledge)
+      if gen2 then
+        out[#out + 1] = "  -- Gold player battle / intro pics (gen2MenuGfx + playerPic)"
+        out[#out + 1] = "  do"
+        out[#out + 1] = "    local _pp = " .. lit
+        out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+        out[#out + 1] = "      local data = ev and ev.data"
+        out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+        out[#out + 1] = "      local gfx = data.gen2MenuGfx or data.menu_gfx"
+        out[#out + 1] = "      if type(gfx) ~= \"table\" then"
+        out[#out + 1] = "        gfx = {}; data.gen2MenuGfx = gfx; data.menu_gfx = gfx"
+        out[#out + 1] = "      end"
+        out[#out + 1] = "      gfx.battleHud = gfx.battleHud or {}"
+        out[#out + 1] = "      if _pp.back then gfx.battleHud.playerBack = _pp.back end"
+        out[#out + 1] = "      if _pp.demoBack then gfx.battleHud.dudeBack = _pp.demoBack end"
+        out[#out + 1] = "      if _pp.front then data.playerPic = _pp.front end"
+        out[#out + 1] = "    end)"
+        out[#out + 1] = "  end"
+        out[#out + 1] = ""
+      else
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "playerPics", lit)
+        out[#out + 1] = ""
       end
     end
-    if #rows > 0 then
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "ledges", emitTableLiteral(rows, 1))
-      out[#out + 1] = ""
-    end
   end
 
-  -- field.hiddenItems
-  if type(project.hiddenItems) == "table" and next(project.hiddenItems) then
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "hiddenItems", emitTableLiteral(project.hiddenItems, 1))
-    out[#out + 1] = ""
-  end
-
-  -- field.badgeGates (false = suppress / DELETE so deep-merge removes it)
-  if type(project.badgeGates) == "table" then
-    local gates, gateDelete = {}, {}
-    for mid, gate in pairs(project.badgeGates) do
-      if gate == false then
-        gateDelete[#gateDelete + 1] = mid
-      elseif type(gate) == "table" then
-        gates[mid] = stripEditorFields(gate)
+  -- Gen1 field.* buckets (Schemas.GEN2.field = false — drop on Gold).
+  if not gen2 then
+    -- field.ledges (deep-merge lists append; emit only author-added rows)
+    if type(project.ledges) == "table" and #project.ledges > 0 then
+      local rows = {}
+      for _, ledge in ipairs(project.ledges) do
+        if type(ledge) == "table" then
+          rows[#rows + 1] = stripEditorFields(ledge)
+        end
+      end
+      if #rows > 0 then
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "ledges", emitTableLiteral(rows, 1))
+        out[#out + 1] = ""
       end
     end
-    if next(gates) then
+
+    -- field.hiddenItems
+    if type(project.hiddenItems) == "table" and next(project.hiddenItems) then
       out[#out + 1] = string.format(
         "  mod.content.field:patch(%q, %s)",
-        "badgeGates", emitTableLiteral(gates, 1))
+        "hiddenItems", emitTableLiteral(project.hiddenItems, 1))
       out[#out + 1] = ""
     end
-    table.sort(gateDelete)
-    for _, mid in ipairs(gateDelete) do
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, { [%q] = mod.DELETE })",
-        "badgeGates", mid)
-      out[#out + 1] = ""
-    end
-  end
 
-  -- field.darkMaps (maps that need FLASH until lit)
-  if type(project.darkMaps) == "table" and type(project.darkMaps.maps) == "table" then
-    local dm = { maps = {} }
-    for i, mid in ipairs(project.darkMaps.maps) do
-      if type(mid) == "string" and mid ~= "" then
-        dm.maps[#dm.maps + 1] = mid
+    -- field.badgeGates (false = suppress / DELETE so deep-merge removes it)
+    if type(project.badgeGates) == "table" then
+      local gates, gateDelete = {}, {}
+      for mid, gate in pairs(project.badgeGates) do
+        if gate == false then
+          gateDelete[#gateDelete + 1] = mid
+        elseif type(gate) == "table" then
+          gates[mid] = stripEditorFields(gate)
+        end
+      end
+      if next(gates) then
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "badgeGates", emitTableLiteral(gates, 1))
+        out[#out + 1] = ""
+      end
+      table.sort(gateDelete)
+      for _, mid in ipairs(gateDelete) do
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, { [%q] = mod.DELETE })",
+          "badgeGates", mid)
+        out[#out + 1] = ""
       end
     end
-    if type(project.darkMaps.palOffset) == "number" then
-      dm.palOffset = project.darkMaps.palOffset
+
+    -- field.darkMaps (maps that need FLASH until lit)
+    if type(project.darkMaps) == "table" and type(project.darkMaps.maps) == "table" then
+      local dm = { maps = {} }
+      for i, mid in ipairs(project.darkMaps.maps) do
+        if type(mid) == "string" and mid ~= "" then
+          dm.maps[#dm.maps + 1] = mid
+        end
+      end
+      if type(project.darkMaps.palOffset) == "number" then
+        dm.palOffset = project.darkMaps.palOffset
+      end
+      out[#out + 1] = string.format(
+        "  mod.content.field:patch(%q, %s)",
+        "darkMaps", emitTableLiteral(dm, 1))
+      out[#out + 1] = ""
     end
-    out[#out + 1] = string.format(
-      "  mod.content.field:patch(%q, %s)",
-      "darkMaps", emitTableLiteral(dm, 1))
-    out[#out + 1] = ""
   end
 
-  -- field.trades (in-game trade table; indices match Events "trade" step)
+  -- Gen1 field.trades / Gold npc_trades (events.lua NPC trade rows)
   if type(project.trades) == "table" and #project.trades > 0 then
-    local rows = {}
-    for _, t in ipairs(project.trades) do
-      if type(t) == "table" and t.give and t.get then
+    if gen2 then
+      for i, t in ipairs(project.trades) do
+        if type(t) == "table" and t.give and t.get then
+          local id = t.id
+          if id == nil then id = i - 1 end
+          local row = {
+            id = id,
+            dialog = t.dialog,
+            give = t.give,
+            get = t.get,
+            giveIndex = t.giveIndex,
+            getIndex = t.getIndex,
+            nickname = t.nickname,
+            dvs = type(t.dvs) == "table" and {
+              tonumber(t.dvs[1]) or 0, tonumber(t.dvs[2]) or 0,
+            } or nil,
+            item = t.item,
+            otId = tonumber(t.otId) or 0,
+            otName = t.otName,
+            gender = t.gender,
+          }
+          out[#out + 1] = string.format(
+            "  mod.content.npc_trades:override(%q, %s)",
+            tostring(id), emitTableLiteral(row, 1))
+          out[#out + 1] = ""
+        end
+      end
+    else
+      local rows = {}
+      for _, t in ipairs(project.trades) do
+        if type(t) == "table" and t.give and t.get then
+          rows[#rows + 1] = {
+            give = t.give, get = t.get,
+            dialogset = tonumber(t.dialogset) or 1,
+            nickname = t.nickname,
+          }
+        end
+      end
+      if #rows > 0 then
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "trades", emitTableLiteral(rows, 1))
+        out[#out + 1] = ""
+      end
+    end
+  end
+
+  -- field.flyOrder / field.flyWarps (Gen1 Town Map + Fly; gated on Gold)
+  if not gen2 then
+    if type(project.flyOrder) == "table" and #project.flyOrder > 0 then
+      local order = {}
+      for _, mid in ipairs(project.flyOrder) do
+        if type(mid) == "string" and mid ~= "" then
+          order[#order + 1] = mid
+        end
+      end
+      if #order > 0 then
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "flyOrder", emitTableLiteral(order, 1))
+        out[#out + 1] = ""
+      end
+    end
+    if type(project.flyWarps) == "table" and next(project.flyWarps) then
+      local warps = {}
+      for mid, spot in pairs(project.flyWarps) do
+        if type(mid) == "string" and type(spot) == "table" then
+          warps[mid] = {
+            x = tonumber(spot.x) or 0,
+            y = tonumber(spot.y) or 0,
+          }
+        end
+      end
+      if next(warps) then
+        out[#out + 1] = string.format(
+          "  mod.content.field:patch(%q, %s)",
+          "flyWarps", emitTableLiteral(warps, 1))
+        out[#out + 1] = ""
+      end
+    end
+  end
+
+  -- Gold fly points: FieldMoves.FLYPOINTS order + gen2Landmarks.spawns
+  -- landing coords. No content registry for either, so replace/merge them
+  -- on mods.loaded; FieldMoves.setFlyPoints rebuilds the private spawn index.
+  if gen2 and type(project.flyPoints) == "table" and #project.flyPoints > 0 then
+    local rows, spawns = {}, {}
+    for _, row in ipairs(project.flyPoints) do
+      if type(row) == "table" and type(row.landmark) == "string" and row.landmark ~= ""
+          and type(row.spawn) == "string" and row.spawn ~= "" then
         rows[#rows + 1] = {
-          give = t.give, get = t.get,
-          dialogset = tonumber(t.dialogset) or 1,
-          nickname = t.nickname,
+          landmark = row.landmark, spawn = row.spawn,
+          flag = tonumber(row.flag) or 0,
         }
+        if type(row.map) == "string" and row.map ~= "" then
+          spawns[row.spawn] = {
+            map = row.map, x = tonumber(row.x) or 0, y = tonumber(row.y) or 0,
+          }
+        end
       end
     end
     if #rows > 0 then
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "trades", emitTableLiteral(rows, 1))
+      out[#out + 1] = "  -- Gold fly points (FieldMoves.FLYPOINTS + gen2Landmarks.spawns)"
+      out[#out + 1] = "  do"
+      out[#out + 1] = "    local _flyRows = " .. emitTableLiteral(rows, 1)
+      out[#out + 1] = "    local _flySpawns = " .. emitTableLiteral(spawns, 1)
+      out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+      out[#out + 1] = "      local data = ev and ev.data"
+      out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+      out[#out + 1] = "      local FieldMoves = require(\"src.world.gen2.FieldMoves\")"
+      out[#out + 1] = "      FieldMoves.setFlyPoints(_flyRows)"
+      out[#out + 1] = "      local lm = data.gen2Landmarks or data.landmarks"
+      out[#out + 1] = "      if type(lm) ~= \"table\" then return end"
+      out[#out + 1] = "      lm.spawns = lm.spawns or {}"
+      out[#out + 1] = "      for spawnId, spot in pairs(_flySpawns) do"
+      out[#out + 1] = "        lm.spawns[spawnId] = spot"
+      out[#out + 1] = "      end"
+      out[#out + 1] = "    end)"
+      out[#out + 1] = "  end"
       out[#out + 1] = ""
     end
   end
 
-  -- field.flyOrder / field.flyWarps (Town Map + Fly destinations)
-  if type(project.flyOrder) == "table" and #project.flyOrder > 0 then
-    local order = {}
-    for _, mid in ipairs(project.flyOrder) do
-      if type(mid) == "string" and mid ~= "" then
-        order[#order + 1] = mid
-      end
-    end
-    if #order > 0 then
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "flyOrder", emitTableLiteral(order, 1))
-      out[#out + 1] = ""
-    end
-  end
-  if type(project.flyWarps) == "table" and next(project.flyWarps) then
-    local warps = {}
-    for mid, spot in pairs(project.flyWarps) do
-      if type(mid) == "string" and type(spot) == "table" then
-        warps[mid] = {
-          x = tonumber(spot.x) or 0,
-          y = tonumber(spot.y) or 0,
-        }
-      end
-    end
-    if next(warps) then
-      out[#out + 1] = string.format(
-        "  mod.content.field:patch(%q, %s)",
-        "flyWarps", emitTableLiteral(warps, 1))
-      out[#out + 1] = ""
-    end
-  end
-
-  -- Oak's Lab starter remap (pokemon.before_give), same seam as
-  -- mods/example_mew_starter.
+  -- Lab starter remap (pokemon.before_give): Oak on Gen1, Elm on Gold.
   local remap = project.starterRemap
   if type(remap) == "table" and next(remap) then
     local has = false
@@ -1884,6 +2887,7 @@ function ModWriter.emitMain(project, baseData)
       end
     end
     if has then
+      local labMap = gen2 and "ELMS_LAB" or "OAKS_LAB"
       out[#out + 1] = "  do"
       out[#out + 1] = "    local remap = {"
       local keys = {}
@@ -1904,9 +2908,15 @@ function ModWriter.emitMain(project, baseData)
       end
       out[#out + 1] = "    }"
       out[#out + 1] = "    mod.events:on(\"pokemon.before_give\", function(gift)"
-      out[#out + 1] = "      local map = gift.ctx.overworld and gift.ctx.overworld.map"
-      out[#out + 1] = "      if not (map and map.id == \"OAKS_LAB\") then return end"
-      out[#out + 1] = "      if gift.ctx.save.flags and gift.ctx.save.flags.EVENT_GOT_STARTER then return end"
+      out[#out + 1] = "      local ctx = gift.ctx or {}"
+      out[#out + 1] = "      local map = ctx.overworld and ctx.overworld.map"
+      out[#out + 1] = "      local mapId = ctx.mapId or (map and map.id)"
+      out[#out + 1] = string.format(
+        "      if mapId ~= %q then return end", labMap)
+      if not gen2 then
+        out[#out + 1] = "      local save = ctx.save or (ctx.game and ctx.game.save)"
+        out[#out + 1] = "      if save and save.flags and save.flags.EVENT_GOT_STARTER then return end"
+      end
       out[#out + 1] = "      local hit = remap[gift.species]"
       out[#out + 1] = "      if not hit then return end"
       out[#out + 1] = "      gift.species = hit.species"
@@ -1917,11 +2927,43 @@ function ModWriter.emitMain(project, baseData)
     end
   end
 
+  -- Gold shiny encounter rate (denominator).  Engine reads data.shinyRate in
+  -- Mon.rollEncounterDVs; unset keeps cart DV-pattern odds (~1/8192).
+  if gen2 and tonumber(project.shinyRate) and tonumber(project.shinyRate) >= 1 then
+    local rate = math.floor(tonumber(project.shinyRate))
+    out[#out + 1] = "  -- Shiny encounter rate (1 / N; Mon.rollEncounterDVs)"
+    out[#out + 1] = "  do"
+    out[#out + 1] = string.format("    local shinyRate = %d", rate)
+    out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+    out[#out + 1] = "      local data = ev and ev.data"
+    out[#out + 1] = "      if type(data) == \"table\" then data.shinyRate = shinyRate end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "  end"
+    out[#out + 1] = ""
+  end
+
+  -- Gold Day-Care / breeding knobs (data.breeding → Breeding.knobs).
+  if gen2 and type(project.breeding) == "table" and next(project.breeding) then
+    local lit = emitTableLiteral(project.breeding, 2)
+    out[#out + 1] = "  -- Day-Care / breeding overrides (Breeding.knobs)"
+    out[#out + 1] = "  do"
+    out[#out + 1] = "    local breeding = " .. lit
+    out[#out + 1] = "    mod.events:on(\"mods.loaded\", function(ev)"
+    out[#out + 1] = "      local data = ev and ev.data"
+    out[#out + 1] = "      if type(data) ~= \"table\" then return end"
+    out[#out + 1] = "      data.breeding = data.breeding or {}"
+    out[#out + 1] = "      for k, v in pairs(breeding) do data.breeding[k] = v end"
+    out[#out + 1] = "    end)"
+    out[#out + 1] = "  end"
+    out[#out + 1] = ""
+  end
+
   -- Stock Gen1Recomp: map index >= firstIndoorMap (37) rolls wilds on EVERY
   -- tile (terrain "indoor"), unless the tileset is FOREST.  Content-editor
   -- Outside maps often use index 1000+.  Suppress those indoor rolls from the
   -- mod so grass/water-only behavior works without patching the game install.
-  do
+  -- Gold has no firstIndoorMap indoor-wild rule — skip on Gen 2.
+  if not gen2 then
     local outsideIds = {}
     for _, mid in ipairs(mIds) do
       local m = project.maps[mid]
@@ -2134,8 +3176,62 @@ local function specialMonSlot(spec)
   return slot
 end
 
+-- Gold give_special: builds the mon through src.battle.gen2.Mon / Party
+-- (Gen1's Pokemon/Boxes/BattleState modules do not exist on Gold) and reads
+-- SPECIALS off the closure `emitSpecialEncounters` already emitted.
+function ModWriter.emitGoldGiveSpecial(out, cmd)
+  out[#out + 1] = string.format(
+    "  mod.content.commands:register(%q, {", cmd)
+  out[#out + 1] = "    foreground = true,"
+  out[#out + 1] = "    fn = function(ctx, specialId)"
+  out[#out + 1] = "      local game = mod.world and mod.world.game"
+  out[#out + 1] = "      local save = game and game.save"
+  out[#out + 1] = "      local data = game and game.data"
+  out[#out + 1] = "      if not (data and save) then return end"
+  out[#out + 1] = "      local spec = SPECIALS[specialId]"
+  out[#out + 1] = "      if not spec then return end"
+  out[#out + 1] = "      local Mon = require(\"src.battle.gen2.Mon\")"
+  out[#out + 1] = "      local Party = require(\"src.pokemon.Party\")"
+  out[#out + 1] = "      local opts = {}"
+  out[#out + 1] = "      if type(spec.dvs) == \"table\" then"
+  out[#out + 1] = "        opts.dvs = {"
+  out[#out + 1] = "          attack = tonumber(spec.dvs.attack) or 0,"
+  out[#out + 1] = "          defense = tonumber(spec.dvs.defense) or 0,"
+  out[#out + 1] = "          speed = tonumber(spec.dvs.speed) or 0,"
+  out[#out + 1] = "          special = tonumber(spec.dvs.special) or 0,"
+  out[#out + 1] = "        }"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      if type(spec.moves) == \"table\" then"
+  out[#out + 1] = "        opts.moves = {}"
+  out[#out + 1] = "        for _, moveId in ipairs(spec.moves) do"
+  out[#out + 1] = "          local mdef = data.moves and data.moves[moveId]"
+  out[#out + 1] = "          opts.moves[#opts.moves + 1] = {"
+  out[#out + 1] = "            id = moveId, pp = mdef and mdef.pp or 0,"
+  out[#out + 1] = "          }"
+  out[#out + 1] = "        end"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "      local mon = Mon.new(data, spec.species, spec.level, opts)"
+  out[#out + 1] = "      if not mon then return end"
+  out[#out + 1] = "      Mon.stampOT(save, mon)"
+  out[#out + 1] = "      save.party = save.party or {}"
+  out[#out + 1] = "      Party.add(save.party, mon)"
+  out[#out + 1] = "      local dex = save.pokedex"
+  out[#out + 1] = "      if dex then"
+  out[#out + 1] = "        dex.seen = dex.seen or {}"
+  out[#out + 1] = "        dex.owned = dex.owned or {}"
+  out[#out + 1] = "        dex.seen[spec.species] = true"
+  out[#out + 1] = "        dex.owned[spec.species] = true"
+  out[#out + 1] = "      end"
+  out[#out + 1] = "    end,"
+  out[#out + 1] = "  })"
+  out[#out + 1] = ""
+end
+
 -- Emit OPP_SPEC_* trainers and mod:give_special for Encounters-tab specials.
-function ModWriter.emitSpecialEncounters(project, out)
+-- The gift command's mon-building differs by generation (Gen1's
+-- src.pokemon.Pokemon/Boxes/BattleState vs Gen2's src.battle.gen2.Mon), so
+-- the fn body below branches on `gen2` while sharing one SPECIALS table.
+function ModWriter.emitSpecialEncounters(project, out, gen2)
   local specs = project.specialEncounters
   if type(specs) ~= "table" or not next(specs) then return end
 
@@ -2200,6 +3296,10 @@ function ModWriter.emitSpecialEncounters(project, out)
   out[#out + 1] = "  }"
 
   local cmd = (project.id or "content_mod") .. ":give_special"
+  if gen2 then
+    ModWriter.emitGoldGiveSpecial(out, cmd)
+    return
+  end
   out[#out + 1] = string.format(
     "  mod.content.commands:register(%q, {", cmd)
   out[#out + 1] = "    foreground = true,"
@@ -2357,6 +3457,124 @@ function ModWriter.applySpecialEncounterBinds(project, scripts)
         scripts[mapId] = scripts[mapId] or { talk = {} }
         scripts[mapId].talk[textId] = rows
       end
+    end
+  end
+end
+
+-- Gold: compile project.mapHooks step bags into project.scripts (Gen2Talk
+-- opcode rows) and return an index of the resulting script keys per map, for
+-- the map.entered / world.stepped / battle.ended wiring emitted in emitMain.
+function ModWriter.commitGoldMapHooks(project)
+  local index = {}
+  if type(project) ~= "table" or type(project.mapHooks) ~= "table" then
+    return index
+  end
+  local Gen2Talk = require("Gen2Talk")
+  project.scripts = project.scripts or {}
+  local mapIds = {}
+  for mapId in pairs(project.mapHooks) do mapIds[#mapIds + 1] = mapId end
+  table.sort(mapIds)
+  for _, mapId in ipairs(mapIds) do
+    local hooks = project.mapHooks[mapId]
+    if type(hooks) == "table" then
+      local entry = {}
+      if type(hooks.onEnter) == "table" and type(hooks.onEnter.steps) == "table"
+          and #hooks.onEnter.steps > 0 then
+        local key = string.format("mod:HOOK_%s_onEnter", mapId)
+        project.scripts[key] = Gen2Talk.stepsToCmds(
+          { project = project }, key, hooks.onEnter.steps)
+        entry.onEnter = key
+      end
+      if type(hooks.onVictory) == "table" and type(hooks.onVictory.steps) == "table"
+          and #hooks.onVictory.steps > 0 then
+        local key = string.format("mod:HOOK_%s_onVictory", mapId)
+        project.scripts[key] = Gen2Talk.stepsToCmds(
+          { project = project }, key, hooks.onVictory.steps)
+        entry.onVictory = key
+      end
+      if type(hooks.onStepCells) == "table" then
+        local onStep = {}
+        for i, cell in ipairs(hooks.onStepCells) do
+          if type(cell) == "table" and type(cell.steps) == "table"
+              and #cell.steps > 0 then
+            local key = string.format("mod:HOOK_%s_step_%d", mapId, i)
+            project.scripts[key] = Gen2Talk.stepsToCmds(
+              { project = project }, key, cell.steps)
+            onStep[#onStep + 1] = {
+              x = tonumber(cell.x) or 0, y = tonumber(cell.y) or 0, key = key,
+            }
+          end
+        end
+        if #onStep > 0 then entry.onStep = onStep end
+      end
+      if type(hooks.scripts) == "table" then
+        local names = {}
+        for name in pairs(hooks.scripts) do names[#names + 1] = name end
+        table.sort(names)
+        local scripts = {}
+        for _, name in ipairs(names) do
+          local bag = hooks.scripts[name]
+          if type(bag) == "table" and type(bag.steps) == "table"
+              and #bag.steps > 0 then
+            local key = string.format("mod:HOOK_%s_scr_%s", mapId, name)
+            project.scripts[key] = Gen2Talk.stepsToCmds(
+              { project = project }, key, bag.steps)
+            scripts[name] = key
+          end
+        end
+        if next(scripts) then entry.scripts = scripts end
+      end
+      if next(entry) then index[mapId] = entry end
+    end
+  end
+  return index
+end
+
+-- Gold: wire bindTextId specials (Encounters tab) into project.scripts as
+-- Gen2 opcode rows. No numeric mod event id is allocated yet (Gen2 setevent
+-- takes a bitfield index, not a string flag), so a gift script has no
+-- oneshot latch here — it always hands out its mon when talked to again.
+-- Gifts with dvs/moves route through the give_special modcommand
+-- (emitSpecialEncounters); plain gifts use the givepoke opcode directly.
+function ModWriter.applySpecialEncounterBindsGold(project)
+  local specs = project.specialEncounters
+  if type(specs) ~= "table" or not next(specs) then return end
+  project.scripts = project.scripts or {}
+  project.text = project.text or {}
+  local cmd = (project.id or "content_mod") .. ":give_special"
+  local ids = {}
+  for sid in pairs(specs) do ids[#ids + 1] = sid end
+  table.sort(ids)
+  for _, sid in ipairs(ids) do
+    local spec = specs[sid]
+    if type(spec) == "table" and (spec.kind or "gift") == "gift"
+        and type(spec.mapId) == "string" and spec.mapId ~= "" then
+      local key = (type(spec.bindTextId) == "string" and spec.bindTextId ~= "")
+        and spec.bindTextId or ("mod:SPECIAL_" .. sid)
+      local textKey = key .. "_TEXT"
+      project.text[textKey] = spec.text or "Here! Take this POKeMON!"
+      local hasDvsOrMoves = (type(spec.dvs) == "table" and next(spec.dvs) ~= nil)
+        or (type(spec.moves) == "table" and #spec.moves > 0)
+      local giveStep
+      if hasDvsOrMoves then
+        giveStep = { op = "modcommand", verb = cmd, args = { sid } }
+      else
+        giveStep = {
+          op = "givepoke",
+          species = spec.species or 1,
+          level = tonumber(spec.level) or 5,
+          item = 0, trainer = 0,
+        }
+      end
+      project.scripts[key] = {
+        { op = "faceplayer" },
+        { op = "opentext" },
+        { op = "writetext", text = textKey },
+        { op = "waitbutton" },
+        giveStep,
+        { op = "closetext" },
+        { op = "end" },
+      }
     end
   end
 end

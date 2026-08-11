@@ -84,6 +84,15 @@ function Data:applyVersionedFieldData()
     -- Yellow caches carry the wrong demo species too.  The fixed import
     -- manifest below stamps RATTATA for fresh imports.
     self.field.oldManBattle = { species = "RATTATA", level = 5 }
+    -- The Oak-speech show-off mon is the player's Pikachu in Yellow
+    -- (engine/battle/core.asm BATTLE_TYPE_PIKACHU / the ProfOak demo)
+    -- but caches imported before the manifest carried demoSpecies fell
+    -- back to Red's NIDORINO (#915).  The fixed import manifest below
+    -- stamps PIKACHU for fresh imports; fill it here for stale caches.
+    local oakSpeech = self.field.oakSpeech
+    if type(oakSpeech) == "table" and not oakSpeech.demoSpecies then
+      oakSpeech.demoSpecies = "PIKACHU"
+    end
   end
 end
 
@@ -219,7 +228,122 @@ local function loadModule(dir, name)
   return false, mod
 end
 
+-- Gold / Gen 2 cache modules (RomExtractorGen2).  Gen 1-only tables
+-- (field, text_pointers, trainer_headers) are optional empties so the
+-- content editor and tools can Data:load() a gold/ mount.
+local GEN2_REQUIRED = {
+  "constants", "maps", "tilesets", "sprites", "pokemon", "moves", "items",
+  "type_chart", "trainers", "encounters",
+}
+local GEN2_OPTIONAL = {
+  "font", "audio", "palettes", "icons", "text", "scripts", "marts", "roofs",
+  "battle_anims", "pokedex", "landmarks", "menu_gfx", "events",
+  "initial_events", "std_scripts", "title", "intro",
+  "field", "text_pointers", "trainer_headers",
+}
+
+function Data:seedDefaultsGen2()
+  local constants = self.constants
+  if type(constants) ~= "table" then
+    constants = {}
+    self.constants = constants
+  end
+  if constants.dexSize == nil then
+    local highest = 0
+    for _, def in pairs(self.pokemon or {}) do
+      if def.dex and def.dex > highest then highest = def.dex end
+    end
+    constants.dexSize = highest > 0 and highest or 251
+  end
+  if constants.dexDigits == nil then
+    constants.dexDigits = math.max(3, #tostring(constants.dexSize))
+  end
+  if constants.partyMax == nil then constants.partyMax = 6 end
+  if constants.levelCap == nil then constants.levelCap = 100 end
+  self.field = type(self.field) == "table" and self.field or {}
+  local boot = self.field.boot
+  if type(boot) ~= "table" then
+    boot = {}
+    self.field.boot = boot
+  end
+  if boot.startMap == nil then boot.startMap = "PLAYERS_HOUSE_2F" end
+  if boot.startX == nil then boot.startX = 3 end
+  if boot.startY == nil then boot.startY = 3 end
+  if boot.startFacing == nil then boot.startFacing = "down" end
+  if boot.playerName == nil then boot.playerName = "CHRIS" end
+  if boot.rivalName == nil then boot.rivalName = "???" end
+  if boot.startMoney == nil then boot.startMoney = 3000 end
+end
+
+function Data:loadGen2()
+  local dir = os.getenv("POKEPORT_DATA_DIR")
+  for _, name in ipairs(GEN2_REQUIRED) do
+    local ok, mod = loadModule(dir, name)
+    if not ok then
+      if dir then
+        error(("missing data module '%s/%s.lua' (POKEPORT_DATA_DIR).\n(%s)")
+              :format(dir, name, mod))
+      end
+      error(("missing generated Gold data module 'data/generated/%s.lua'.\n" ..
+             "Import a Gold ROM or Link a Recomp with gold/ cache.\n(%s)")
+            :format(name, mod))
+    end
+    self[name] = mod
+  end
+  for _, name in ipairs(GEN2_OPTIONAL) do
+    local ok, mod = loadModule(dir, name)
+    if ok then
+      self[name] = mod
+    else
+      self[name] = (name == "field" or name == "text_pointers"
+        or name == "trainer_headers") and {} or nil
+      if name ~= "field" and name ~= "text_pointers"
+          and name ~= "trainer_headers" then
+        Logger.warn("optional Gold data module '%s' missing", name)
+      end
+    end
+  end
+  -- Game2 aliases: mod merge / World read these names.
+  self.gen2Maps = self.maps
+  self.gen2Tilesets = self.tilesets
+  self.gen2Sprites = self.sprites
+  self.gen2Encounters = self.encounters
+  self.gen2Trainers = self.trainers
+  self.gen2Constants = self.constants
+  self.gen2Text = self.text
+  self.gen2Palettes = self.palettes
+  self.gen2Icons = self.icons
+  self.gen2Pokedex = self.pokedex
+  self.gen2BattleAnims = self.battle_anims
+  self.gen2Scripts = self.scripts
+  self.gen2Marts = self.marts
+  self.gen2Roofs = self.roofs
+  self.gen2MenuGfx = self.menu_gfx
+  -- Title / intro cinema / landmarks: Game2 mounts these under gen2* aliases;
+  -- keep the same tables here so the content editor and mods.loaded share them.
+  self.gen2Title = self.title
+  self.gen2Intro = self.intro
+  self.gen2Landmarks = self.landmarks
+  -- events.lua side tables (NPC trades, phone book, elevators, …)
+  self.gen2EventTables = self.events
+  if type(self.trainers) == "table" and self.trainers.classes then
+    -- Editor lists class ids; keep .classes as the live table.
+  end
+  self:seedDefaultsGen2()
+  local pristine = {}
+  self._pristineKeys = pristine
+  for key in pairs(self) do pristine[key] = true end
+  Logger.info("generated Gold data loaded (%d maps, %d species, %d moves)",
+              (function() local n = 0 for _ in pairs(self.maps or {}) do n = n + 1 end return n end)(),
+              (function() local n = 0 for _ in pairs(self.pokemon or {}) do n = n + 1 end return n end)(),
+              (function() local n = 0 for _ in pairs(self.moves or {}) do n = n + 1 end return n end)())
+end
+
 function Data:load()
+  local GameVersion = require("src.core.GameVersion")
+  if GameVersion.generation() == 2 then
+    return self:loadGen2()
+  end
   local dir = os.getenv("POKEPORT_DATA_DIR")
   for _, name in ipairs(MODULES) do
     local ok, mod = loadModule(dir, name)
@@ -275,6 +399,12 @@ function Data:unloadGenerated()
     package.loaded["data.generated." .. name] = nil
   end
   for _, name in ipairs(OPTIONAL) do
+    package.loaded["data.generated." .. name] = nil
+  end
+  for _, name in ipairs(GEN2_REQUIRED) do
+    package.loaded["data.generated." .. name] = nil
+  end
+  for _, name in ipairs(GEN2_OPTIONAL) do
     package.loaded["data.generated." .. name] = nil
   end
 end

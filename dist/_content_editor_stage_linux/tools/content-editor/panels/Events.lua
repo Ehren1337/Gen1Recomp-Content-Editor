@@ -1,5 +1,5 @@
 -- Events tab: talk-script step builder, Oak starter remap, save-flag tester.
--- SCRIPTS browses every map object/sign TEXT_* plus vanilla MapScripts rows.
+-- Gen1 SCRIPTS: TEXT_* + MapScripts. Gold: edit talk scripts (Says / face) + PHONE.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -8,48 +8,61 @@ local SaveIO = require("SaveIO")
 local Search = require("Search")
 local FormPane = require("FormPane")
 local TalkIndex = require("TalkIndex")
+local Gen2Talk = require("Gen2Talk")
 local ModWriter = require("ModWriter")
 local RegList = require("RegList")
 local SpeciesPicker = require("SpeciesPicker")
 local Autocomplete = require("Autocomplete")
 local Code = require("Code")
 local ModIO = require("ModIO")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Events = {}
 local acS -- session for RegList.suggestField (set in Events.draw)
 
+-- gen1Only / gen2Only gate cycleKind + shortcuts. Omit both = all gens.
 local STEP_KINDS = {
   { id = "show_text", label = "Show text" },
-  { id = "show_image", label = "Show image" },
+  { id = "show_image", label = "Show image", gen1Only = true },
   { id = "ask", label = "Ask yes/no" },
-  { id = "label", label = "Label" },
-  { id = "jump", label = "Jump to label" },
-  { id = "jump_if_yes", label = "Jump if yes" },
-  { id = "jump_if_no", label = "Jump if no" },
+  { id = "label", label = "Label", gen1Only = true },
+  { id = "jump", label = "Jump to label", gen1Only = true },
+  { id = "jump_if_yes", label = "Jump if yes", gen1Only = true },
+  { id = "jump_if_no", label = "Jump if no", gen1Only = true },
+  { id = "jump_script", label = "Jump script", gen2Only = true },
+  { id = "opcode", label = "Opcode", gen2Only = true },
   { id = "face_player", label = "Face player" },
   { id = "give_item", label = "Give item" },
   { id = "take_item", label = "Take item" },
-  { id = "check_item_skip", label = "Skip if has item" },
-  { id = "check_item_missing", label = "Skip if no item" },
+  { id = "check_item_skip", label = "Skip if has item", gen1Only = true },
+  { id = "check_item_missing", label = "Skip if no item", gen1Only = true },
   { id = "give_pokemon", label = "Give pokemon" },
   { id = "give_starter", label = "Give starter" },
   { id = "oneshot_gift", label = "One-shot item" },
-  { id = "oneshot_pokemon", label = "One-shot pokemon" },
+  { id = "oneshot_pokemon", label = "One-shot pokemon", gen1Only = true },
   { id = "set_flag", label = "Set flag" },
   { id = "clear_flag", label = "Clear flag" },
   { id = "check_flag_skip", label = "Skip if flag set" },
   { id = "check_flag_missing", label = "Skip if flag clear" },
   { id = "heal_party", label = "Heal party" },
-  { id = "give_money", label = "Give money" },
+  { id = "give_money", label = "Give money", gen1Only = true },
   { id = "warp", label = "Warp" },
   { id = "wild_battle", label = "Wild battle" },
   { id = "trainer_battle", label = "Trainer battle" },
-  { id = "oneshot_trainer", label = "One-shot trainer" },
-  { id = "set_field", label = "Set save field" },
-  { id = "trade", label = "In-game trade" },
-  { id = "raw", label = "Engine cmd" },
+  { id = "oneshot_trainer", label = "One-shot trainer", gen1Only = true },
+  { id = "set_field", label = "Set save field", gen1Only = true },
+  { id = "trade", label = "In-game trade", gen1Only = true },
+  { id = "raw", label = "Engine cmd", gen1Only = true },
 }
+
+local function stepKindAllowed(S, kindRec)
+  if not kindRec then return false end
+  local gen2 = Generation.isGen2(S)
+  if gen2 and kindRec.gen1Only then return false end
+  if not gen2 and kindRec.gen2Only then return false end
+  return true
+end
 
 local OAK_BALLS = {
   { from = "CHARMANDER", label = "Left ball (Charmander)" },
@@ -57,16 +70,66 @@ local OAK_BALLS = {
   { from = "BULBASAUR", label = "Right ball (Bulbasaur)" },
 }
 
+-- Elm's Lab left→right (Cyndaquil / Totodile / Chikorita), matching Oak's
+-- fire / water / grass ball order.
+local ELM_BALLS = {
+  { from = "CYNDAQUIL", label = "Left ball (Cyndaquil)" },
+  { from = "TOTODILE", label = "Middle ball (Totodile)" },
+  { from = "CHIKORITA", label = "Right ball (Chikorita)" },
+}
+
 -- Footer quick-add buttons (kind = Kit button style).
+-- Order matters: most-used first so a tight footer still shows Warp / flags.
 local function shortcutDefs(S)
-  return {
+  local mapHint = S.eventMapId or S.mapId or "PALLET_TOWN"
+  local gen2 = Generation.isGen2(S)
+  local list = {
     { label = "+ Text", kind = "good",
       tip = "Show this NPC's Dialog TEXT_* (or a literal)",
       make = function()
         local key = S.eventScriptKey or ""
         local tid = key:match("/(.+)$")
+        if gen2 then
+          return {
+            kind = "show_text",
+            text = (tid and (tid .. "_TEXT")) or "mod:TEXT",
+            facePlayer = true,
+            jumptext = true,
+          }
+        end
         return { kind = "show_text", text = tid or "..." }
       end },
+    { label = "+ Warp", kind = "good",
+      tip = "Warp the player to a map cell (edit map / x / y)",
+      make = function()
+        return {
+          kind = "warp", map = mapHint, x = 5, y = 6, facing = "down",
+        }
+      end },
+    { label = "+ Set flag", kind = "accent",
+      tip = "Set a save/event flag",
+      make = function()
+        if gen2 then return { kind = "set_flag", flag = "0", event = 0 } end
+        return { kind = "set_flag", flag = "DONE" }
+      end },
+    { label = "+ If flag", kind = "ghost",
+      tip = "Skip rest if flag is already set",
+      make = function()
+        if gen2 then
+          return {
+            kind = "check_flag_skip", flag = "0", event = 0, script = "",
+          }
+        end
+        return { kind = "check_flag_skip", flag = "DONE" }
+      end },
+    { label = "+ If no flag", kind = "ghost", gen1Only = true,
+      tip = "Skip rest if flag is clear",
+      make = function()
+        return { kind = "check_flag_missing", flag = "DONE" }
+      end },
+    { label = "+ Face", kind = "ghost",
+      tip = "NPC faces the player",
+      make = function() return { kind = "face_player" } end },
     { label = "+ Ask", kind = "accent",
       tip = "Yes/No prompt (skips rest on NO by default)",
       make = function()
@@ -74,98 +137,10 @@ local function shortcutDefs(S)
         local tid = key:match("/(.+)$")
         return { kind = "ask", text = tid or "OK?", skipOnNo = true }
       end },
-    { label = "+ Image", kind = "accent",
-      tip = "Framed PNG (PicBox); Browse to import",
-      make = function()
-        return { kind = "show_image", path = "assets/pic.png", text = "" }
-      end },
-    { label = "+ Face", kind = "ghost",
-      tip = "NPC faces the player",
-      make = function() return { kind = "face_player" } end },
-    { label = "+ Engine", kind = "ghost",
-      tip = "Raw ScriptRunner row (check_flag, hide_object, play_sound, …)",
-      make = function()
-        return {
-          kind = "raw",
-          note = "check_flag EVENT_FLAG",
-          row = { "check_flag", "EVENT_FLAG" },
-        }
-      end },
     { label = "+ Item", kind = "accent",
       tip = "Give an item",
       make = function()
         return { kind = "give_item", item = "POTION", count = 1 }
-      end },
-    { label = "+ Take item", kind = "ghost",
-      tip = "Remove an item from the bag",
-      make = function()
-        return { kind = "take_item", item = "POTION", count = 1 }
-      end },
-    { label = "+ Check item", kind = "ghost",
-      tip = "Skip remaining steps if the item is missing",
-      make = function()
-        return { kind = "check_item_missing", item = "POTION" }
-      end },
-    { label = "+ Pokemon", kind = "accent",
-      tip = "Give a Pokémon (nickname prompt)",
-      make = function()
-        return { kind = "give_pokemon", species = "EEVEE", level = 25 }
-      end },
-    { label = "+ Starter", kind = "accent",
-      tip = "Give starter + EVENT_GOT_STARTER (+ chose flag)",
-      make = function()
-        return {
-          kind = "give_starter", species = "BULBASAUR", level = 5,
-          choseFlag = "EVENT_CHOSE_BULBASAUR", rivalStarter = 1,
-        }
-      end },
-    { label = "+ Set flag", kind = "ghost",
-      tip = "Set a save/event flag",
-      make = function() return { kind = "set_flag", flag = "DONE" } end },
-    { label = "+ Clear flag", kind = "ghost",
-      tip = "Clear a save/event flag",
-      make = function() return { kind = "clear_flag", flag = "DONE" } end },
-    { label = "+ If flag", kind = "ghost",
-      tip = "Skip rest if flag is already set",
-      make = function()
-        return { kind = "check_flag_skip", flag = "DONE" }
-      end },
-    { label = "+ If no flag", kind = "ghost",
-      tip = "Skip rest if flag is clear",
-      make = function()
-        return { kind = "check_flag_missing", flag = "DONE" }
-      end },
-    { label = "+ Label", kind = "ghost",
-      tip = "Named jump target",
-      make = function() return { kind = "label", name = "label" } end },
-    { label = "+ Jump", kind = "ghost",
-      tip = "Jump to a label",
-      make = function() return { kind = "jump", name = "end" } end },
-    { label = "+ Heal", kind = "ghost",
-      tip = "Heal the party",
-      make = function() return { kind = "heal_party" } end },
-    { label = "+ Money", kind = "ghost",
-      tip = "Give money",
-      make = function() return { kind = "give_money", amount = 500 } end },
-    { label = "+ Warp", kind = "ghost",
-      tip = "Warp the player to a map cell",
-      make = function()
-        return {
-          kind = "warp", map = "PALLET_TOWN", x = 5, y = 6, facing = "down",
-        }
-      end },
-    { label = "+ Wild", kind = "accent",
-      tip = "Start a wild battle",
-      make = function()
-        return { kind = "wild_battle", species = "PIDGEY", level = 5 }
-      end },
-    { label = "+ Trainer", kind = "accent",
-      tip = "Trainer battle (no oneshot flag)",
-      make = function()
-        return {
-          kind = "trainer_battle",
-          trainer = S.trainerId or "OPP_YOUNGSTER", party = 1,
-        }
       end },
     { label = "1-shot item", kind = "ghost",
       tip = "Give an item once (flag-gated)",
@@ -175,16 +150,52 @@ local function shortcutDefs(S)
           after = "I already gave you one.", item = "POTION", flag = "DONE",
         }
       end },
-    { label = "1-shot mon", kind = "ghost",
-      tip = "Give a Pokémon once (flag-gated)",
+    { label = "+ Heal", kind = "ghost",
+      tip = "Heal the party",
+      make = function() return { kind = "heal_party" } end },
+    { label = "+ Engine", kind = "ghost", gen1Only = true,
+      tip = "Raw ScriptRunner row (check_flag, hide_object, play_sound, …)",
       make = function()
         return {
-          kind = "oneshot_pokemon", text = "Here! Take this POKeMON!",
-          after = "I already gave you one.", species = "EEVEE", level = 25,
-          flag = "GOT_MON",
+          kind = "raw",
+          note = "check_flag EVENT_FLAG",
+          row = { "check_flag", "EVENT_FLAG" },
         }
       end },
-    { label = "1-shot fight", kind = "accent",
+    { label = "+ Opcode", kind = "ghost", gen2Only = true,
+      tip = "Opaque Gold opcode (passthrough on Save)",
+      make = function()
+        return { kind = "opcode", cmd = { op = "end" }, op = "end" }
+      end },
+    { label = "+ Jump scr", kind = "ghost", gen2Only = true,
+      tip = "iftrue / iffalse / sjump to another scriptKey",
+      make = function()
+        return {
+          kind = "jump_script", script = "", when = "true", op = "iftrue",
+        }
+      end },
+    { label = "+ Pokemon", kind = "accent",
+      tip = "Give a Pokémon (nickname prompt)",
+      make = function()
+        return { kind = "give_pokemon", species = "EEVEE", level = 25 }
+      end },
+    { label = "+ Wild", kind = "accent",
+      tip = "Start a wild battle",
+      make = function()
+        return { kind = "wild_battle", species = "PIDGEY", level = 5, reload = true }
+      end },
+    { label = "+ Trainer", kind = "accent",
+      tip = "Trainer battle (no oneshot flag)",
+      make = function()
+        if gen2 then
+          return { kind = "trainer_battle", class = 1, member = 1, party = 1 }
+        end
+        return {
+          kind = "trainer_battle",
+          trainer = S.trainerId or "OPP_YOUNGSTER", party = 1,
+        }
+      end },
+    { label = "1-shot fight", kind = "accent", gen1Only = true,
       tip = "One-shot trainer battle with before/after text",
       make = function()
         return {
@@ -194,12 +205,115 @@ local function shortcutDefs(S)
           flag = "BEAT_TRAINER",
         }
       end },
-    { label = "+ Trade", kind = "accent",
+    { label = "1-shot mon", kind = "ghost", gen1Only = true,
+      tip = "Give a Pokémon once (flag-gated)",
+      make = function()
+        return {
+          kind = "oneshot_pokemon", text = "Here! Take this POKeMON!",
+          after = "I already gave you one.", species = "EEVEE", level = 25,
+          flag = "GOT_MON",
+        }
+      end },
+    { label = "+ Starter", kind = "accent",
+      tip = "Give starter + EVENT_GOT_STARTER (+ chose flag)",
+      make = function()
+        return {
+          kind = "give_starter",
+          species = gen2 and "CYNDAQUIL" or "BULBASAUR",
+          level = 5,
+          choseFlag = "EVENT_CHOSE_BULBASAUR", rivalStarter = 1,
+        }
+      end },
+    { label = "+ Take item", kind = "ghost",
+      tip = "Remove an item from the bag",
+      make = function()
+        return { kind = "take_item", item = "POTION", count = 1 }
+      end },
+    { label = "+ Check item", kind = "ghost", gen1Only = true,
+      tip = "Skip remaining steps if the item is missing",
+      make = function()
+        return { kind = "check_item_missing", item = "POTION" }
+      end },
+    { label = "+ Clear flag", kind = "ghost",
+      tip = "Clear a save/event flag",
+      make = function()
+        if gen2 then return { kind = "clear_flag", flag = "0", event = 0 } end
+        return { kind = "clear_flag", flag = "DONE" }
+      end },
+    { label = "+ Label", kind = "ghost", gen1Only = true,
+      tip = "Named jump target",
+      make = function() return { kind = "label", name = "label" } end },
+    { label = "+ Jump", kind = "ghost", gen1Only = true,
+      tip = "Jump to a label",
+      make = function() return { kind = "jump", name = "end" } end },
+    { label = "+ Money", kind = "ghost", gen1Only = true,
+      tip = "Give money",
+      make = function() return { kind = "give_money", amount = 500 } end },
+    { label = "+ Image", kind = "accent", gen1Only = true,
+      tip = "Framed PNG (PicBox); Browse to import",
+      make = function()
+        return { kind = "show_image", path = "assets/pic.png", text = "" }
+      end },
+    { label = "+ Trade", kind = "accent", gen1Only = true,
       tip = "In-game trade (field.trades index + done flag)",
       make = function()
         return { kind = "trade", index = 1, flag = "TRADED" }
       end },
   }
+  local out = {}
+  for _, sc in ipairs(list) do
+    if not (gen2 and sc.gen1Only) and not ((not gen2) and sc.gen2Only) then
+      out[#out + 1] = sc
+    end
+  end
+  return out
+end
+
+-- How tall a wrapped shortcut strip needs to be (never clip buttons).
+local function shortcutStripHeight(shortcuts, formW, s, extraFirstRowW)
+  local bh, gap = 26 * s, 4 * s
+  local maxX = formW - 12 * s
+  local bx = 12 * s + (tonumber(extraFirstRowW) or 0)
+  local rows = 1
+  for _, sc in ipairs(shortcuts or {}) do
+    local bw = Kit.textWidth("small", sc.label) + 16 * s
+    if bx + bw > maxX then
+      bx = 12 * s
+      rows = rows + 1
+    end
+    bx = bx + bw + gap
+  end
+  return rows * (bh + gap) + 10 * s
+end
+
+-- Draw shortcut / recipe chips; sc.apply() or sc.make() → onAdd(step).
+-- opts.firstRowSkip: leave room on row 1 for Copy/Paste drawn by the caller.
+local function drawShortcutStrip(shortcuts, x, y, w, h, s, onAdd, opts)
+  opts = opts or {}
+  local bh, gap = 26 * s, 4 * s
+  local firstSkip = tonumber(opts.firstRowSkip) or 0
+  local bx, by = x + firstSkip, y
+  local maxX = x + w
+  local maxY = y + h
+  Kit.pushClip(x - 4 * s, y - 2 * s, w + 8 * s, h + 4 * s)
+  for _, sc in ipairs(shortcuts or {}) do
+    local bw = Kit.textWidth("small", sc.label) + 16 * s
+    if bx + bw > maxX then
+      bx = x
+      by = by + bh + gap
+    end
+    if by + bh > maxY then break end
+    if Kit.button(bx, by, bw, bh, sc.label,
+        { kind = sc.kind or "ghost", font = "small", tooltip = sc.tip }) then
+      if sc.apply then
+        sc.apply()
+      elseif sc.make and onAdd then
+        onAdd(sc.make())
+      end
+    end
+    bx = bx + bw + gap
+  end
+  Kit.popClip()
 end
 
 local function stepLabel(kind)
@@ -209,12 +323,17 @@ local function stepLabel(kind)
   return kind or "?"
 end
 
-local function cycleKind(kind)
+local function cycleKind(S, kind)
+  local allowed = {}
+  for _, k in ipairs(STEP_KINDS) do
+    if stepKindAllowed(S, k) then allowed[#allowed + 1] = k end
+  end
+  if #allowed == 0 then return kind end
   local idx = 1
-  for i, k in ipairs(STEP_KINDS) do
+  for i, k in ipairs(allowed) do
     if k.id == kind then idx = i; break end
   end
-  return STEP_KINDS[(idx % #STEP_KINDS) + 1].id
+  return allowed[(idx % #allowed) + 1].id
 end
 
 local function parseKey(key)
@@ -238,6 +357,58 @@ local function ensureEmptyScript(S, key)
     S.project.talkScripts[key] = script
   end
   return script
+end
+
+-- Gold: clone map into project so we can attach a new scriptKey to an NPC.
+local function ensureMapOwnedForTalk(S, mapId)
+  if not mapId then return nil end
+  State.ensureProjectFields(S.project)
+  if S.project.maps[mapId] then return S.project.maps[mapId] end
+  local base = S.data and S.data.maps and S.data.maps[mapId]
+  if type(base) ~= "table" then return nil end
+  local copy = {}
+  for k, v in pairs(base) do copy[k] = v end
+  copy.objects = {}
+  for i, o in ipairs(base.objects or {}) do
+    local oc = {}
+    for k, v in pairs(o) do oc[k] = v end
+    copy.objects[i] = oc
+  end
+  copy.bgEvents = {}
+  for i, e in ipairs(base.bgEvents or {}) do
+    local ec = {}
+    for k, v in pairs(e) do ec[k] = v end
+    copy.bgEvents[i] = ec
+  end
+  S.project.maps[mapId] = copy
+  if S.data and S.data.maps then S.data.maps[mapId] = copy end
+  return copy
+end
+
+local function tryAttachScriptKey(S, mapId, scriptKey)
+  local map = ensureMapOwnedForTalk(S, mapId)
+  if not map then return false end
+  for _, obj in ipairs(map.objects or {}) do
+    if type(obj.scriptKey) ~= "string" or obj.scriptKey == "" then
+      obj.scriptKey = scriptKey
+      return true, "object"
+    end
+  end
+  for _, ev in ipairs(map.bgEvents or {}) do
+    if type(ev.scriptKey) ~= "string" or ev.scriptKey == "" then
+      ev.scriptKey = scriptKey
+      return true, "bg"
+    end
+  end
+  return false
+end
+
+local function openDialogForScript(S, mapId, scriptKey)
+  S.tab = "dialog"
+  S.dialogMapId = mapId
+  S.dialogScriptKey = scriptKey
+  local tid = Gen2Talk.textKeyForScript(S, scriptKey)
+  if tid then S.dialogTextId = tid end
 end
 
 local function sourceColor(src)
@@ -271,6 +442,160 @@ local function fitIn(fontName, text, maxW)
     shown = (n > 0 and text:sub(1, n) or "") .. "..."
   end
   return shown
+end
+
+-- Gold SCRIPTS form: Says + face-player for simple talk; override for vanilla.
+local function drawGen2ScriptForm(S, App, formX, listY, formW, listH, mapId, scriptKey)
+  local s = Kit.scale
+  local pad = 12 * s
+  local cmds, ownedFlag = Gen2Talk.commands(S, scriptKey)
+  local owned = ownedFlag == true
+    or (S.project.scripts and type(S.project.scripts[scriptKey]) == "table")
+  local simple = Gen2Talk.isSimpleTalk(cmds)
+  -- Room for Override / templates / Dialog — not just a single button row.
+  local footerH = owned and 72 * s or 40 * s
+  local viewX = formX + pad
+  local viewY = listY + pad + 36 * s
+  local viewW = formW - 2 * pad
+  local viewH = math.max(40 * s, listH - pad - footerH - 36 * s)
+
+  Kit.text("micro", fitIn("micro", mapId .. "/" .. scriptKey, formW - 24 * s),
+    formX + 12 * s, listY + 10 * s, PAL.faint)
+  Kit.text("micro",
+    owned
+      and (simple
+        and "Edit talk here — Save writes Gold scripts"
+        or "Mod script (advanced ops) — edit text bodies below")
+      or "Vanilla — Override in mod to edit talk",
+    formX + 12 * s, listY + 22 * s, owned and PAL.green or PAL.yellow)
+
+  FormPane.track(S, "eventFormScroll",
+    S.eventScriptKey .. (owned and (simple and ":g2s" or ":g2a") or ":g2v"))
+  local fy, view = FormPane.begin(S, "eventFormScroll", viewX, viewY, viewW, viewH)
+  local contentTop = fy
+  local fh = 28 * s
+  local innerW = view.contentW or view.w
+
+  if not owned then
+    Kit.text("small", "Opcode preview (read-only)", viewX, fy, PAL.caption)
+    fy = fy + 20 * s
+    if type(cmds) == "table" and #cmds > 0 then
+      for _, cmd in ipairs(cmds) do
+        local note = tostring(cmd.op or "?")
+        if cmd.text then note = note .. "  text=" .. tostring(cmd.text) end
+        if cmd.script then note = note .. "  →" .. tostring(cmd.script) end
+        Kit.text("micro", fitIn("micro", note, innerW), viewX, fy + 6 * s, PAL.muted)
+        fy = fy + fh
+      end
+    else
+      Kit.text("micro", "No script commands", viewX, fy, PAL.muted)
+      fy = fy + fh
+    end
+  elseif simple then
+    local face = Gen2Talk.facesPlayer(cmds)
+    Kit.text("small", "Face player", viewX, fy + 6 * s, PAL.caption)
+    if Kit.chip(viewX + 100 * s, fy, 80 * s, fh, face and "YES" or "NO",
+        face, PAL.yellow) then
+      Gen2Talk.setFacePlayer(S, scriptKey, not face)
+      App.markDirty()
+      S.status = "Face player " .. (not face and "on" or "off")
+    end
+    fy = fy + fh + 10 * s
+
+    local textKey = Gen2Talk.textKeyForScript(S, scriptKey)
+    if not textKey then
+      _, textKey = Gen2Talk.ensureSimpleTalk(S, scriptKey, face)
+      App.markDirty()
+    end
+    Kit.text("small", "Says", viewX, fy, PAL.caption)
+    fy = fy + 16 * s
+    local body = Gen2Talk.getSays(S, textKey)
+    local display = body:gsub("\n", "\\n"):gsub("\f", "\\f"):gsub("\v", "\\v")
+    local edited = field(App, "ev_g2_says", viewX, fy, innerW, 36 * s,
+      display, "(what they say)")
+    if edited then
+      local decoded = edited:gsub("\\n", "\n"):gsub("\\f", "\f"):gsub("\\v", "\\v")
+      if decoded ~= body then
+        Gen2Talk.setSays(S, textKey, decoded)
+        App.markDirty()
+      end
+    end
+    fy = fy + 44 * s
+    Kit.text("micro",
+      "Use \\n new line, \\f page break, \\v A-wait, {PLAYER} for name",
+      viewX, fy, PAL.faint)
+    fy = fy + 18 * s
+    Kit.text("micro", "text key: " .. tostring(textKey), viewX, fy, PAL.muted)
+    fy = fy + 22 * s
+  else
+    Kit.text("small", "Advanced script", viewX, fy, PAL.caption)
+    fy = fy + 18 * s
+    Kit.text("micro",
+      "Multi-op script — edit text bodies; opcode list is preview-only for now",
+      viewX, fy, PAL.faint)
+    fy = fy + 20 * s
+    if type(cmds) == "table" then
+      for _, cmd in ipairs(cmds) do
+        local note = tostring(cmd.op or "?")
+        if cmd.text then note = note .. "  text=" .. tostring(cmd.text) end
+        Kit.text("micro", fitIn("micro", note, innerW), viewX, fy + 4 * s, PAL.muted)
+        fy = fy + 22 * s
+      end
+    end
+    fy = fy + 8 * s
+    local keys = Gen2Talk.collectTextKeys(S, scriptKey)
+    for ti, tid in ipairs(keys) do
+      Kit.text("small", "Text " .. ti .. " · " .. tid, viewX, fy, PAL.caption)
+      fy = fy + 16 * s
+      local body = Gen2Talk.getSays(S, tid)
+      local display = body:gsub("\n", "\\n"):gsub("\f", "\\f"):gsub("\\v", "\\v")
+      local edited = field(App, "ev_g2_t" .. ti, viewX, fy, innerW, 32 * s,
+        display, "...")
+      if edited then
+        local decoded = edited:gsub("\\n", "\n"):gsub("\\f", "\f"):gsub("\\v", "\\v")
+        if decoded ~= body then
+          Gen2Talk.setSays(S, tid, decoded)
+          App.markDirty()
+        end
+      end
+      fy = fy + 40 * s
+    end
+    if #keys == 0 then
+      Kit.text("micro", "No text keys in this script", viewX, fy, PAL.muted)
+      fy = fy + fh
+    end
+  end
+
+  FormPane.finish(S, "eventFormScroll", contentTop, fy, view)
+
+  local by = listY + listH - footerH + 6 * s
+  local bx = formX + 12 * s
+  local bh = 28 * s
+  if not owned then
+    if Kit.button(bx, by, 180 * s, bh, "Override in mod",
+        { kind = "good", font = "small",
+          tooltip = "Clone opcodes into mod and open the step builder" }) then
+      TalkIndex.cloneToProject(S, mapId, scriptKey)
+      App.markDirty()
+      S.status = "Overrode " .. scriptKey .. " — edit steps like Red"
+    end
+    bx = bx + 188 * s
+  else
+    if Kit.button(bx, by, 120 * s, bh, "Open steps", {
+        kind = "good", font = "small",
+        tooltip = "Decompile into the step builder",
+      }) then
+      Gen2Talk.ensureScriptSteps(S, scriptKey, mapId)
+      Gen2Talk.commitSteps(S, scriptKey)
+      App.markDirty()
+      S.status = "Step builder ready for " .. scriptKey
+    end
+    bx = bx + 128 * s
+  end
+  if Kit.button(bx, by, 140 * s, bh, "Open in Dialog",
+      { kind = "accent", font = "small" }) then
+    openDialogForScript(S, mapId, scriptKey)
+  end
 end
 
 -- Resolve TEXT_* / _FooText to a string-table id for project.text lookup.
@@ -382,6 +707,22 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
 
   if kind == "show_text" or kind == "ask" then
     drawDialogTextFields(S, App, step, i, fx, fw, fh, s, row)
+    if kind == "show_text" and Generation.isGen2(S) then
+      local y2 = row()
+      local face = step.facePlayer ~= false
+      if Kit.chip(fx, y2, 100 * s, fh, face and "Face YES" or "Face NO",
+          face, PAL.yellow) then
+        step.facePlayer = not face
+        step.jumptext = true
+        App.markDirty()
+      end
+      local jt = step.jumptext == true
+      if Kit.chip(fx + 110 * s, y2, 120 * s, fh,
+          jt and "jumptext" or "writetext", jt, PAL.blue) then
+        step.jumptext = not jt
+        App.markDirty()
+      end
+    end
     if kind == "ask" then
       local y2 = row()
       local on = step.skipOnNo ~= false
@@ -392,6 +733,37 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
         step.skipOnNo = not on
         App.markDirty()
       end
+    end
+  elseif kind == "opcode" then
+    local y = row()
+    local cmd = type(step.cmd) == "table" and step.cmd or {}
+    step.cmd = cmd
+    cmd.op = field(App, "ev_op_" .. i, fx, y, 140 * s, fh,
+      tostring(cmd.op or step.op or "end"), "op")
+    step.op = cmd.op
+    local y2 = row()
+    local text = cmd.text
+    local edited = field(App, "ev_opc_t_" .. i, fx, y2, fw, fh,
+      text ~= nil and tostring(text) or "", "text (optional)")
+    if edited ~= "" then cmd.text = edited elseif text then cmd.text = nil end
+    local y3 = row()
+    local script = cmd.script
+    local sed = field(App, "ev_opc_s_" .. i, fx, y3, fw, fh,
+      script ~= nil and tostring(script) or "", "script (optional)")
+    if sed ~= "" then cmd.script = sed elseif script then cmd.script = nil end
+  elseif kind == "jump_script" then
+    local y = row()
+    step.script = field(App, "ev_js_" .. i, fx, y, fw - 100 * s, fh,
+      step.script or "", "bank:addr or mod:…")
+    local when = step.when or "true"
+    if Kit.chip(fx + fw - 90 * s, y, 90 * s, fh, when, true, PAL.yellow) then
+      step.when = (when == "true" and "false")
+        or (when == "false" and "always")
+        or "true"
+      step.op = step.when == "false" and "iffalse"
+        or step.when == "always" and "sjump"
+        or "iftrue"
+      App.markDirty()
     end
   elseif kind == "show_image" then
     local y = row()
@@ -418,13 +790,27 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
   elseif kind == "set_flag" or kind == "clear_flag"
       or kind == "check_flag_skip" or kind == "check_flag_missing" then
     local y = row()
-    step.flag = field(App, "ev_f_" .. i, fx, y, 160 * s, fh,
-      step.flag or "STARTED", "short name or EVENT_*",
-      function() return Autocomplete.flagIds(S) end)
-    -- Do not write eventFlags here: each keystroke would tombstone partials
-    -- (M, MA, MAP…). Save / flag tester rebuild from finished step.flag.
-    local full = State.modFlag(S.project, step.flag)
-    Kit.text("micro", "→ " .. full, fx + 170 * s, y + 8 * s, PAL.faint)
+    if Generation.isGen2(S) then
+      local ev = tonumber(step.event) or tonumber(step.flag) or 0
+      ev = tonumber(field(App, "ev_f_" .. i, fx, y, 80 * s, fh,
+        tostring(ev), "0")) or 0
+      step.event = ev
+      step.flag = tostring(ev)
+      Kit.text("micro", "event #", fx + 90 * s, y + 8 * s, PAL.faint)
+      if kind == "check_flag_skip" or kind == "check_flag_missing" then
+        local y2 = row()
+        step.script = field(App, "ev_fs_" .. i, fx, y2, fw, fh,
+          step.script or "", "jump scriptKey")
+      end
+    else
+      step.flag = field(App, "ev_f_" .. i, fx, y, 160 * s, fh,
+        step.flag or "STARTED", "short name or EVENT_*",
+        function() return Autocomplete.flagIds(S) end)
+      -- Do not write eventFlags here: each keystroke would tombstone partials
+      -- (M, MA, MAP…). Save / flag tester rebuild from finished step.flag.
+      local full = State.modFlag(S.project, step.flag)
+      Kit.text("micro", "→ " .. full, fx + 170 * s, y + 8 * s, PAL.faint)
+    end
   elseif kind == "give_item" or kind == "take_item"
       or kind == "check_item_skip" or kind == "check_item_missing" then
     local y = row()
@@ -452,7 +838,15 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
     })
     step.level = tonumber(field(App, "ev_lv_" .. i, fx + 150 * s, y, 50 * s, fh,
       tostring(step.level or 5), "5")) or 5
-    if kind ~= "wild_battle" then
+    if kind == "wild_battle" and Generation.isGen2(S) then
+      local y2 = row()
+      local shiny = step.forceShiny and true or false
+      if Kit.chip(fx, y2, 120 * s, fh, shiny and "Force shiny" or "Normal DVs",
+          shiny, PAL.yellow) then
+        step.forceShiny = (not shiny) or nil
+        App.markDirty()
+      end
+    elseif kind ~= "wild_battle" then
       local y2 = row()
       local nick = step.skipNickname and true or false
       if Kit.chip(fx, y2, 140 * s, fh, nick and "No nickname" or "Ask nickname",
@@ -515,11 +909,20 @@ local function drawStepFields(S, App, step, i, kind, fx, fy, fw, fh, s)
       step.facing or "down", "down")
   elseif kind == "trainer_battle" or kind == "oneshot_trainer" then
     local y = row()
-    step.trainer = field(App, "ev_tr_" .. i, fx, y, 160 * s, fh,
-      step.trainer or "OPP_BUG_CATCHER", "OPP_*",
-      function() return Autocomplete.trainerIds(S) end):upper():gsub("%s+", "_")
-    step.party = tonumber(field(App, "ev_tp_" .. i, fx + 170 * s, y, 40 * s, fh,
-      tostring(step.party or 1), "1")) or 1
+    if Generation.isGen2(S) and kind == "trainer_battle" then
+      step.class = tonumber(field(App, "ev_tr_" .. i, fx, y, 70 * s, fh,
+        tostring(step.class or 1), "1")) or 1
+      step.member = tonumber(field(App, "ev_tp_" .. i, fx + 80 * s, y, 50 * s, fh,
+        tostring(step.member or step.party or 1), "1")) or 1
+      step.party = step.member
+      Kit.text("micro", "class / member", fx + 140 * s, y + 8 * s, PAL.faint)
+    else
+      step.trainer = field(App, "ev_tr_" .. i, fx, y, 160 * s, fh,
+        step.trainer or "OPP_BUG_CATCHER", "OPP_*",
+        function() return Autocomplete.trainerIds(S) end):upper():gsub("%s+", "_")
+      step.party = tonumber(field(App, "ev_tp_" .. i, fx + 170 * s, y, 40 * s, fh,
+        tostring(step.party or 1), "1")) or 1
+    end
     if kind == "oneshot_trainer" then
       local y2 = row()
       step.text = field(App, "ev_tb_" .. i, fx, y2, fw, fh,
@@ -707,11 +1110,18 @@ local function drawEditableStep(S, App, steps, i, listKey, viewX, fy, innerW, ki
         tooltip = kind == "raw"
           and "Engine cmd — edit the line, or click to change step type"
           or "Click to change step type" }) then
-    local nextKind = cycleKind(kind)
+    local nextKind = cycleKind(S, kind)
     step.kind = nextKind
     if nextKind == "raw" and (not step.note or step.note == "") then
       step.note = "check_flag EVENT_FLAG"
       step.row = { "check_flag", "EVENT_FLAG" }
+    elseif nextKind == "opcode" and type(step.cmd) ~= "table" then
+      step.cmd = { op = "end" }
+      step.op = "end"
+    elseif nextKind == "jump_script" and not step.script then
+      step.script = ""
+      step.when = "true"
+      step.op = "iftrue"
     end
     App.markDirty()
   end
@@ -989,10 +1399,14 @@ local function drawScripts(S, x, y, w, h, App)
     local badge = TalkIndex.sourceLabel(e.source)
     local badgeW = Kit.textWidth("micro", badge) + 10 * s
     Kit.pushClip(pinScrollX, ry, pinRowW, rowH)
+    local primary = Generation.isGen2(S)
+      and (e.label or e.textId) or e.textId
+    local secondary = Generation.isGen2(S)
+      and (e.textId or "") or (e.label or "")
     Kit.text("micro",
-      fitIn("micro", e.textId, math.max(8, pinRowW - badgeW - 16 * s)),
+      fitIn("micro", primary, math.max(8, pinRowW - badgeW - 16 * s)),
       pinScrollX + 6 * s, ry + 4 * s, PAL.text)
-    Kit.text("micro", fitIn("micro", e.label, math.max(8, pinRowW - 12 * s)),
+    Kit.text("micro", fitIn("micro", secondary, math.max(8, pinRowW - 12 * s)),
       pinScrollX + 6 * s, ry + 18 * s, PAL.faint)
     Kit.text("micro", badge, pinScrollX + pinRowW - badgeW, ry + 4 * s,
       sourceColor(e.source))
@@ -1002,31 +1416,61 @@ local function drawScripts(S, x, y, w, h, App)
   S.eventScriptOffset = Kit.scrollbar(pinScrollX, listY + 8 * s, pinScrollW,
     pinScrollH, S.eventScriptOffset or 0, #entries, perPage)
 
+  local gen2 = Generation.isGen2(S)
   if Kit.button(pinX + 8 * s, listY + listH - 70 * s, listW - 16 * s, 28 * s,
       "From Dialog selection", { kind = "accent" }) then
-    if S.dialogMapId and S.dialogTextId then
+    if S.dialogMapId and (S.dialogScriptKey or S.dialogTextId) then
       S.eventMapId = S.dialogMapId
-      S.eventScriptKey = S.dialogMapId .. "/" .. S.dialogTextId
+      local pin = S.dialogScriptKey or S.dialogTextId
+      S.eventScriptKey = S.dialogMapId .. "/" .. pin
     else
       S.status = "Pick a map NPC/sign on the Dialog tab first"
     end
   end
-  if Kit.button(pinX + 8 * s, listY + listH - 36 * s, listW - 16 * s, 28 * s,
+  if not gen2 and Kit.button(pinX + 8 * s, listY + listH - 36 * s, listW - 16 * s, 28 * s,
       "+ Empty script", { kind = "good" }) then
     local mapId = S.eventMapId or S.mapId or S.dialogMapId or "NEW_MAP"
-    local textId = "TEXT_" .. mapId .. "_NPC1"
-    local key = mapId .. "/" .. textId
+    State.ensureProjectFields(S.project)
+    local n = 1
+    local textId, key
+    repeat
+      textId = "TEXT_" .. mapId .. "_NPC" .. n
+      key = mapId .. "/" .. textId
+      n = n + 1
+    until not (S.project.talkScripts and S.project.talkScripts[key])
     ensureEmptyScript(S, key)
     S.eventMapId = mapId
     S.eventScriptKey = key
     App.markDirty()
+    S.status = "New empty script " .. textId
+      .. " — edit steps here; Dialog edits the TEXT_* body"
+  elseif gen2 and Kit.button(pinX + 8 * s, listY + listH - 36 * s, listW - 16 * s, 28 * s,
+      "+ Talk script", { kind = "good",
+        tooltip = "Create a face-player talk script for this map" }) then
+    local mapId = S.eventMapId or S.mapId or S.dialogMapId or "NEW_MAP"
+    local sk, tid = Gen2Talk.allocTalk(S, mapId, "OBJ",
+      #(entries) + 1, true)
+    Gen2Talk.ensureScriptSteps(S, sk, mapId)
+    Gen2Talk.commitSteps(S, sk)
+    local attached, where = tryAttachScriptKey(S, mapId, sk)
+    S.eventMapId = mapId
+    S.eventScriptKey = mapId .. "/" .. sk
+    S.dialogMapId = mapId
+    S.dialogTextId = tid
+    S.dialogScriptKey = sk
+    App.markDirty()
+    if attached then
+      S.status = "Talk script on " .. where .. " — edit steps on the right"
+    else
+      S.status = "Talk script created — attach scriptKey on Maps, or edit steps here"
+    end
   end
 
   local formX = pinX + listW + 12 * s
   local formW = w - (formX - x)
-  Kit.caption(formX, y, "STEPS")
+  Kit.caption(formX, y, gen2 and "TALK" or "STEPS")
   local advOn = S.eventAdvanced == true
-  if Kit.chip(formX + formW - 100 * s, y, 100 * s, 22 * s, "ADVANCED",
+  if not gen2 and Kit.chip(formX + formW - 100 * s, y, 100 * s, 22 * s, "ADVANCED",
       advOn, PAL.yellow, nil,
       "Resolve chain, injections, open mod/vanilla source") then
     S.eventAdvanced = not advOn
@@ -1035,11 +1479,14 @@ local function drawScripts(S, x, y, w, h, App)
     S.eventAdvOffset = 0
     S.eventAdvHit = 1
   end
+  if gen2 then advOn = false end
   Kit.card(formX, listY, formW, listH, 12 * s)
 
   if not S.eventScriptKey then
     Kit.emptyBox(formX + 8 * s, listY + 8 * s, formW - 16 * s, listH - 16 * s,
-      "Select a map object — badges: SCRIPT (vanilla), TEXT, ITEM, MOD…")
+      gen2
+        and "Select a pin or + Talk script — Override opens the step builder"
+        or "Select a map object — badges: SCRIPT (vanilla), TEXT, ITEM, MOD…")
     return
   end
 
@@ -1050,16 +1497,38 @@ local function drawScripts(S, x, y, w, h, App)
     return
   end
 
-  local owned = S.project.talkScripts[S.eventScriptKey]
-  if owned and TalkIndex.repairPlaceholderSteps(S, mapId, textId, owned) then
+  -- Gold: step builder when scriptSteps exist (or owned scripts auto-decompile).
+  -- Vanilla pins without override keep the opcode preview form.
+  if gen2 then
+    local bag = Gen2Talk.getScriptSteps(S, textId)
+    if not bag and S.project.scripts and type(S.project.scripts[textId]) == "table" then
+      bag = Gen2Talk.ensureScriptSteps(S, textId, mapId)
+    end
+    if not bag then
+      drawGen2ScriptForm(S, App, formX, listY, formW, listH, mapId, textId)
+      return
+    end
+  end
+
+  local owned = gen2
+    and Gen2Talk.getScriptSteps(S, textId)
+    or S.project.talkScripts[S.eventScriptKey]
+  if owned and not gen2
+      and TalkIndex.repairPlaceholderSteps(S, mapId, textId, owned) then
     App.markDirty()
     S.status = "Fixed invalid Engine placeholder steps for "
       .. tostring(S.eventScriptKey)
   end
   local steps, meta = TalkIndex.resolveSteps(S, mapId, textId)
+  if gen2 and owned and type(owned.steps) == "table" then
+    steps = owned.steps
+    meta = { owned = true, source = "mod", readOnly = false, gen2 = true }
+  end
   local readOnly = not owned
-  -- Shortcut grid needs ~4 rows when editing; clone button is a single row.
-  local footerH = readOnly and 40 * s or 120 * s
+  local shortcuts = (not readOnly) and shortcutDefs(S) or {}
+  -- Size footer to fit every shortcut chip (old fixed 120px clipped Warp etc.).
+  local footerH = readOnly and 40 * s
+    or math.max(120 * s, shortcutStripHeight(shortcuts, formW, s, 124 * s))
   local advH = advOn and math.min(210 * s, math.floor(listH * 0.42)) or 0
   local pad = 12 * s
   local viewX = formX + pad
@@ -1073,9 +1542,14 @@ local function drawScripts(S, x, y, w, h, App)
   local src = (meta and meta.source) or (owned and "mod") or "?"
   Kit.text("micro",
     readOnly
-      and ("Vanilla / engine (" .. TalkIndex.sourceLabel(src)
-        .. ") — Clone to mod to override on Save")
-      or "Mod override (emitted on Save)",
+      and (gen2
+        and ("Vanilla (" .. TalkIndex.sourceLabel(src)
+          .. ") — Override in mod to edit steps")
+        or ("Vanilla / engine (" .. TalkIndex.sourceLabel(src)
+          .. ") — Clone to mod to edit steps; Dialog edits TEXT_* body"))
+      or (gen2
+        and "Mod script — edit steps (Save → Gold opcodes); Dialog edits text"
+        or "Mod override — edit steps here; Dialog edits the TEXT_* body"),
     formX + 12 * s, listY + 22 * s, readOnly and PAL.yellow or PAL.green)
 
   FormPane.track(S, "eventFormScroll", S.eventScriptKey .. (readOnly and ":v" or ":m"))
@@ -1115,6 +1589,17 @@ local function drawScripts(S, x, y, w, h, App)
         Kit.text("micro", fitIn("micro", step.name or step.label or "",
             innerW - kindW - 8 * s),
           viewX + kindW + 8 * s, fy + 8 * s, PAL.text)
+      elseif kind == "jump_script" then
+        Kit.text("micro", fitIn("micro",
+            tostring(step.when or "") .. " → " .. tostring(step.script or ""),
+            innerW - kindW - 8 * s),
+          viewX + kindW + 8 * s, fy + 8 * s, PAL.text)
+      elseif kind == "opcode" then
+        local cmd = step.cmd or {}
+        Kit.text("micro", fitIn("micro",
+            tostring(cmd.op or step.op or "?"),
+            innerW - kindW - 8 * s),
+          viewX + kindW + 8 * s, fy + 8 * s, PAL.muted)
       elseif kind == "set_flag" or kind == "clear_flag"
           or kind == "check_flag_skip" or kind == "check_flag_missing" then
         Kit.text("micro", tostring(step.flag or ""),
@@ -1152,45 +1637,90 @@ local function drawScripts(S, x, y, w, h, App)
 
   if readOnly then
     local by = listY + listH - 34 * s
-    if Kit.button(formX + 12 * s, by, 180 * s, 28 * s, "Clone to mod",
-        { kind = "good", font = "small" }) then
+    local cloneLabel = gen2 and "Override in mod" or "Clone to mod"
+    if Kit.button(formX + 12 * s, by, 180 * s, 28 * s, cloneLabel,
+        { kind = "good", font = "small",
+          tooltip = gen2
+            and "Clone opcodes into mod and open the step builder"
+            or "Copy into mod to edit steps here; Dialog still edits TEXT_* body" }) then
       TalkIndex.cloneToProject(S, mapId, textId)
       App.markDirty()
-      S.status = "Cloned " .. S.eventScriptKey .. " into mod (Save to emit override)"
+      S.status = (gen2 and "Overrode " or "Cloned ") .. S.eventScriptKey
+        .. (gen2 and " — edit steps here" or " — edit steps here; Dialog edits the TEXT_* body")
+    end
+    if Kit.button(formX + 200 * s, by, 70 * s, 28 * s, "Copy", {
+        kind = "ghost", font = "small",
+        tooltip = "Copy these steps (Ctrl+C) — paste into another script after Clone",
+      }) then
+      local ok, msg = copyCurrentEvent(S)
+      S.status = msg or (ok and "Copied" or "Copy failed")
     end
     return
   end
 
   local script = owned
-  local shortcuts = shortcutDefs(S)
   local bh = 26 * s
-  local gap = 4 * s
   local bx = formX + 12 * s
   local by = listY + listH - footerH + 6 * s
-  local maxX = formX + formW - 12 * s
-  for _, sc in ipairs(shortcuts) do
-    local bw = Kit.textWidth("small", sc.label) + 16 * s
-    if bx + bw > maxX then
-      bx = formX + 12 * s
-      by = by + bh + gap
+  if Kit.button(bx, by, 56 * s, bh, "Copy", {
+      kind = "ghost", font = "small",
+      tooltip = "Copy all steps (Ctrl+C)",
+    }) then
+    local ok, msg = copyCurrentEvent(S)
+    S.status = msg or (ok and "Copied" or "Copy failed")
+  end
+  bx = bx + 60 * s
+  if Kit.button(bx, by, 56 * s, bh, "Paste", {
+      kind = "good", font = "small",
+      tooltip = "Replace steps with clipboard (Ctrl+V)",
+    }) then
+    local ok, msg = pasteEventClip(S, App)
+    S.status = msg or (ok and "Pasted" or "Paste failed")
+  end
+  if gen2 then
+    bx = bx + 60 * s
+    if Kit.button(bx, by, 80 * s, bh, "Simplify", {
+        kind = "ghost", font = "small",
+        tooltip = "Replace with a single jumptextfaceplayer (destructive)",
+      }) then
+      local n = script.steps and #script.steps or 0
+      if n > 1 and not S._confirmSimplify then
+        S._confirmSimplify = textId
+        S.status = "Click Simplify again to wipe " .. n .. " steps → Face talk"
+      else
+        S._confirmSimplify = nil
+        Gen2Talk.ensureSimpleTalk(S, textId, true)
+        Gen2Talk.refreshStepsFromCmds(S, textId)
+        App.markDirty()
+        S.status = "Simplified to Face talk"
+      end
+    elseif S._confirmSimplify and S._confirmSimplify ~= textId then
+      S._confirmSimplify = nil
     end
-    if Kit.button(bx, by, bw, bh, sc.label,
-        { kind = sc.kind or "ghost", font = "small", tooltip = sc.tip }) then
+  end
+  drawShortcutStrip(shortcuts, formX + 12 * s, by, formW - 24 * s, footerH - 8 * s, s,
+    function(step)
       script.steps = script.steps or {}
-      script.steps[#script.steps + 1] = sc.make()
+      script.steps[#script.steps + 1] = step
+      if gen2 then Gen2Talk.commitSteps(S, textId) end
       App.markDirty()
-    end
-    bx = bx + bw + gap
+    end, { firstRowSkip = gen2 and 210 * s or 124 * s })
+  if gen2 and not readOnly then
+    Gen2Talk.commitSteps(S, textId)
   end
 end
 
 local function drawStarters(S, x, y, w, h, App)
   local s = Kit.scale
   State.ensureProjectFields(S.project)
-  Kit.caption(x, y, "OAK LAB STARTERS")
+  local gen2 = Generation.isGen2(S)
+  local balls = gen2 and ELM_BALLS or OAK_BALLS
+  Kit.caption(x, y, gen2 and "ELM LAB STARTERS" or "OAK LAB STARTERS")
   local listY = y + 28 * s
   Kit.text("micro",
-    "Remap the three Oak's Lab balls. Save emits pokemon.before_give (like example_mew_starter).",
+    gen2
+      and "Remap the three Elm's Lab balls. Save emits pokemon.before_give on ELMS_LAB."
+      or "Remap the three Oak's Lab balls. Save emits pokemon.before_give (like example_mew_starter).",
     x, listY, PAL.muted)
   listY = listY + 22 * s
 
@@ -1199,7 +1729,7 @@ local function drawStarters(S, x, y, w, h, App)
   local fh = 30 * s
   local remap = S.project.starterRemap
 
-  for _, ball in ipairs(OAK_BALLS) do
+  for _, ball in ipairs(balls) do
     local cur = remap[ball.from]
     local sp = (type(cur) == "table" and cur.species)
       or (type(cur) == "string" and cur)
@@ -1232,7 +1762,9 @@ local function drawStarters(S, x, y, w, h, App)
   end
 
   Kit.text("micro",
-    "Custom gifts on any NPC: Events > Scripts > + Pokemon / Give starter / One-shot pokemon.",
+    gen2
+      and "Pic/cry/text still show the vanilla ball species; the gift species/level change on receive."
+      or "Custom gifts on any NPC: Events > Scripts > + Pokemon / Give starter / One-shot pokemon.",
     x + 20 * s, fy, PAL.faint)
 end
 
@@ -1395,6 +1927,162 @@ local function mapHasModHooks(S, mapId)
   return false
 end
 
+-- Deep-clone tables for the Events clipboard (warp map names, nested rows, …).
+local function cloneValue(v)
+  if type(v) ~= "table" then return v end
+  local out = {}
+  for k, val in pairs(v) do
+    out[k] = cloneValue(val)
+  end
+  return out
+end
+
+local function cloneSteps(steps)
+  local out = {}
+  for i, step in ipairs(steps or {}) do
+    out[i] = cloneValue(step)
+  end
+  return out
+end
+
+local function replaceSteps(dest, src)
+  if type(dest) ~= "table" then return end
+  for i = #dest, 1, -1 do dest[i] = nil end
+  for i, step in ipairs(src or {}) do
+    dest[i] = cloneValue(step)
+  end
+end
+
+-- Copy the current hook cell / step bag / talk script into S.eventClip.
+local function copyCurrentEvent(S)
+  if not S or not S.project then return false, "no project" end
+  State.ensureProjectFields(S.project)
+  local mode = S.eventsMode or "scripts"
+  if mode == "hooks" then
+    local mapId = S.eventMapId
+    if not mapId then return false, "select a map" end
+    local hooks = S.project.mapHooks and S.project.mapHooks[mapId]
+    local kind = S.eventHookKind or "onEnter"
+    if kind == "onStep" then
+      local cells = hooks and hooks.onStepCells
+      local idx = math.max(1, tonumber(S.eventHookCellIdx) or 1)
+      local cell = cells and cells[idx]
+      if not cell then return false, "no onStep cell to copy — add one first" end
+      S.eventClip = {
+        type = "hookCell",
+        kind = "onStep",
+        x = tonumber(cell.x) or 0,
+        y = tonumber(cell.y) or 0,
+        steps = cloneSteps(cell.steps),
+        fromMap = mapId,
+      }
+      return true, string.format(
+        "Copied onStep (%d,%d) · %d steps — switch map, Ctrl+V to paste",
+        S.eventClip.x, S.eventClip.y, #S.eventClip.steps)
+    end
+    local bag = resolveHookSteps(hooks or {}, kind, S.eventHookCellIdx,
+      S.eventHookScriptName, false)
+    if not bag then
+      return false, "nothing to copy — add mod steps first"
+    end
+    S.eventClip = {
+      type = "hookSteps",
+      kind = kind,
+      scriptName = S.eventHookScriptName,
+      steps = cloneSteps(bag),
+      fromMap = mapId,
+    }
+    return true, string.format(
+      "Copied %s · %d steps — Ctrl+V to paste on another map",
+      kind, #S.eventClip.steps)
+  end
+  if mode == "scripts" then
+    local key = S.eventScriptKey
+    if not key then return false, "select a script" end
+    local mapId, textId = parseKey(key)
+    local gen2 = Generation.isGen2(S)
+    local owned = gen2
+      and Gen2Talk.getScriptSteps(S, textId)
+      or (S.project.talkScripts and S.project.talkScripts[key])
+    local steps
+    if owned and type(owned.steps) == "table" then
+      steps = owned.steps
+    elseif mapId then
+      steps = select(1, TalkIndex.resolveSteps(S, mapId, textId))
+    end
+    if type(steps) ~= "table" then return false, "nothing to copy" end
+    S.eventClip = {
+      type = gen2 and "gen2Steps" or "talkSteps",
+      key = key,
+      scriptKey = textId,
+      steps = cloneSteps(steps),
+    }
+    return true, string.format(
+      "Copied %d steps — Ctrl+V pastes into the selected script", #S.eventClip.steps)
+  end
+  return false, "copy not available in this mode"
+end
+
+-- Paste S.eventClip: onStep+cell → new cell; otherwise replace current steps.
+local function pasteEventClip(S, App)
+  if not S or not S.project then return false, "no project" end
+  local clip = S.eventClip
+  if not clip or type(clip.steps) ~= "table" then
+    return false, "clipboard empty — Copy an event first (Ctrl+C)"
+  end
+  State.ensureProjectFields(S.project)
+  local mode = S.eventsMode or "scripts"
+  if mode == "hooks" then
+    local mapId = S.eventMapId
+    if not mapId then return false, "select a map" end
+    local hooks = ensureMapHooks(S, mapId)
+    local kind = S.eventHookKind or "onEnter"
+    if kind == "onStep" and clip.type == "hookCell" then
+      hooks.onStepCells = hooks.onStepCells or {}
+      hooks.onStepCells[#hooks.onStepCells + 1] = {
+        x = tonumber(clip.x) or 0,
+        y = tonumber(clip.y) or 0,
+        steps = cloneSteps(clip.steps),
+      }
+      S.eventHookCellIdx = #hooks.onStepCells
+      if App and App.markDirty then App.markDirty() end
+      return true, string.format(
+        "Pasted onStep (%d,%d) → %s  (%d steps)",
+        clip.x or 0, clip.y or 0, mapId, #clip.steps)
+    end
+    local steps = resolveHookSteps(hooks, kind, S.eventHookCellIdx,
+      S.eventHookScriptName, true)
+    replaceSteps(steps, clip.steps)
+    if App and App.markDirty then App.markDirty() end
+    return true, string.format(
+      "Pasted %d steps into %s / %s", #clip.steps, mapId, kind)
+  end
+  if mode == "scripts" then
+    local key = S.eventScriptKey
+    if not key then return false, "select a script" end
+    local mapId, textId = parseKey(key)
+    if not mapId then return false, "invalid script key" end
+    if Generation.isGen2(S) then
+      local bag = Gen2Talk.ensureScriptSteps(S, textId, mapId)
+      if not bag then return false, "could not own script" end
+      bag.steps = Gen2Talk.copySteps(clip.steps)
+      Gen2Talk.commitSteps(S, textId)
+      if App and App.markDirty then App.markDirty() end
+      return true, string.format("Pasted %d steps into %s", #bag.steps, textId)
+    end
+    local owned = S.project.talkScripts[key]
+    if not owned then
+      TalkIndex.cloneToProject(S, mapId, textId)
+      owned = S.project.talkScripts[key]
+    end
+    if not owned then return false, "could not own script" end
+    owned.steps = cloneSteps(clip.steps)
+    if App and App.markDirty then App.markDirty() end
+    return true, string.format("Pasted %d steps into %s", #owned.steps, key)
+  end
+  return false, "paste not available in this mode"
+end
+
 -- Drop the current mod hook bag (onEnter / onVictory / one onStep cell / named script).
 local function clearModHook(S, mapId, kind, cellIdx, scriptName)
   local bag = S.project.mapHooks and S.project.mapHooks[mapId]
@@ -1491,12 +2179,22 @@ local function drawHooks(S, x, y, w, h, App)
   local tipW = listW - 20 * s
   Kit.pushClip(pinX + 10 * s, ry + 4 * s, tipW,
     math.max(8, listY + listH - (ry + 8 * s)))
-  local tips = {
-    onEnter = "* = engine Lua hook. Mod steps also run.",
-    onVictory = "* = engine hook. Mod steps compose.",
-    onStep = "* = engine onStep (Lua cell logic).",
-    script = "Named scripts from data/scripts + mod.",
-  }
+  local tips
+  if Generation.isGen2(S) then
+    tips = {
+      onEnter = "Gold: compiles to mod.events + Gen2Talk script, vm:start on map.entered.",
+      onVictory = "Gold: compiles to mod.events + Gen2Talk script, vm:start on battle.ended.",
+      onStep = "Gold: compiles to mod.events + Gen2Talk script, vm:start on world.stepped.",
+      script = "Gold: named scripts compile via Gen2Talk into project.scripts.",
+    }
+  else
+    tips = {
+      onEnter = "* = engine Lua hook. Mod steps also run.",
+      onVictory = "* = engine hook. Mod steps compose.",
+      onStep = "* = engine onStep (Lua cell logic).",
+      script = "Named scripts from data/scripts + mod.",
+    }
+  end
   Kit.text("micro",
     Kit.ellipsize("micro", tips[S.eventHookKind] or "", tipW),
     pinX + 10 * s, ry + 8 * s, PAL.faint)
@@ -1516,10 +2214,14 @@ local function drawHooks(S, x, y, w, h, App)
 
   local hooks = ensureMapHooks(S, mapId)
   local kind = S.eventHookKind or "onEnter"
-  local footerH = 100 * s
   local pad = 12 * s
   local metaH = 40 * s
   if kind == "onStep" or kind == "script" then metaH = 70 * s end
+  -- Recipes + step shortcuts; sized so Warp / Ladder are never clipped.
+  local stepShortcuts = shortcutDefs(S)
+  -- +1 row for Ladder / Warp step / Flag gate recipes ahead of step chips.
+  local footerH = math.max(140 * s,
+    shortcutStripHeight(stepShortcuts, formW, s, 0) + 40 * s)
   local viewX = formX + pad
   local viewY = listY + pad + metaH
   local viewW = formW - 2 * pad
@@ -1570,40 +2272,53 @@ local function drawHooks(S, x, y, w, h, App)
     metaH = 86 * s
     viewY = listY + pad + metaH
     viewH = math.max(40 * s, listH - pad - footerH - metaH)
-  elseif kind == "onStep" and hooks.onStepCells and #hooks.onStepCells > 0 then
-    S.eventHookCellIdx = math.max(1, math.min(
-      S.eventHookCellIdx or 1, #hooks.onStepCells))
-    local idx = S.eventHookCellIdx
-    local cell = hooks.onStepCells[idx]
-    Kit.text("micro", "Mod cell #" .. idx, formX + 12 * s, listY + 28 * s, PAL.caption)
-    cell.x = tonumber(field(App, "hk_cx", formX + 90 * s, listY + 24 * s,
-      50 * s, 26 * s, tostring(cell.x or 0), "0")) or 0
-    cell.y = tonumber(field(App, "hk_cy", formX + 150 * s, listY + 24 * s,
-      50 * s, 26 * s, tostring(cell.y or 0), "0")) or 0
-    if Kit.button(formX + 210 * s, listY + 24 * s, 60 * s, 26 * s, "Prev",
-        { kind = "ghost", font = "small" }) and idx > 1 then
-      S.eventHookCellIdx = idx - 1
-    end
-    if Kit.button(formX + 276 * s, listY + 24 * s, 60 * s, 26 * s, "Next",
-        { kind = "ghost", font = "small" }) and idx < #hooks.onStepCells then
-      S.eventHookCellIdx = idx + 1
-    end
-    if Kit.button(formX + 342 * s, listY + 24 * s, 70 * s, 26 * s, "+ Cell",
-        { kind = "good", font = "small" }) then
-      hooks.onStepCells[#hooks.onStepCells + 1] = { x = 0, y = 0, steps = {} }
-      S.eventHookCellIdx = #hooks.onStepCells
-      App.markDirty()
-    end
-    if Kit.button(formX + 418 * s, listY + 24 * s, 80 * s, 26 * s, "Del cell",
-        { kind = "danger", font = "small",
-          tooltip = "Remove this mod onStep cell" }) then
-      clearModHook(S, mapId, "onStep", idx, nil)
-      if hooks.onStepCells and #hooks.onStepCells > 0 then
-        S.eventHookCellIdx = math.min(idx, #hooks.onStepCells)
-      else
-        S.eventHookCellIdx = 1
+  elseif kind == "onStep" then
+    local cells = hooks.onStepCells
+    local nCells = (type(cells) == "table" and #cells) or 0
+    if nCells > 0 then
+      S.eventHookCellIdx = math.max(1, math.min(
+        S.eventHookCellIdx or 1, nCells))
+      local idx = S.eventHookCellIdx
+      local cell = cells[idx]
+      Kit.text("micro", "Mod cell #" .. idx, formX + 12 * s, listY + 28 * s, PAL.caption)
+      cell.x = tonumber(field(App, "hk_cx", formX + 90 * s, listY + 24 * s,
+        50 * s, 26 * s, tostring(cell.x or 0), "0")) or 0
+      cell.y = tonumber(field(App, "hk_cy", formX + 150 * s, listY + 24 * s,
+        50 * s, 26 * s, tostring(cell.y or 0), "0")) or 0
+      if Kit.button(formX + 210 * s, listY + 24 * s, 60 * s, 26 * s, "Prev",
+          { kind = "ghost", font = "small" }) and idx > 1 then
+        S.eventHookCellIdx = idx - 1
       end
-      App.markDirty()
+      if Kit.button(formX + 276 * s, listY + 24 * s, 60 * s, 26 * s, "Next",
+          { kind = "ghost", font = "small" }) and idx < nCells then
+        S.eventHookCellIdx = idx + 1
+      end
+      if Kit.button(formX + 342 * s, listY + 24 * s, 70 * s, 26 * s, "+ Cell",
+          { kind = "good", font = "small" }) then
+        cells[#cells + 1] = { x = 0, y = 0, steps = {} }
+        S.eventHookCellIdx = #cells
+        App.markDirty()
+      end
+      if Kit.button(formX + 418 * s, listY + 24 * s, 80 * s, 26 * s, "Del cell",
+          { kind = "danger", font = "small",
+            tooltip = "Remove this mod onStep cell" }) then
+        clearModHook(S, mapId, "onStep", idx, nil)
+        if hooks.onStepCells and #hooks.onStepCells > 0 then
+          S.eventHookCellIdx = math.min(idx, #hooks.onStepCells)
+        else
+          S.eventHookCellIdx = 1
+        end
+        App.markDirty()
+      end
+    else
+      Kit.text("micro", "No mod cells yet — + Cell or Paste a copied onStep",
+        formX + 12 * s, listY + 30 * s, PAL.muted)
+      if Kit.button(formX + 280 * s, listY + 24 * s, 70 * s, 26 * s, "+ Cell",
+          { kind = "good", font = "small" }) then
+        hooks.onStepCells = { { x = 0, y = 0, steps = {} } }
+        S.eventHookCellIdx = 1
+        App.markDirty()
+      end
     end
   end
 
@@ -1611,16 +2326,38 @@ local function drawHooks(S, x, y, w, h, App)
     S.eventHookScriptName, false)
   local editing = type(steps) == "table"
 
-  if editing and kind ~= "onStep" and Kit.button(
-      formX + formW - 12 * s - 100 * s, listY + 6 * s, 100 * s, 26 * s,
-      "Clear mod", {
-        kind = "danger", font = "small",
-        tooltip = "Remove this mod's hook steps (engine hook stays)",
+  -- Copy / Paste / Clear along the STEPS header (Ctrl+C/V also work).
+  do
+    local hx = formX + formW - 12 * s
+    if Kit.button(hx - 52 * s, listY + 6 * s, 52 * s, 26 * s, "Paste", {
+        kind = "good", font = "small",
+        tooltip = "Paste clipboard (Ctrl+V). onStep cell → new cell on this map",
       }) then
-    clearModHook(S, mapId, kind, S.eventHookCellIdx, S.eventHookScriptName)
-    App.markDirty()
-    steps = nil
-    editing = false
+      local ok, msg = pasteEventClip(S, App)
+      S.status = msg or (ok and "Pasted" or "Paste failed")
+      hooks = ensureMapHooks(S, mapId)
+      steps = resolveHookSteps(hooks, kind, S.eventHookCellIdx,
+        S.eventHookScriptName, false)
+      editing = type(steps) == "table"
+    end
+    if Kit.button(hx - 108 * s, listY + 6 * s, 52 * s, 26 * s, "Copy", {
+        kind = "ghost", font = "small",
+        tooltip = "Copy this event / onStep cell (Ctrl+C), including warp map names",
+      }) then
+      local ok, msg = copyCurrentEvent(S)
+      S.status = msg or (ok and "Copied" or "Copy failed")
+    end
+    if editing and kind ~= "onStep" and Kit.button(
+        hx - 216 * s, listY + 6 * s, 100 * s, 26 * s,
+        "Clear mod", {
+          kind = "danger", font = "small",
+          tooltip = "Remove this mod's hook steps (engine hook stays)",
+        }) then
+      clearModHook(S, mapId, kind, S.eventHookCellIdx, S.eventHookScriptName)
+      App.markDirty()
+      steps = nil
+      editing = false
+    end
   end
 
   local function ensureSteps()
@@ -1741,28 +2478,234 @@ local function drawHooks(S, x, y, w, h, App)
   end
   FormPane.finish(S, "hookFormScroll", contentTop, fy, view)
 
-  local shortcuts = shortcutDefs(S)
-  local bh = 26 * s
-  local gap = 4 * s
-  local bx = formX + 12 * s
+  local destMap = mapId
+  local recipes = {
+    { label = "+ Ladder", kind = "good",
+      tip = "New onStep cell with a Warp (stairs / ladder between maps)",
+      apply = function()
+        S.eventHookKind = "onStep"
+        hooks.onStepCells = hooks.onStepCells or {}
+        hooks.onStepCells[#hooks.onStepCells + 1] = {
+          x = 0, y = 0,
+          steps = {
+            {
+              kind = "warp", map = destMap, x = 5, y = 6, facing = "down",
+            },
+          },
+        }
+        S.eventHookCellIdx = #hooks.onStepCells
+        App.markDirty()
+        S.status = "Ladder cell added — set cell x/y and warp destination map"
+      end },
+    { label = "+ Warp step", kind = "accent",
+      tip = "Append a Warp to the current hook / cell",
+      apply = function()
+        addStep({
+          kind = "warp", map = destMap, x = 5, y = 6, facing = "down",
+        })
+        S.status = "Warp step added — edit map / x / y"
+      end },
+    { label = "+ Flag gate", kind = "ghost",
+      tip = "If flag set → skip; then Set flag (one-shot pattern)",
+      apply = function()
+        addStep({ kind = "check_flag_skip", flag = "DONE" })
+        addStep({ kind = "set_flag", flag = "DONE" })
+        S.status = "Flag gate added — rename DONE to your event flag"
+      end },
+  }
+  local allShortcuts = {}
+  for _, sc in ipairs(recipes) do allShortcuts[#allShortcuts + 1] = sc end
+  for _, sc in ipairs(stepShortcuts) do allShortcuts[#allShortcuts + 1] = sc end
+
   local by = listY + listH - footerH + 6 * s
-  local maxX = formX + formW - 12 * s
-  local maxY = listY + listH - 8 * s
-  Kit.pushClip(formX + 4 * s, listY + listH - footerH, formW - 8 * s, footerH)
-  for _, sc in ipairs(shortcuts) do
-    local bw = Kit.textWidth("small", sc.label) + 16 * s
-    if bx + bw > maxX then
-      bx = formX + 12 * s
-      by = by + bh + gap
-    end
-    if by + bh > maxY then break end
-    if Kit.button(bx, by, bw, bh, sc.label,
-        { kind = sc.kind or "ghost", font = "small", tooltip = sc.tip }) then
-      addStep(sc.make())
-    end
-    bx = bx + bw + gap
+  Kit.text("micro", "Shortcuts", formX + 12 * s, by - 14 * s, PAL.caption)
+  drawShortcutStrip(allShortcuts, formX + 12 * s, by, formW - 24 * s,
+    footerH - 10 * s, s, function(step) addStep(step) end)
+end
+
+-- ---- Gold Pokegear phone contacts ----
+
+local function phoneContactOrder(S)
+  local c = S.data and (S.data.gen2Constants or S.data.constants)
+  return (c and c.phoneContactOrder) or {}
+end
+
+local function phoneResolved(S, id)
+  local order = phoneContactOrder(S)
+  local index
+  for i, name in ipairs(order) do
+    if name == id then index = i - 1; break end
   end
-  Kit.popClip()
+  if index == nil then return nil, nil, false end
+  local owned = S.project.phoneContacts and S.project.phoneContacts[id]
+  if owned then return owned, index, true end
+  local copy = { index = index }
+  local ok, Phone = pcall(require, "src.core.gen2.Phone")
+  local lit = ok and Phone and Phone.CONTACTS and Phone.CONTACTS[index]
+  if type(lit) == "table" then
+    for k, v in pairs(lit) do copy[k] = v end
+  elseif lit == false then
+    return nil, index, false
+  end
+  local ev = S.data and (S.data.gen2EventTables or S.data.events)
+  local row = ev and ev.phone and ev.phone[index]
+  if type(row) == "table" then
+    copy.map = row.map
+    copy.calleeTime = row.calleeTime
+    copy.callerTime = row.callerTime
+    copy.calleeKey = row.callee
+    copy.callerKey = row.caller
+    if row.number and row.number ~= 0 then copy.number = row.number end
+  end
+  copy.index = index
+  return copy, index, false
+end
+
+local function drawPhone(S, x, y, w, h, App)
+  local s = Kit.scale
+  State.ensureProjectFields(S.project)
+  S.project.phoneContacts = S.project.phoneContacts or {}
+  Kit.caption(x, y, "PHONE CONTACTS")
+  Kit.text("micro", "Pokegear book — Save emits phone_contacts:patch",
+    x + 160 * s, y + 4 * s, PAL.faint)
+
+  local order = phoneContactOrder(S)
+  local ids = {}
+  for _, id in ipairs(order) do
+    if id ~= "PHONE_UNUSED" and id ~= "PHONE_00" then
+      ids[#ids + 1] = id
+    end
+  end
+  local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, y + 22 * s, w, h - 22 * s,
+    "CONTACTS", ids, {
+      queryKey = "eventPhoneQuery",
+      offsetKey = "eventPhoneOffset",
+      selKey = "eventPhoneId",
+      accent = PAL.blue,
+      isOwned = function(id)
+        return S.project.phoneContacts[id] ~= nil
+      end,
+    })
+  if not S.eventPhoneId then S.eventPhoneId = shown[1] end
+  local id = S.eventPhoneId
+  local rec, index, owned = phoneResolved(S, id)
+  if not id or not rec then
+    Kit.emptyBox(formX, listY, formW, listH,
+      "No phone contacts (import Gold ROM cache)")
+    return
+  end
+
+  local function ensure()
+    if owned then return S.project.phoneContacts[id] end
+    local copy = {}
+    for k, v in pairs(rec) do copy[k] = v end
+    copy.index = index
+    copy._isNew = false
+    S.project.phoneContacts[id] = copy
+    owned = true
+    App.markDirty()
+    return copy
+  end
+
+  Kit.caption(formX, listY - 28 * s,
+    id .. "  #" .. tostring(index) .. (owned and "" or "  (vanilla)"))
+  local fy, view, viewX, viewW = RegList.beginForm(S, formX, listY, formW, listH,
+    "eventPhoneScroll", "phone|" .. id, owned and 44 * s or 12 * s)
+  local contentTop = fy
+  local labelW = 110 * s
+  local fh = 28 * s
+  local function row(label, body)
+    Kit.text("small", label, viewX, fy + 6 * s, PAL.caption)
+    body(viewX + labelW, fy, viewW - labelW - 8 * s, fh)
+    fy = fy + fh + 8 * s
+  end
+
+  row("Map", function(fx, fy_, fw, fh_)
+    local cur = tostring(rec.map or "")
+    local v = RegList.field(App, "ph_map", fx, fy_, fw, fh_, cur, "ROUTE_30")
+    if v ~= cur then
+      local e = ensure()
+      e.map = (v ~= "" and v) or nil
+    end
+  end)
+  row("Number", function(fx, fy_, fw, fh_)
+    local cur = tonumber(rec.number) or 0
+    local v = RegList.num(App, "ph_num", fx, fy_, 80 * s, fh_, cur)
+    v = math.max(0, math.min(255, math.floor(v)))
+    if v ~= cur then ensure().number = v end
+  end)
+  row("Callee time", function(fx, fy_, fw, fh_)
+    local cur = tonumber(rec.calleeTime) or 0
+    local v = RegList.num(App, "ph_ct", fx, fy_, 80 * s, fh_, cur)
+    v = math.max(0, math.min(7, math.floor(v)))
+    if v ~= cur then ensure().calleeTime = v end
+    Kit.text("micro", "bitmask MORN|DAY|NITE (0=never)",
+      fx + 90 * s, fy_ + 8 * s, PAL.faint)
+  end)
+  row("Caller time", function(fx, fy_, fw, fh_)
+    local cur = tonumber(rec.callerTime) or 0
+    local v = RegList.num(App, "ph_cr", fx, fy_, 80 * s, fh_, cur)
+    v = math.max(0, math.min(7, math.floor(v)))
+    if v ~= cur then ensure().callerTime = v end
+  end)
+  row("Class", function(fx, fy_, fw, fh_)
+    local cur = tostring(rec.class or "")
+    local v = RegList.field(App, "ph_cls", fx, fy_, fw, fh_, cur, "YOUNGSTER")
+    if v ~= cur then
+      local e = ensure()
+      e.class = (v ~= "" and v) or nil
+    end
+  end)
+  row("Member", function(fx, fy_, fw, fh_)
+    local cur = tostring(rec.member or "")
+    local v = RegList.field(App, "ph_mem", fx, fy_, fw, fh_, cur, "JOEY1")
+    if v ~= cur then
+      local e = ensure()
+      e.member = (v ~= "" and v) or nil
+    end
+  end)
+  row("Callee", function(fx, fy_, fw, fh_)
+    local cur = tostring(rec.callee or rec.calleeKey or "")
+    Kit.text("micro", Kit.ellipsize("micro", cur, fw), fx, fy_ + 8 * s, PAL.muted)
+  end)
+  row("Caller", function(fx, fy_, fw, fh_)
+    local cur = tostring(rec.caller or rec.callerKey or "")
+    Kit.text("micro", Kit.ellipsize("micro", cur, fw), fx, fy_ + 8 * s, PAL.muted)
+  end)
+
+  if not owned then
+    if Kit.button(viewX, fy, 140 * s, fh, "Clone to mod", { kind = "accent" }) then
+      ensure()
+    end
+    fy = fy + fh + 8 * s
+  end
+
+  FormPane.finish(S, "eventPhoneScroll", contentTop, fy, view)
+  if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
+      "Revert", { kind = "danger" }) then
+    S.project.phoneContacts[id] = nil
+    App.markDirty()
+  end
+end
+
+function Events.keypressed(S, key, App)
+  if not S or Kit.focus then return false end
+  local mode = S.eventsMode or "scripts"
+  if mode ~= "hooks" and mode ~= "scripts" then return false end
+  local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+    or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
+  if not ctrl then return false end
+  if key == "c" then
+    local ok, msg = copyCurrentEvent(S)
+    S.status = msg or (ok and "Copied" or "Copy failed")
+    return true
+  end
+  if key == "v" then
+    local ok, msg = pasteEventClip(S, App)
+    S.status = msg or (ok and "Pasted" or "Paste failed")
+    return true
+  end
+  return false
 end
 
 function Events.draw(S, x, y, w, h, App)
@@ -1773,32 +2716,42 @@ function Events.draw(S, x, y, w, h, App)
     return
   end
   State.ensureProjectFields(S.project)
+  local gen2 = Generation.isGen2(S)
 
-  if Kit.chip(x, y, 90 * s, 26 * s, "SCRIPTS",
-      S.eventsMode ~= "starters" and S.eventsMode ~= "saveflags"
-        and S.eventsMode ~= "hooks", PAL.yellow) then
-    S.eventsMode = "scripts"
+  local mode = S.eventsMode or "scripts"
+  if Kit.chip(x, y, 90 * s, 26 * s, "SCRIPTS", mode == "scripts", PAL.yellow) then
+    S.eventsMode = "scripts"; mode = "scripts"
   end
-  if Kit.chip(x + 96 * s, y, 90 * s, 26 * s, "HOOKS",
-      S.eventsMode == "hooks", PAL.yellow) then
-    S.eventsMode = "hooks"
+  local chipX = x + 96 * s
+  if Kit.chip(chipX, y, 90 * s, 26 * s, "HOOKS", mode == "hooks", PAL.yellow) then
+    S.eventsMode = "hooks"; mode = "hooks"
   end
-  if Kit.chip(x + 192 * s, y, 100 * s, 26 * s, "STARTERS",
-      S.eventsMode == "starters", PAL.green) then
-    S.eventsMode = "starters"
+  chipX = chipX + 96 * s
+  if Kit.chip(chipX, y, 100 * s, 26 * s, "STARTERS",
+      mode == "starters", PAL.green) then
+    S.eventsMode = "starters"; mode = "starters"
   end
-  if Kit.chip(x + 298 * s, y, 120 * s, 26 * s, "SAVE FLAGS",
-      S.eventsMode == "saveflags", PAL.blue) then
-    S.eventsMode = "saveflags"
+  chipX = chipX + 106 * s
+  if gen2 then
+    if Kit.chip(chipX, y, 90 * s, 26 * s, "PHONE", mode == "phone", PAL.green) then
+      S.eventsMode = "phone"; mode = "phone"
+    end
+    chipX = chipX + 96 * s
+  end
+  if Kit.chip(chipX, y, 120 * s, 26 * s, "SAVE FLAGS",
+      mode == "saveflags", PAL.blue) then
+    S.eventsMode = "saveflags"; mode = "saveflags"
   end
 
   local bodyY = y + 36 * s
   local bodyH = h - 36 * s
-  if S.eventsMode == "saveflags" then
+  if mode == "saveflags" then
     drawSaveFlags(S, x, bodyY, w, bodyH, App)
-  elseif S.eventsMode == "starters" then
+  elseif mode == "phone" and gen2 then
+    drawPhone(S, x, bodyY, w, bodyH, App)
+  elseif mode == "starters" then
     drawStarters(S, x, bodyY, w, bodyH, App)
-  elseif S.eventsMode == "hooks" then
+  elseif mode == "hooks" then
     drawHooks(S, x, bodyY, w, bodyH, App)
   else
     drawScripts(S, x, bodyY, w, bodyH, App)

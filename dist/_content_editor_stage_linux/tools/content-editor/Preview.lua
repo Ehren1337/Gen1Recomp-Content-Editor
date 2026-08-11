@@ -295,8 +295,38 @@ function Preview.clearTilesetGbcGroups(S, tilesetId)
   return true
 end
 
+-- Gold overworld OBJ row for a PAL_OW_* name or 0-based paletteId.
+-- Uses project.palettes.objects.DAY when the mod owns that TOD set.
+local OW_PALETTE_ID = {
+  PAL_OW_RED = 1, PAL_OW_BLUE = 2, PAL_OW_GREEN = 3, PAL_OW_BROWN = 4,
+  PAL_OW_PINK = 5, PAL_OW_EMOTE = 6, PAL_OW_TREE = 7, PAL_OW_ROCK = 8,
+}
+
+function Preview.gen2ObjectPalette(S, paletteNameOrId)
+  local pals = S and S.data and (S.data.palettes or S.data.gen2Palettes)
+  local set = pals and pals.objects and pals.objects.DAY
+  local projObj = S and S.project and S.project.palettes
+    and S.project.palettes.objects
+  if type(projObj) == "table" and type(projObj.DAY) == "table" then
+    set = projObj.DAY
+  end
+  if type(set) ~= "table" then return nil end
+  local idx
+  if type(paletteNameOrId) == "string" and paletteNameOrId ~= "" then
+    idx = OW_PALETTE_ID[paletteNameOrId]
+  elseif type(paletteNameOrId) == "number" then
+    idx = paletteNameOrId + 1
+  end
+  idx = idx or 1
+  local row = set[idx]
+  if type(row) ~= "table" then return nil end
+  return normalizeColors({ colors = row })
+end
+
 -- Sorted palette ids (ROM/cache, optional GBC/Yellow packs, project extras).
 -- With useGbcPalettes OFF and no ROM cache, the list may be project-only.
+-- Gold: flat SGB names are absent — returns project-only flat keys (Gen2 UI
+-- uses context lists instead of this helper).
 function Preview.paletteIds(S)
   local ids, seen = {}, {}
   local function add(id)
@@ -319,6 +349,7 @@ function Preview.paletteIds(S)
     end
   end
   local data = S and S.data and S.data.palettes
+  -- Gen1 nested .palettes map; Gold's table is context-keyed (no .palettes).
   addTable(data and data.order, data and data.palettes)
   if Preview.useGbcPalettes(S) then
     local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
@@ -405,12 +436,65 @@ function Preview.ensureProjectPalette(S, name)
   return S.project.palettes[name]
 end
 
+Preview.GEN2_MAP_PALETTES = {
+  "PALETTE_AUTO", "PALETTE_DAY", "PALETTE_NITE", "PALETTE_MORN", "PALETTE_DARK",
+}
+Preview.GEN2_TOD = { "MORN", "DAY", "NITE", "DARK" }
+
+-- Editor ToD pin for Gold map preview (nil / AUTO = follow map.palette + clock).
+-- TileRenderer may call this without S; Maps syncs S.mapPreviewTod onto
+-- Preview._gen2PreviewTod before MapLoader.load.
+function Preview.syncGen2Preview(S)
+  Preview._gen2PreviewTod = S and S.mapPreviewTod or nil
+  Preview._gen2PreviewHour = S and S.mapPreviewHour or nil
+end
+
+function Preview.gen2PreviewDaytime(S, mapDef)
+  local okP, Palettes = pcall(require, "src.world.gen2.Palettes")
+  if not (okP and Palettes and Palettes.daytimeFor) then return "DAY" end
+  local pin = (S and S.mapPreviewTod) or Preview._gen2PreviewTod
+  if type(pin) == "string" and pin ~= "" and pin ~= "AUTO" then
+    return pin
+  end
+  local hour = (S and S.mapPreviewHour) or Preview._gen2PreviewHour
+  return Palettes.daytimeFor(mapDef, hour, false) or "DAY"
+end
+
+-- Eight BG palettes for a Gold map at the preview daytime (roof folded in).
+function Preview.gen2MapBgSet(S, mapDef, daytime)
+  if type(mapDef) ~= "table" then return nil, daytime end
+  local data = S and S.data
+  local pals = data and (data.palettes or data.gen2Palettes)
+  if type(pals) ~= "table" then return nil, daytime end
+  local okP, Palettes = pcall(require, "src.world.gen2.Palettes")
+  if not (okP and Palettes and Palettes.bgSet) then return nil, daytime end
+  daytime = daytime or Preview.gen2PreviewDaytime(S, mapDef)
+  local set = Palettes.bgSet(pals, mapDef, daytime)
+  if set and daytime == "DARK" and Palettes.withCaveFlicker then
+    set = Palettes.withCaveFlicker(set, 1)
+  end
+  return set, daytime
+end
+
+local function isGen2Session(S)
+  local ok, Generation = pcall(require, "Generation")
+  if ok and Generation and Generation.isGen2 then
+    return Generation.isGen2(S)
+  end
+  local okG, GameVersion = pcall(require, "src.core.GameVersion")
+  return okG and GameVersion and GameVersion.generation
+    and GameVersion.generation() == 2
+end
+
 -- Effective map palette name (map.palette or FieldDefaults cascade).
 function Preview.mapPaletteName(S, map)
-  if type(map) ~= "table" then return "ROUTE" end
+  if type(map) ~= "table" then
+    return isGen2Session(S) and "PALETTE_AUTO" or "ROUTE"
+  end
   if type(map.palette) == "string" and map.palette ~= "" then
     return map.palette
   end
+  if isGen2Session(S) then return "PALETTE_AUTO" end
   local ok, FieldDefaults = pcall(require, "src.world.FieldDefaults")
   local pals = ok and FieldDefaults and FieldDefaults.FIELD and FieldDefaults.FIELD.palettes
   if not pals then return "ROUTE" end
@@ -429,6 +513,8 @@ function Preview.mapPaletteName(S, map)
 end
 
 -- Species battle palette name (authored → pack → MEWMON).
+-- Gold stores GBC { normal, shiny } tables under palettes.pokemon[species];
+-- those are not SGB named palettes, so fall through to MEWMON for swatches.
 function Preview.monPaletteName(S, mon, speciesId)
   if mon and type(mon.palette) == "string" and mon.palette ~= "" then
     return mon.palette
@@ -441,6 +527,50 @@ function Preview.monPaletteName(S, mon, speciesId)
   return "MEWMON"
 end
 
+-- Gold: white + 2 mid colors from palettes.pokemon[species].normal/shiny + black.
+-- Project overrides merge over vanilla (partial shiny-only patches still work).
+function Preview.gen2MonColors(S, speciesId, shiny)
+  if type(speciesId) ~= "string" or speciesId == "" then return nil end
+  local WHITE = { 255, 255, 255 }
+  local BLACK = { 0, 0, 0 }
+  local function entryFrom(bucket)
+    return type(bucket) == "table" and bucket[speciesId] or nil
+  end
+  local function pairOf(entry, wantShiny)
+    if type(entry) ~= "table" then return nil end
+    local pair = (wantShiny and entry.shiny) or entry.normal
+    if type(pair) == "table" and pair[1] and pair[2] then return pair end
+    return nil
+  end
+  local data = S and S.data and (S.data.palettes or S.data.gen2Palettes)
+  local vanilla = data and entryFrom(data.pokemon) or nil
+  local proj = S and S.project and S.project.palettes
+  local override = (type(proj) == "table") and entryFrom(proj.pokemon) or nil
+  local pair = pairOf(override, shiny) or pairOf(vanilla, shiny)
+  -- Shiny row missing → fall back to normal so preview never goes blank.
+  if not pair and shiny then
+    pair = pairOf(override, false) or pairOf(vanilla, false)
+  end
+  if not pair then return nil end
+  local function rgb(c)
+    if type(c) ~= "table" then return { 0, 0, 0 } end
+    if c.r then return { c.r, c.g, c.b } end
+    return { c[1] or 0, c[2] or 0, c[3] or 0 }
+  end
+  return { WHITE, rgb(pair[1]), rgb(pair[2]), BLACK }
+end
+
+-- Vanilla Gold palettes.pokemon[species] row (nil when cache omitted palettes.lua).
+function Preview.gen2MonPaletteEntry(S, speciesId)
+  if type(speciesId) ~= "string" or speciesId == "" then return nil end
+  local data = S and S.data and (S.data.palettes or S.data.gen2Palettes)
+  local entry = data and data.pokemon and data.pokemon[speciesId]
+  if type(entry) == "table" then return entry end
+  local proj = S and S.project and S.project.palettes
+  entry = proj and proj.pokemon and proj.pokemon[speciesId]
+  return type(entry) == "table" and entry or nil
+end
+
 -- Trainer battle pic palette (MEWMON unless a named paletteSource matches).
 function Preview.trainerPaletteName(S, tr)
   if tr and type(tr.paletteSource) == "string" and tr.paletteSource ~= "" then
@@ -449,6 +579,45 @@ function Preview.trainerPaletteName(S, tr)
     end
   end
   return "MEWMON"
+end
+
+-- Gold: white + 2 mid colors from palettes.trainers[class] + black.
+-- Prefer project.palettes.trainers overrides when present.
+function Preview.gen2TrainerColors(S, classId)
+  if type(classId) ~= "string" or classId == "" then return nil end
+  local WHITE = { 255, 255, 255 }
+  local BLACK = { 0, 0, 0 }
+  local pair = nil
+  local proj = S and S.project and S.project.palettes
+  if type(proj) == "table" and type(proj.trainers) == "table" then
+    pair = proj.trainers[classId]
+  end
+  if not (pair and pair[1] and pair[2]) then
+    local data = S and S.data and (S.data.palettes or S.data.gen2Palettes)
+    pair = data and data.trainers and data.trainers[classId]
+  end
+  if not (pair and pair[1] and pair[2]) then return nil end
+  local function rgb(c)
+    if type(c) ~= "table" then return { 0, 0, 0 } end
+    if c.r then return { c.r, c.g, c.b } end
+    return { c[1] or 0, c[2] or 0, c[3] or 0 }
+  end
+  return { WHITE, rgb(pair[1]), rgb(pair[2]), BLACK }
+end
+
+-- Value for Preview.draw: Gen2 color row, else SGB palette name.
+function Preview.trainerPalette(S, tr)
+  if tr and tr.trueColor then return false end
+  if isGen2Session(S) then
+    if tr and type(tr.paletteSource) == "string" and tr.paletteSource ~= "" then
+      if Preview.paletteColors(S, tr.paletteSource) then
+        return tr.paletteSource
+      end
+    end
+    local id = tr and (tr.id or tr.classId or tr.class)
+    return Preview.gen2TrainerColors(S, id) or false
+  end
+  return Preview.trainerPaletteName(S, tr)
 end
 
 function Preview.drawSwatches(colors, x, y, w, h)
@@ -623,9 +792,27 @@ end
 Preview.drawWithPalette = Preview.draw
 
 -- Trainer pic: prefer pic path, else basePic trainer's pic.
+-- Gold: class pics live in gen2MenuGfx.battleHud.trainerPics[CLASS], not on
+-- the trainers.lua record (schema gen2Fields has no `pic`).
 function Preview.trainerPicPath(S, tr)
   if not tr then return nil end
-  if tr.pic and tr.pic ~= "" then return tr.pic end
+  if type(tr.pic) == "string" and tr.pic ~= "" then return tr.pic end
+  if isGen2Session(S) then
+    local classId = tr.id or tr.classId or tr.class
+    local gfx = S and S.data and (S.data.gen2MenuGfx or S.data.menu_gfx)
+    local pics = gfx and gfx.battleHud and gfx.battleHud.trainerPics
+    if type(classId) == "string" and type(pics) == "table"
+        and type(pics[classId]) == "string" and pics[classId] ~= "" then
+      return pics[classId]
+    end
+    -- Fallback when menu_gfx is missing: extractor writes this path.
+    if type(classId) == "string" and classId ~= "" then
+      local guess = "assets/generated/battle/trainers/"
+        .. classId:lower() .. ".png"
+      if Preview.resolve(S, guess) then return guess end
+    end
+    return nil
+  end
   local baseId = tr.basePic
   if baseId and S.data and S.data.trainers and S.data.trainers[baseId] then
     return S.data.trainers[baseId].pic
@@ -665,6 +852,7 @@ local function spritePalette(S, spriteId)
 end
 
 -- Category stand-in sprite id for an item (nil when a custom icon is set).
+-- Gen1 editor helper only — Gold uses pack pocket art (see drawItemIcon).
 local function itemCategorySpriteId(item)
   if not item then return nil end
   local entry = item.icon
@@ -685,10 +873,106 @@ local function itemCategorySpriteId(item)
   return "SPRITE_POKE_BALL"
 end
 
--- Item icon path: custom item.icon, else a category stand-in from ROM art.
--- Gen1 bags are text-only; these are editor/UI helpers, not vanilla assets.
+local function menuGfxPack(S)
+  local mg = S and S.data and (S.data.gen2MenuGfx or S.data.menu_gfx)
+  return mg and mg.pack or nil
+end
+
+-- Gold ItemAttributes pocket (editor stand-in when pocket is missing).
+function Preview.itemPocket(item)
+  if type(item) ~= "table" then return "ITEM" end
+  if type(item.pocket) == "string" and item.pocket ~= "" then
+    return item.pocket
+  end
+  local id = tostring(item.id or "")
+  if item.ball or id:find("_BALL$") or id == "SAFARI_BALL" or id == "PARK_BALL" then
+    return "BALL"
+  end
+  if item.machine or item.teaches
+      or id:match("^TM%d") or id:match("^HM%d")
+      or id:match("^TM_") or id:match("^HM_") then
+    return "TM_HM"
+  end
+  if item.keyItem or item.canToss == false then return "KEY_ITEM" end
+  return "ITEM"
+end
+
+local GEN2_POCKET_FALLBACK = {
+  ITEM = { 72, 152, 88 },
+  BALL = { 200, 72, 72 },
+  KEY_ITEM = { 72, 112, 200 },
+  TM_HM = { 184, 144, 56 },
+}
+
+-- Draw the PackGFX bag picture for this item's pocket (Gold has no per-item
+-- bag icons — PackMenu is pocket chrome + text).
+local function drawGen2ItemPocketIcon(S, item, x, y, maxW, maxH)
+  local s = 1
+  local KitOk, Kit = pcall(require, "Kit")
+  if KitOk and Kit.scale then s = Kit.scale end
+  maxW = maxW or (48 * s)
+  maxH = maxH or (48 * s)
+  Theme.col(PAL.bgBot or { 10, 10, 20 }, 1)
+  love.graphics.rectangle("fill", x, y, maxW, maxH, 6 * s, 6 * s)
+
+  local pack = menuGfxPack(S)
+  local pocket = Preview.itemPocket(item)
+  local path = pack and pack.pack
+  local first = pack and pack.pocketPicture and pack.pocketPicture[pocket]
+  local img = path and Preview.image(S, path) or nil
+  if img and type(first) == "number" then
+    local wide = pack.packTilesWide or 5
+    local high = pack.packTilesHigh or 3
+    local sw, sh = wide * 8, high * 8
+    local sx, sy = 0, math.floor(first / wide) * 8
+    local scale = math.min(maxW / sw, maxH / sh)
+    local dw, dh = sw * scale, sh * scale
+    local dx = x + (maxW - dw) / 2
+    local dy = y + (maxH - dh) / 2
+    local colors = pack.palettes and pack.palettes[6]
+    local quad
+    local okQ, q = pcall(love.graphics.newQuad, sx, sy, sw, sh,
+      img:getWidth(), img:getHeight())
+    if okQ then quad = q end
+    local function body()
+      love.graphics.setColor(1, 1, 1, 1)
+      if quad then
+        love.graphics.draw(img, quad, dx, dy, 0, scale, scale)
+      else
+        love.graphics.draw(img, dx, dy, 0, scale, scale)
+      end
+    end
+    local shaded = type(colors) == "table"
+      and Preview.pushPaletteShader(S, colors)
+    body()
+    Preview.popPaletteShader(shaded)
+    love.graphics.setColor(1, 1, 1, 1)
+    return
+  end
+
+  -- Cache without pack art: pocket-colored chip + label.
+  local c = GEN2_POCKET_FALLBACK[pocket] or GEN2_POCKET_FALLBACK.ITEM
+  love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255, (c[3] or 0) / 255, 1)
+  local inset = 6 * s
+  love.graphics.rectangle("fill", x + inset, y + inset,
+    maxW - 2 * inset, maxH - 2 * inset, 4 * s, 4 * s)
+  love.graphics.setColor(1, 1, 1, 1)
+  local label = (pocket == "KEY_ITEM" and "KEY")
+    or (pocket == "TM_HM" and "TM")
+    or pocket
+  local Kit2Ok, Kit2 = pcall(require, "Kit")
+  if Kit2Ok and Kit2.text then
+    Kit2.text("micro", label, x + 4 * s, y + maxH / 2 - 6 * s, PAL.text)
+  end
+end
+
+-- Item icon path: Gen1 custom/stand-in; Gold pack sheet (pocket crop in draw).
 function Preview.itemIconPath(S, item)
-  if not item then return nil end
+  if type(item) ~= "table" then return nil end
+  if isGen2Session(S) then
+    local pack = menuGfxPack(S)
+    return pack and pack.pack or nil
+  end
   local entry = item.icon
   if type(entry) == "string" and entry ~= "" then return entry end
   if type(entry) == "table" and type(entry.image) == "string" and entry.image ~= "" then
@@ -711,8 +995,9 @@ function Preview.itemIconPath(S, item)
   return spriteImage(S, sid, fallbacks[sid] or "assets/generated/sprites/poke_ball.png")
 end
 
--- Item icon palette (authored item.palette → category sprite paletteSource → MEWMON).
+-- Item icon palette: Gen1 SGB name; Gold has no per-item palette (pack pals).
 function Preview.itemPaletteName(S, item)
+  if isGen2Session(S) then return nil end
   if item and type(item.palette) == "string" and item.palette ~= "" then
     return item.palette
   end
@@ -722,6 +1007,9 @@ end
 
 -- paletteName: nil = item default; false = no remap (trueColor); string = id.
 function Preview.drawItemIcon(S, item, x, y, maxW, maxH, paletteName)
+  if isGen2Session(S) then
+    return drawGen2ItemPocketIcon(S, item, x, y, maxW, maxH)
+  end
   local pal
   if paletteName == false then
     pal = false
@@ -738,27 +1026,39 @@ function Preview.drawItemIcon(S, item, x, y, maxW, maxH, paletteName)
 end
 
 -- Party-menu icon path + built-in class name (name => bake OBP0 like PartyMenu).
+-- Gold: icons.species[SPECIES] = "ICON_*" and icons.icons[ICON_*].image.
 function Preview.pokemonIcon(S, mon, speciesId)
   if not mon and not speciesId then return nil, nil end
-  local icons = S and S.data and S.data.icons
+  local icons = S and S.data and (S.data.gen2Icons or S.data.icons)
   if not icons then return nil, nil end
   local id = speciesId or (mon and (mon.id or mon.species))
   local vanilla = id and S.data.pokemon and S.data.pokemon[id]
   local def = mon or vanilla
-  local entry = (icons.bySpecies and id and icons.bySpecies[id])
-    or (mon and mon.icon)
+  local entry = (mon and mon.icon)
+    or (icons.species and id and icons.species[id])
+    or (icons.bySpecies and id and icons.bySpecies[id])
     or (vanilla and vanilla.icon)
   local name, path
   if type(entry) == "string" then
     name = entry
-    path = icons.icons and icons.icons[entry]
+    local sheet = icons.icons and icons.icons[entry]
+    if type(sheet) == "table" then
+      path = sheet.image
+    elseif type(sheet) == "string" then
+      path = sheet
+    end
   elseif type(entry) == "table" then
     path = entry.image
   end
   local dex = (mon and mon.dex) or (vanilla and vanilla.dex) or (def and def.dex)
   if not path and dex and icons.byDex then
     name = icons.byDex[dex]
-    path = name and icons.icons and icons.icons[name]
+    local sheet = name and icons.icons and icons.icons[name]
+    if type(sheet) == "table" then
+      path = sheet.image
+    elseif type(sheet) == "string" then
+      path = sheet
+    end
   end
   return path, name
 end
@@ -805,8 +1105,9 @@ function Preview.pokemonIconTrueColor(S, mon, speciesId)
   local entry = mon and mon.icon
   if type(entry) ~= "table" then
     local id = speciesId or (mon and (mon.id or mon.species))
-    local icons = S and S.data and S.data.icons
-    entry = icons and icons.bySpecies and id and icons.bySpecies[id]
+    local icons = S and S.data and (S.data.gen2Icons or S.data.icons)
+    entry = (icons and icons.species and id and icons.species[id])
+      or (icons and icons.bySpecies and id and icons.bySpecies[id])
   end
   return type(entry) == "table" and entry.trueColor and true or false
 end

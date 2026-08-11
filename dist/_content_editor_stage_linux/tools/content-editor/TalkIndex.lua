@@ -1,8 +1,11 @@
 -- Index of map object/sign TEXT_* bindings and their talk scripts
 -- (mod overrides, vanilla MapScripts rows, or plain dialog / engine fallbacks).
+-- Gold: pins are object/bgEvent scriptKey → opcode lists in data.scripts.
 
 local State = require("State")
 local ModWriter = require("ModWriter")
+local Generation = require("Generation")
+local Gen2Talk = require("Gen2Talk")
 
 local TalkIndex = {}
 
@@ -66,7 +69,50 @@ local function talkRows(mapId, textId)
   return rows
 end
 
+local function findByScriptKey(S, mapId, scriptKey)
+  local map = mapRecord(S, mapId)
+  if not map or not scriptKey then return nil, nil, nil end
+  for i, obj in ipairs(map.objects or {}) do
+    if obj.scriptKey == scriptKey then return obj, i, "object" end
+  end
+  for i, ev in ipairs(map.bgEvents or {}) do
+    if ev.scriptKey == scriptKey then return ev, i, "bg" end
+  end
+  for i, ev in ipairs(map.coordEvents or {}) do
+    if ev.scriptKey == scriptKey then return ev, i, "coord" end
+  end
+  return nil, nil, nil
+end
+
+local function gen2ScriptCommands(S, scriptKey)
+  if not scriptKey or scriptKey == "" then return nil end
+  local proj = S.project and S.project.scripts and S.project.scripts[scriptKey]
+  if type(proj) == "table" then return proj end
+  local data = S.data and S.data.scripts and S.data.scripts[scriptKey]
+  if type(data) == "table" then return data end
+  return nil
+end
+
+local function sourceBadgeGen2(S, mapId, scriptKey)
+  if S.project and S.project.scripts
+      and type(S.project.scripts[scriptKey]) == "table" then
+    return "mod"
+  end
+  local obj = findByScriptKey(S, mapId, scriptKey)
+  if obj then
+    if obj.item then return "item" end
+    if obj.trainerClass or obj.trainer or obj.trainerType then return "trainer" end
+    if obj.pokemon or obj.species then return "pokemon" end
+  end
+  local cmds = gen2ScriptCommands(S, scriptKey)
+  if type(cmds) == "table" and #cmds > 0 then return "script" end
+  return "empty"
+end
+
 local function sourceBadge(S, mapId, textId)
+  if Generation.isGen2(S) then
+    return sourceBadgeGen2(S, mapId, textId)
+  end
   local key = mapId .. "/" .. textId
   if S.project and S.project.talkScripts and S.project.talkScripts[key] then
     return "mod"
@@ -95,15 +141,96 @@ local function sourceBadge(S, mapId, textId)
   return "empty"
 end
 
+local function collectGen2(S, mapId)
+  local entries, seen = {}, {}
+  -- Dedupe by kind+index+scriptKey so two objects never share one pin slot.
+  local function add(scriptKey, kind, label, index)
+    if not scriptKey or scriptKey == "" then return end
+    local pinKey = string.format("%s:%s:%s", tostring(kind), tostring(index), scriptKey)
+    if seen[pinKey] then return end
+    seen[pinKey] = true
+    local src = sourceBadgeGen2(S, mapId, scriptKey)
+    entries[#entries + 1] = {
+      key = mapId .. "/" .. scriptKey,
+      mapId = mapId,
+      textId = scriptKey,
+      scriptKey = scriptKey,
+      kind = kind,
+      index = index,
+      label = label or scriptKey,
+      source = src,
+      attached = src ~= "empty",
+    }
+  end
+  local map = mapRecord(S, mapId)
+  if map then
+    for i, obj in ipairs(map.objects or {}) do
+      if type(obj.scriptKey) == "string" and obj.scriptKey ~= "" then
+        add(obj.scriptKey, "object",
+          string.format("NPC #%d %s", obj.index or i, obj.sprite or ""), i)
+      end
+    end
+    for i, ev in ipairs(map.bgEvents or {}) do
+      if type(ev.scriptKey) == "string" and ev.scriptKey ~= "" then
+        add(ev.scriptKey, "bg",
+          string.format("BG #%d %s", i, ev.kind or "event"), i)
+      end
+    end
+    for i, ev in ipairs(map.coordEvents or {}) do
+      if type(ev.scriptKey) == "string" and ev.scriptKey ~= "" then
+        add(ev.scriptKey, "coord",
+          string.format("Coord #%d", i), i)
+      end
+    end
+  end
+  -- Orphan mod talk scripts for this map (Events "+ Talk script" without attach).
+  local prefix = "mod:" .. tostring(mapId) .. "_"
+  if S.project and type(S.project.scripts) == "table" then
+    local attached = {}
+    for _, e in ipairs(entries) do
+      if e.scriptKey then attached[e.scriptKey] = true end
+    end
+    local orphans = {}
+    for sk in pairs(S.project.scripts) do
+      if type(sk) == "string" and sk:sub(1, #prefix) == prefix
+          and not attached[sk] then
+        orphans[#orphans + 1] = sk
+      end
+    end
+    table.sort(orphans)
+    for _, sk in ipairs(orphans) do
+      add(sk, "mod", "Talk " .. sk:gsub("^mod:", ""), nil)
+    end
+  end
+  table.sort(entries, function(a, b)
+    local ao = a.kind == "object" and 0 or a.kind == "bg" and 1
+      or a.kind == "coord" and 2 or 3
+    local bo = b.kind == "object" and 0 or b.kind == "bg" and 1
+      or b.kind == "coord" and 2 or 3
+    if ao ~= bo then return ao < bo end
+    if (a.index or 0) ~= (b.index or 0) then
+      return (a.index or 0) < (b.index or 0)
+    end
+    return a.textId < b.textId
+  end)
+  return entries
+end
+
 -- Collect every talk-capable pin for a map: objects, signs, text_pointers,
--- vanilla talk keys, and mod talkScripts.
+-- vanilla talk keys, and mod talkScripts.  Gold: scriptKey pins only.
 function TalkIndex.collect(S, mapId)
   if not mapId or mapId == "" then return {} end
+  if Generation.isGen2(S) then return collectGen2(S, mapId) end
   local entries, seen = {}, {}
 
   local function add(textId, kind, label, index)
-    if not textId or textId == "" or seen[textId] then return end
-    seen[textId] = true
+    if not textId or textId == "" then return end
+    -- Objects/signs: unique per entity. Pointer/script/mod: unique per TEXT_*.
+    local pinKey = (index ~= nil)
+      and string.format("%s:%s:%s", tostring(kind), tostring(index), textId)
+      or ("id:" .. textId)
+    if seen[pinKey] then return end
+    seen[pinKey] = true
     local src = sourceBadge(S, mapId, textId)
     entries[#entries + 1] = {
       key = mapId .. "/" .. textId,
@@ -203,8 +330,61 @@ function TalkIndex.allMapIds(S)
   return ids
 end
 
+local function summarizeGen2Op(cmd)
+  if type(cmd) ~= "table" then return tostring(cmd) end
+  local op = tostring(cmd.op or "?")
+  local bits = { op }
+  if cmd.text then bits[#bits + 1] = "text=" .. tostring(cmd.text) end
+  if cmd.script then bits[#bits + 1] = "→" .. tostring(cmd.script) end
+  if cmd.flag then bits[#bits + 1] = "flag=" .. tostring(cmd.flag) end
+  if cmd.item then bits[#bits + 1] = "item=" .. tostring(cmd.item) end
+  if cmd.special then bits[#bits + 1] = "special=" .. tostring(cmd.special) end
+  return table.concat(bits, " ")
+end
+
 -- Build editor steps for a TEXT_* (does not write the project).
+-- Gold: scriptSteps bag when owned; else opcode preview for scriptKey.
 function TalkIndex.resolveSteps(S, mapId, textId)
+  if Generation.isGen2(S) then
+    local bag = Gen2Talk.getScriptSteps(S, textId)
+    if bag and type(bag.steps) == "table" then
+      return bag.steps, {
+        owned = true,
+        source = "mod",
+        readOnly = false,
+        gen2 = true,
+        editable = true,
+        scriptSteps = true,
+      }
+    end
+    local cmds, ownedFlag = Gen2Talk.commands(S, textId)
+    local owned = ownedFlag == true
+      or (S.project and S.project.scripts
+        and type(S.project.scripts[textId]) == "table")
+    -- Owned without scriptSteps yet: decompile live for display, still readOnly
+    -- until Override / ensureScriptSteps (keeps vanilla preview honest).
+    local steps = Gen2Talk.cmdsToSteps(cmds)
+    if #steps == 0 then
+      steps[1] = {
+        kind = "opcode",
+        cmd = { op = "end" },
+        op = "end",
+      }
+    end
+    -- For read-only vanilla, show opcode notes like before when not decompiled
+    -- into high-level kinds only — cmdsToSteps already yields mixed steps.
+    local simple = Gen2Talk.isSimpleTalk(cmds)
+    return steps, {
+      owned = owned,
+      source = owned and "mod" or "script",
+      readOnly = not owned,
+      gen2 = true,
+      simpleTalk = simple,
+      editable = owned,
+      needsScriptSteps = owned and true or false,
+    }
+  end
+
   local key = mapId .. "/" .. textId
   local owned = S.project and S.project.talkScripts and S.project.talkScripts[key]
   if owned and type(owned.steps) == "table" then
@@ -414,7 +594,14 @@ local function editableStepsForClone(S, mapId, textId, steps, meta)
 end
 
 -- Copy current resolved steps into project.talkScripts (mod override on Save).
+-- Gold: clone opcodes + decompile into project.scriptSteps[scriptKey].
 function TalkIndex.cloneToProject(S, mapId, textId)
+  if Generation.isGen2(S) then
+    Gen2Talk.cloneCommands(S, textId)
+    local bag = Gen2Talk.ensureScriptSteps(S, textId, mapId)
+    Gen2Talk.commitSteps(S, textId)
+    return bag
+  end
   State.ensureProjectFields(S.project)
   local key = mapId .. "/" .. textId
   if S.project.talkScripts[key] then

@@ -62,8 +62,10 @@ function State.blankProject(id, name)
     items = {},     -- id -> record (+ effectTemplate fields)
     moves = {},     -- id -> record
     moveEffects = {}, -- id -> template draft (emitted as move_effects)
-    types = {},     -- id -> { name, category }
+    types = {},     -- id -> { name, category, index? }
     type_matchups = {}, -- "ATK>DEF" -> multiplier (x10)
+    -- Gold: foresight-only matchup block (TypeMatchups after $FE)
+    type_foresight = {},
     maps = {},      -- id -> record (+ encounters)
     tilesets = {},  -- id -> record (imported or custom)
     layeredMaps = {}, -- id -> native 16x16 layered map source
@@ -71,6 +73,7 @@ function State.blankProject(id, name)
     mapWarpNodes = {}, -- stable directed endpoints compiled to runtime warp indices
     text = {},      -- _LABEL -> string
     text_pointers = {}, -- mapLabel -> TEXT_* -> { text = "_LABEL" }
+    marts = {},     -- Gold: MART_* / BARGAIN -> stock lists
     trainers = {},  -- OPP_* -> record
     trainer_headers = {}, -- mapLabel -> { [objIndex] = header }
     map_scripts = {}, -- mapId -> { talk = { TEXT_* = scriptRows } }
@@ -78,6 +81,8 @@ function State.blankProject(id, name)
                    --   onStepCells={{x,y,steps}}, scripts={ name={steps} } }
     eventFlags = {}, -- shortName -> true (emitted as MOD_<id>_SHORT)
     talkScripts = {}, -- "MAP/TEXT_*" -> { mapId, textId, steps = {...} }
+    -- Gold: scriptKey -> { mapId, scriptKey, steps } (compiles to project.scripts)
+    scriptSteps = {},
     fishing = {},   -- OLD_ROD / GOOD_ROD overrides (field.fishing)
     hiddenItems = {}, -- mapId -> { { x, y, item }, ... } (field.hiddenItems)
     badgeGates = {},  -- mapId -> gate record (field.badgeGates)
@@ -94,7 +99,8 @@ function State.blankProject(id, name)
     gbcWorld = { groupColors = {} },
     sprites = {},     -- overworld sprite defs
     aiClasses = {},   -- trainer AI class records
-    battle_anims = {}, -- registry ids: MOVE / subanim:N / tilesheet:N
+    -- Gen1: MOVE / subanim:N / tilesheet:N. Gold: nested moves/scripts/ids/objects/gfx.
+    battle_anims = {},
     playerSprites = {}, -- field.playerSprites slot -> sprite id
     playerPics = {},    -- field.playerPics slot -> image path
     title = {},         -- field.title (logo, music, copyright, …)
@@ -102,8 +108,10 @@ function State.blankProject(id, name)
     theme = {},         -- field.theme (textBox / choiceBox / cursors)
     font = {},          -- font page overrides
     strings = {},       -- engine Strings() overrides (source -> text)
-    townMap = {},       -- field.townMap
-    -- Oak's Lab ball remap: vanillaSpecies -> { species, level }
+    townMap = {},       -- field.townMap (Gen1) / landmark overrides (Gold)
+    trainerCard = {},   -- Gold: gen2MenuGfx.trainerCard badge/leader sheets
+    pokedex = {},       -- Gold: gen2Pokedex.entries overrides (kind/text/…)
+    -- Lab ball remap (Oak / Elm): vanillaSpecies -> { species, level }
     starterRemap = {},
     -- Special gifts/battles with DVs + moves (Encounters tab)
     specialEncounters = {},
@@ -121,6 +129,7 @@ function State.ensureProjectFields(project)
   project.moveEffects = project.moveEffects or {}
   project.types = project.types or {}
   project.type_matchups = project.type_matchups or {}
+  project.type_foresight = project.type_foresight or {}
   project.maps = project.maps or {}
   project.tilesets = project.tilesets or {}
   project.layeredMaps = project.layeredMaps or {}
@@ -128,16 +137,21 @@ function State.ensureProjectFields(project)
   project.mapWarpNodes = project.mapWarpNodes or {}
   project.text = project.text or {}
   project.text_pointers = project.text_pointers or {}
+  project.marts = project.marts or {}
   project.trainers = project.trainers or {}
   project.trainer_headers = project.trainer_headers or {}
   project.map_scripts = project.map_scripts or {}
   project.mapHooks = project.mapHooks or {}
   project.eventFlags = project.eventFlags or {}
   project.talkScripts = project.talkScripts or {}
+  project.scriptSteps = project.scriptSteps or {} -- Gold step bags (scriptKey → steps)
   project.fishing = project.fishing or {}
   project.boot = project.boot or {}
   project.constants = project.constants or {}
+  project.breeding = project.breeding or {} -- Gold Day-Care knobs
   project.audio = project.audio or {}
+  project.phoneContacts = project.phoneContacts or {}
+  project.scripts = project.scripts or {} -- Gold mod talk scripts (scriptKey → ops)
   project.palettes = project.palettes or {}
   project.gbcWorld = project.gbcWorld or { groupColors = {} }
   project.gbcWorld.groupColors = project.gbcWorld.groupColors or {}
@@ -152,8 +166,15 @@ function State.ensureProjectFields(project)
   project.font = project.font or {}
   project.strings = project.strings or {}
   project.townMap = project.townMap or {}
+  project.trainerCard = project.trainerCard or {}
+  project.pokedex = project.pokedex or {}
   project.hiddenItems = project.hiddenItems or {}
   project.badgeGates = project.badgeGates or {}
+  project.fishGroups = project.fishGroups or {}
+  project.treeSets = project.treeSets or {}
+  project.trees = project.trees or {}
+  project.rocks = project.rocks or {}
+  project.flyPoints = project.flyPoints or {}
   project.flyWarps = project.flyWarps or {}
   project.ledges = project.ledges or {}
   project.starterRemap = project.starterRemap or {}
@@ -170,6 +191,53 @@ end
 function State.isDeleted(project, kind, id)
   return project and project.deleted and project.deleted[kind]
     and project.deleted[kind][id] and true or false
+end
+
+-- Gold items.lua ships metadata beside class rows (pockets / source /
+-- generation). Those are not items — listing them crashes the Items tab.
+local ITEM_TABLE_META = {
+  pockets = true, source = true, generation = true,
+}
+
+function State.isItemRecord(id, rec)
+  if type(id) ~= "string" or id == "" or ITEM_TABLE_META[id] then
+    return false
+  end
+  if type(rec) ~= "table" then return false end
+  return rec.name ~= nil or rec.price ~= nil or rec.index ~= nil
+    or rec.pocket ~= nil or rec.pocketId ~= nil
+    or rec.effectTemplate ~= nil or rec._isNew == true
+    or rec.teaches ~= nil or rec.machine ~= nil
+    or rec.heldEffect ~= nil
+end
+
+-- Gold moves.lua prefixes the registry with meta keys (source, generation).
+local MOVE_TABLE_META = {
+  source = true, generation = true,
+}
+
+function State.isMoveRecord(id, rec)
+  if type(id) ~= "string" or id == "" or MOVE_TABLE_META[id] then
+    return false
+  end
+  if type(rec) ~= "table" then return false end
+  return rec.effect ~= nil or rec.power ~= nil or rec.type ~= nil
+    or rec.pp ~= nil or rec.accuracy ~= nil or rec._isNew == true
+end
+
+-- Gold pokemon.lua also ships growthRates / tmhmMoves helper tables.
+local POKEMON_TABLE_META = {
+  growthRates = true, tmhmMoves = true, source = true, generation = true,
+}
+
+function State.isPokemonRecord(id, rec)
+  if type(id) ~= "string" or id == "" or POKEMON_TABLE_META[id] then
+    return false
+  end
+  if type(rec) ~= "table" then return false end
+  return rec.baseStats ~= nil or rec.dex ~= nil or rec.types ~= nil
+    or rec.spriteFront ~= nil or rec.levelMoves ~= nil or rec.learnset ~= nil
+    or rec._isNew == true
 end
 
 -- Drop a project override and, when the id exists in base game data (or was

@@ -15,7 +15,9 @@ local editorMode = os.getenv("POKEPORT_EDITOR") == "1" or POKEPORT_EDITOR_MODE =
 local contentEditorMode = os.getenv("POKEPORT_CONTENT_EDITOR") == "1"
 
 local SwitchDiagnostics = require("src.debug.SwitchDiagnostics")
+local LaunchOptions = require("src.core.LaunchOptions")
 local NxDisplay = require("src.core.NxDisplay")
+local PlatformHooks = require("src.core.PlatformHooks")
 
 -- Lua errors: persist a redacted trace in the save dir and surface a hint.
 do
@@ -32,6 +34,21 @@ do
 end
 
 local Game, EditorApp, Importer, TouchEditor
+
+-- #887: quit-to-launcher state, shared by love.load and love.quit (both need
+-- it, so it is declared here rather than next to love.quit).
+--   * launchedIntoGame -- a --game / POKEPORT_GAME shortcut booted this
+--     session straight into a game, so there is no launcher behind it and a
+--     window close must exit.  Restarting instead re-read the same shortcut
+--     and came right back into the game, and the next close did it again:
+--     the app could not be closed at all (macOS feels this worst, where the
+--     red X, Cmd+Q and the Dock's Quit are all the same quit event).
+--   * RELAUNCH_MARKER -- written in the save dir just before the #785
+--     restart, so the fresh boot ignores any boot-straight-into-a-game
+--     option exactly once and keeps #785's promise of landing in the
+--     launcher, whatever put the game on screen this time.
+local launchedIntoGame = false
+local RELAUNCH_MARKER = "relaunch_to_launcher.txt"
 
 local autopilot -- optional scripted-input dev tool (tests/autopilot.lua)
 local driverCo  -- optional frame-driver (POKEPORT_DRIVER=file.lua): a
@@ -61,6 +78,15 @@ end
 -- cache the editor mounted (so closing can put the read path back).
 local editorHost, editorVersion, editorWindow
 local closeEditor  -- forward declaration: openEditor hands it to the editor
+
+-- tools/save-editor/ models the Gen 1 save and nothing else: a Gen 2 party row
+-- carries fields its MonOps and panels have no idea about (dvs, statExp,
+-- happiness, pokerus, caughtLevel), and SaveIO.save writes the WHOLE table
+-- back, so a Gold slot opened here comes out in a shape src/core/gen2/Save.lua
+-- then has to quarantine on the next boot.  Refuse by name, the same way the
+-- .sav paths do (src/save_convert/SaveConvert.lua GEN2_SAV_UNSUPPORTED), so
+-- Red/Blue/Yellow slots are untouched.
+local GEN2_NO_EDITOR = { gold = "Pokemon Gold" }
 
 -- The editor's modules use flat names (require("Kit"), require("Party")), so
 -- their directories have to be on the require path.  It must be
@@ -128,14 +154,20 @@ end
 -- mounted before the editor's Data:load runs, or a Blue save would be edited
 -- against Red's species/item tables.
 local function openEditor(version, slotId)
+  local function refuse(text)
+    if not Importer then return end
+    Importer.saveNotice = Importer.saveNotice or {}
+    Importer.saveNotice[version] = { ok = false, text = text }
+  end
+  local gen2Name = GEN2_NO_EDITOR[version]
+  if gen2Name then
+    refuse(gen2Name .. " uses a Gen 2 save; the save editor does not read one yet.")
+    return
+  end
   local SaveData = require("src.core.SaveData")
   local path = SaveData.slotDiskPath(version, slotId)
   if not path then
-    if Importer then
-      Importer.saveNotice = Importer.saveNotice or {}
-      Importer.saveNotice[version] =
-        { ok = false, text = "Could not resolve that save slot on disk." }
-    end
+    refuse("Could not resolve that save slot on disk.")
     return
   end
   local GameVersion = require("src.core.GameVersion")
@@ -209,15 +241,16 @@ function closeTouchControlsEditor()
 end
 
 local function bootGame(version)
-  -- The launcher hands us the chosen game (Red / Blue / Yellow); scripted and
-  -- headless runs fall back to POKEPORT_VERSION, then Red.  Set the active
-  -- version and overlay its extracted cache BEFORE anything requires generated
-  -- data, so data/generated + assets/generated resolve to that version's files.
+  -- The launcher hands us the chosen game (Red / Blue / Yellow / Gold);
+  -- scripted and headless runs fall back to POKEPORT_VERSION, then Red.
+  -- Set the active version and overlay its extracted cache BEFORE anything
+  -- requires generated data, so data/generated + assets/generated resolve
+  -- to that version's files.
   local GameVersion = require("src.core.GameVersion")
   GameVersion.set(version or os.getenv("POKEPORT_VERSION") or "red")
   local CacheFs = require("src.import.CacheFs")
   -- Keep CacheFs.prefix aligned for any CacheFs.read fallback during Data:load
-  -- (Blue/Yellow caches live under blue/ / yellow/).
+  -- (Blue/Yellow/Gold caches live under blue/ / yellow/ / gold/).
   CacheFs.prefix = GameVersion.cachePrefix()
   CacheFs.mountVersion(GameVersion.get())
   -- NX: always write nx-asset-probe.log so Yellow/Blue art failures are
@@ -230,10 +263,19 @@ local function bootGame(version)
     love.window.setTitle(Version.title(
       GameVersion.info().displayName .. " (Gen 1 Recompilation Project)"))
   end
-  Game = require("src.core.Game")
-  Game:load()
-  if os.getenv("POKEPORT_AUTOPILOT") then
-    autopilot = require("tests.autopilot")
+  -- Gold: Gen 1 Game:load cannot consume a Gen 2 cache -- different generated
+  -- tables, save shape and screen registry -- so Gold boots its own service
+  -- owner, which mounts src/world/gen2 (walk / warps / connections) and the
+  -- Gen 2 screens instead of src/core/Game.lua's Gen 1 wiring.
+  if GameVersion.isGold() then
+    Game = require("src.core.Game2").new()
+    Game:load()
+  else
+    Game = require("src.core.Game")
+    Game:load()
+    if os.getenv("POKEPORT_AUTOPILOT") then
+      autopilot = require("tests.autopilot")
+    end
   end
   local driverPath = os.getenv("POKEPORT_DRIVER")
   if driverPath then
@@ -315,6 +357,14 @@ function love.load(args)
   -- cache has to be mounted before the editor's Data:load.
   if editorMode then
     local version = os.getenv("POKEPORT_VERSION") or "red"
+    local gen2Name = GEN2_NO_EDITOR[version]
+    if gen2Name then
+      -- No launcher behind this run to carry a notice, so say it and stop
+      -- rather than open a Gen 2 slot on Gen 1 panels.
+      print(gen2Name .. " uses a Gen 2 save; the save editor does not read one yet.")
+      love.event.quit(1)
+      return
+    end
     require("src.core.GameVersion").set(version)
     require("src.import.CacheFs").mountVersion(version)
     addEditorRequirePath()
@@ -326,9 +376,12 @@ function love.load(args)
   local RomImporter = require("src.import.RomImporter")
   local forceImport = os.getenv("POKEPORT_FORCE_IMPORT") == "1"
   local importPath = os.getenv("POKEPORT_IMPORT_ROM")
-  -- Scripted / headless runs pick their game from POKEPORT_VERSION (default
-  -- Red); the launcher's per-column choice does not apply to them.
-  local scriptedVersion = os.getenv("POKEPORT_VERSION") or "red"
+  -- Scripted / headless runs pick their game from POKEPORT_VERSION, then
+  -- POKEPORT_GAME / --game= (LaunchOptions), then Red.  Drivers for Gold
+  -- must honor POKEPORT_GAME=gold the same way a desktop shortcut does.
+  local scriptedVersion = os.getenv("POKEPORT_VERSION")
+    or LaunchOptions.resolve(arg)
+    or "red"
   local ready = RomImporter.isReady(scriptedVersion)
   -- Scripted / headless runs have to reach the game with no human pressing
   -- Play: an autopilot, a frame driver, an import-only build step, or an
@@ -356,11 +409,53 @@ function love.load(args)
     return
   end
 
-  -- Interactive: the launcher always runs.  Red, Blue, and Yellow are each
-  -- live: a column shows Play when that game's ROM is already imported, or
-  -- Choose ROM / drag-drop when it is not.  Any dropped .gb is routed by its
-  -- SHA-1 (GameVersion.forSha1); pressing Play boots that game.  Edit on a
-  -- save row opens the bundled editor on that slot (openEditor).
+  -- The launcher draws before any game boots, so the mod loader has not run
+  -- and Strings has no catalog.  Routing the launcher's text through Strings
+  -- (#767) only pays off if something fills that catalog this early, and no
+  -- restart could: the ordering is the same on every launch.  Read the
+  -- enabled mods' string catalogs -- data only, no entry chunk -- so a
+  -- translation reaches the launcher too.  Game:load replaces this with the
+  -- real merged catalog once a version boots.
+  do
+    local preload = require("src.mods.LauncherMods").translationStrings()
+    if preload then require("src.core.Strings").load({ strings = preload }) end
+  end
+
+  -- LAUNCH OPTIONS: skip the launcher and boot a game directly.
+  --   --game red|blue|yellow|gold  (or POKEPORT_GAME / POKEPORT_LAUNCH)
+  --   --slot <id>             optional; picks the save slot to load
+  --   --launcher              force the launcher even if a game is set
+  -- This is what a desktop shortcut, a Steam entry, or a frontend like
+  -- EmulationStation needs: one click into the game the player wants, with no
+  -- menu in between.  A game that is not imported falls through to the
+  -- launcher on its tab rather than booting into nothing.
+  -- A window close that restarted us into the launcher (#785) leaves the
+  -- marker behind: consume it and stay on the launcher, or the shortcut below
+  -- would boot the same game again and that close would restart again,
+  -- forever (#887).  Consumed on read, so the very next launch is normal.
+  local relaunched = love.filesystem.getInfo(RELAUNCH_MARKER) ~= nil
+  if relaunched then pcall(love.filesystem.remove, RELAUNCH_MARKER) end
+
+  local launchGame, launchSlot = LaunchOptions.resolve(arg)
+  if launchGame and not relaunched and not LaunchOptions.forceLauncher(arg) then
+    if RomImporter.isReady(launchGame) then
+      if launchSlot then LaunchOptions.selectSlot(launchGame, launchSlot) end
+      -- No launcher behind this session: love.quit must exit, not restart.
+      launchedIntoGame = true
+      bootGame(launchGame)
+      return
+    end
+    -- Not importable yet: open the launcher already showing that game, so the
+    -- shortcut still lands the player where they meant to go.
+    LaunchOptions.pendingTab = launchGame
+  end
+
+  -- Interactive: the launcher always runs.  Red, Blue, Yellow, and Gold are
+  -- each live: a column shows Play when that game's ROM is already imported,
+  -- or Choose ROM / drag-drop when it is not.  Any dropped .gb/.gbc is routed
+  -- by its SHA-1 (GameVersion.forSha1); pressing Play boots that game (Gold
+  -- goes to its own service owner, src/core/Game2.lua -- docs/gold-phase1.md).
+  -- Edit on a save row opens the bundled editor on that slot (openEditor).
   Importer = RomImporter.new(function(version)
     Importer = nil
     bootGame(version)
@@ -412,13 +507,18 @@ function love.update(dt)
     end
     return
   end
-  Game:update(dt)
+  -- Mods may wrap or veto the per-frame simulation step (pause it, react
+  -- to external platform state, etc.) -- see docs/modding.md's core.update
+  -- entry. Vanilla behavior (used when no mod claims the hook) is just
+  -- Game:update(dt), unconditionally, exactly as before this hook existed.
+  PlatformHooks.update(Game, dt)
 end
 
 function love.draw()
   if editorMode then return EditorApp.draw() end
   if TouchEditor then return TouchEditor.draw() end
   if Importer then return Importer:draw() end
+  if not Game then return end
 
   Game:draw()
   -- frame capture requested by a driver
@@ -640,7 +740,7 @@ function love.touchpressed(id, x, y, dx, dy, pressure)
     -- Android's synthesized mouse twin so Import cannot double-fire (#553).
     return Importer:touchpressed(id, x, y, dx, dy, pressure)
   end
-  Game:touchpressed(id, x, y)
+  Game:touchpressed(id, x, y, dx, dy, pressure)
 end
 
 function love.touchmoved(id, x, y, dx, dy, pressure)
@@ -652,7 +752,7 @@ function love.touchmoved(id, x, y, dx, dy, pressure)
   if Importer then
     return Importer:touchmoved(id, x, y, dx, dy, pressure)
   end
-  Game:touchmoved(id, x, y)
+  Game:touchmoved(id, x, y, dx, dy, pressure)
 end
 
 function love.touchreleased(id, x, y, dx, dy, pressure)
@@ -664,7 +764,7 @@ function love.touchreleased(id, x, y, dx, dy, pressure)
   if Importer then
     return Importer:touchreleased(id, x, y, dx, dy, pressure)
   end
-  Game:touchreleased(id, x, y)
+  Game:touchreleased(id, x, y, dx, dy, pressure)
 end
 
 function love.wheelmoved(x, y)
@@ -677,7 +777,33 @@ function love.wheelmoved(x, y)
   Game:wheelmoved(x, y)
 end
 
+-- #781: Linux X11 multi-monitor with the primary display away from desktop
+-- (0,0): SDL's polled mouse state can come back in desktop-virtual
+-- coordinates while the event stream stays window-relative, which strands
+-- every polled consumer (launcher Kit rising-edge clicks, the pad-cursor
+-- motion yield, PadCursor) on coordinates no hit test can match.  Sanitize
+-- the poll once here: remember the last window-relative event coordinates
+-- and substitute them whenever the polled value falls outside the window.
+-- Linux only -- macOS / Windows / mobile keep the stock function, and the
+-- NX launcher shim still composes because it captures whatever
+-- love.mouse.getPosition is at bridge time (_ensureNxPointerBridge).
+local eventMouseX, eventMouseY
+if love.system and love.system.getOS() == "Linux"
+    and love.mouse and love.mouse.getPosition then
+  local polledGetPosition = love.mouse.getPosition
+  love.mouse.getPosition = function()
+    local x, y = polledGetPosition()
+    local w, h = love.graphics.getDimensions()
+    if x < 0 or y < 0 or x > w or y > h then
+      if eventMouseX then return eventMouseX, eventMouseY end
+      return math.max(0, math.min(x, w)), math.max(0, math.min(y, h))
+    end
+    return x, y
+  end
+end
+
 function love.mousepressed(x, y, button, istouch)
+  if not istouch then eventMouseX, eventMouseY = x, y end
   if TouchEditor then
     -- Android primary touch already arrived via love.touchpressed; a second
     -- mouse path would double-fire Done / begin a second drag.
@@ -701,12 +827,19 @@ function love.mousepressed(x, y, button, istouch)
     if istouch and love.system.getOS() == "Android" then return end
     return EditorApp.mousepressed(x, y, button)
   end
-  if mouseTouch and Game and button == 1 then
-    Game:touchpressed("mouse", x, y)
+  if mouseTouch then
+    -- the mouse is standing in for a finger: the touch path owns it, and
+    -- feeding the same press back in as a mouse pointer would double it
+    if Game and button == 1 then Game:touchpressed("mouse", x, y) end
+    return
   end
+  -- #807: a real mouse reaches gameplay as a pointer event for mods; Game
+  -- drops synthesized istouch twins so a mobile touch that already arrived
+  -- through love.touchpressed cannot fire twice
+  if Game then Game:mousepressed(x, y, button, istouch) end
 end
 
-function love.mousereleased(x, y, button)
+function love.mousereleased(x, y, button, istouch)
   if TouchEditor then
     if love.system.getOS() == "Android" then return end
     return TouchEditor.mousereleased(x, y, button)
@@ -715,20 +848,25 @@ function love.mousereleased(x, y, button)
   if editorMode and EditorApp.mousereleased then
     return EditorApp.mousereleased(x, y, button)
   end
-  if mouseTouch and Game and button == 1 then
-    Game:touchreleased("mouse", x, y)
+  if mouseTouch then
+    if Game and button == 1 then Game:touchreleased("mouse", x, y) end
+    return
   end
+  if Game then Game:mousereleased(x, y, button, istouch) end
 end
 
-function love.mousemoved(x, y)
+function love.mousemoved(x, y, dx, dy, istouch)
+  if not istouch then eventMouseX, eventMouseY = x, y end
   if TouchEditor then
     if love.system.getOS() == "Android" then return end
     return TouchEditor.mousemoved(x, y)
   end
   if editorMode or Importer then return end
-  if mouseTouch and Game and love.mouse.isDown(1) then
-    Game:touchmoved("mouse", x, y)
+  if mouseTouch then
+    if Game and love.mouse.isDown(1) then Game:touchmoved("mouse", x, y) end
+    return
   end
+  if Game then Game:mousemoved(x, y, dx, dy, istouch) end
 end
 
 function love.textinput(text)
@@ -739,9 +877,51 @@ function love.textinput(text)
   end
 end
 
+-- #785: set once love.quit has routed a window close into HostShell.restart,
+-- so the follow-up quit event the restart itself raises (quit("restart") on
+-- desktop; AppImage and Android relaunch the process instead, #575) falls
+-- through to the normal shutdown below instead of restarting forever.
+local quitToLauncher = false
+
 function love.quit()
   if editorMode and EditorApp.quit then
-    return EditorApp.quit() -- return true to abort quit
+    -- true blocks the quit (unsaved-changes prompt).  A quit that proceeds
+    -- must fall through to the worker shutdowns below instead of returning:
+    -- the bundled editor opens from a live launcher whose update-check and
+    -- fetch-pool workers are still parked in Channel:demand(), and returning
+    -- here skipped their "quit" push, so the process outlived the closed
+    -- window and kept the install folder locked on Windows (#727).
+    if EditorApp.quit() then return true end
+  end
+  -- Closing the window of a running game returns to the launcher instead of
+  -- exiting the app, so testing a mod does not need a relaunch every time
+  -- (#785).  Game is only non-nil once bootGame ran; Importer non-nil means
+  -- the launcher (or its import) owns the window and its close still quits.
+  -- Scripted and headless runs (autopilot, frame driver, import-only, ROM
+  -- path import) keep the plain exit so they terminate as before.  Nothing
+  -- is saved here on purpose: a window close never wrote the save, and the
+  -- restart path must be no worse than that, not quietly better.
+  local scripted = os.getenv("POKEPORT_AUTOPILOT") or os.getenv("POKEPORT_DRIVER")
+    or os.getenv("POKEPORT_IMPORT_ONLY") == "1" or os.getenv("POKEPORT_IMPORT_ROM")
+  -- #887: a shortcut session (--game / POKEPORT_GAME) has no launcher to go
+  -- back to and the restart would re-read the shortcut, so it exits instead.
+  --
+  -- A platform launcher that owns "return to launcher" itself (see
+  -- docs/modding.md's core.quit_to_launcher entry) may veto returning to
+  -- this Lua launcher via that hook. Vanilla behavior (used when no mod
+  -- claims the hook) is exactly the condition below.
+  local wouldReturnToLauncher = PlatformHooks.quitToLauncher(function()
+    return Game and not Importer and not quitToLauncher and not scripted
+      and not launchedIntoGame
+  end)
+  if wouldReturnToLauncher then
+    quitToLauncher = true
+    -- Tell the fresh boot to ignore any boot-straight-into-a-game option this
+    -- once, so the restart really does land in the launcher (#887).  A failed
+    -- write only costs that suppression, so it must never block the restart.
+    pcall(love.filesystem.write, RELAUNCH_MARKER, "1")
+    require("src.core.HostShell").restart()
+    return true -- abort this quit; the restart lands back in the launcher
   end
   pcall(function()
     require("src.core.DiscordPresence").shutdown()
@@ -755,6 +935,12 @@ function love.quit()
   end
   if package.loaded["src.update.Check"] then
     pcall(package.loaded["src.update.Check"].shutdown)
+  end
+  -- The launcher's fetch pool is the same story: its workers idle in
+  -- Channel:demand(), which never returns on its own, so a launcher that ever
+  -- touched the network would hang the process on exit (#339's shape again).
+  if package.loaded["src.net.Fetch"] then
+    pcall(package.loaded["src.net.Fetch"].shutdown)
   end
 end
 

@@ -24,48 +24,130 @@ local function fileExists(path)
   return false
 end
 
-function DataSource.hasLocalCache()
+-- True when a version's generated cache is readable under its cachePrefix
+-- (or legacy un-prefixed root for Red only).  Do not treat another game's
+-- mounted data/generated as this version's cache.
+function DataSource.hasLocalCache(version)
+  version = version or "red"
+  local GameVersion = require("src.core.GameVersion")
+  local prefix = GameVersion.cachePrefix and GameVersion.cachePrefix(version) or ""
+  local candidates = {
+    prefix .. "data/generated/maps.lua",
+    prefix .. "data/generated/constants.lua",
+  }
+  -- Legacy root cache is Red only (migrateLegacyRedCache); Blue/Yellow/Gold
+  -- must live under their prefix or a wrong Kanto table wins the switch.
+  if version == "red" or prefix == "" then
+    candidates[#candidates + 1] = "data/generated/maps.lua"
+    candidates[#candidates + 1] = "data/generated/constants.lua"
+  end
   if love and love.filesystem and love.filesystem.getInfo then
-    if love.filesystem.getInfo("data/generated/maps.lua", "file") then
-      return true
-    end
-    if love.filesystem.getInfo("data/generated/constants.lua", "file") then
-      return true
+    for _, rel in ipairs(candidates) do
+      if love.filesystem.getInfo(rel, "file") then return true end
     end
   end
   local root = love and love.filesystem and love.filesystem.getSource
     and love.filesystem.getSource()
   if root and root ~= "" then
-    return fileExists(join(root, "data" .. SEP .. "generated" .. SEP .. "maps.lua"))
+    local prefixes = { prefix }
+    if version == "red" or prefix == "" then
+      prefixes[#prefixes + 1] = ""
+    end
+    for _, pfx in ipairs(prefixes) do
+      local sub = (pfx or ""):gsub("/+$", ""):gsub("/", SEP)
+      local maps = sub ~= ""
+        and join(root, join(sub, join("data", join("generated", "maps.lua"))))
+        or join(root, join("data", join("generated", "maps.lua")))
+      if fileExists(maps) then return true end
+    end
   end
   return false
+end
+
+-- Linked Gen1Recomp folder has an on-disk cache for this version (not merely
+-- a Red/legacy data/generated at the root).
+function DataSource.recompHasVersion(root, version)
+  if type(root) ~= "string" or root == "" then return false end
+  root = root:gsub("[/\\]+$", "")
+  version = version or "red"
+  local GameVersion = require("src.core.GameVersion")
+  local prefix = (GameVersion.cachePrefix and GameVersion.cachePrefix(version) or "")
+    :gsub("/+$", ""):gsub("/", SEP)
+  if prefix ~= "" then
+    local maps = join(root, prefix .. SEP .. "data" .. SEP .. "generated"
+      .. SEP .. "maps.lua")
+    if fileExists(maps) then return true end
+    -- Red may still live at the legacy un-prefixed path in older trees.
+    if version == "red" then
+      return fileExists(join(root, "data" .. SEP .. "generated" .. SEP .. "maps.lua"))
+    end
+    return false
+  end
+  return fileExists(join(root, "data" .. SEP .. "generated" .. SEP .. "maps.lua"))
+end
+
+-- After Data:load(), confirm we did not silently pick up another generation
+-- (e.g. Linked Recomp Red cache while the UI says Gold).
+local function loadedDataMatches(version)
+  local GameVersion = require("src.core.GameVersion")
+  if GameVersion.generation(version) == 2 then
+    if type(Data.maps) == "table" and Data.maps.NEW_BARK_TOWN then return true end
+    if type(Data.pokemon) == "table" and Data.pokemon.CHIKORITA then return true end
+    if type(Data.encounters) == "table" and Data.encounters.grass then return true end
+    if type(Data.trainers) == "table" and Data.trainers.classes then return true end
+    return false
+  end
+  if type(Data.encounters) == "table" and Data.encounters.grass then return false end
+  if type(Data.trainers) == "table" and Data.trainers.classes then return false end
+  if type(Data.maps) == "table" and Data.maps.NEW_BARK_TOWN
+      and not Data.maps.PALLET_TOWN then
+    return false
+  end
+  return type(Data.maps) == "table" and type(Data.pokemon) == "table"
 end
 
 function DataSource.isValidRecompRoot(path)
   if type(path) ~= "string" or path == "" then return false end
   path = path:gsub("[/\\]+$", "")
-  local maps = join(path, "data" .. SEP .. "generated" .. SEP .. "maps.lua")
-  if not fileExists(maps) then return false end
-  -- Prefer a tree that also has generated art, but Lua cache alone is enough
-  -- to author; playtest against that install still works.
-  return true
+  -- Legacy un-prefixed cache, or any GameVersion cachePrefix tree
+  -- (red/, blue/, yellow/, gold/).
+  if fileExists(join(path, "data" .. SEP .. "generated" .. SEP .. "maps.lua")) then
+    return true
+  end
+  local GameVersion = require("src.core.GameVersion")
+  for _, version in ipairs(GameVersion.ORDER or { "red" }) do
+    local prefix = GameVersion.cachePrefix and GameVersion.cachePrefix(version) or ""
+    prefix = prefix:gsub("/+$", ""):gsub("/", SEP)
+    if prefix ~= "" then
+      local maps = join(path, prefix .. SEP .. "data" .. SEP .. "generated"
+        .. SEP .. "maps.lua")
+      if fileExists(maps) then return true end
+    end
+  end
+  return false
 end
 
 function DataSource.loadPrefs()
   local raw = love.filesystem.read(PREFS_FILE)
   if type(raw) ~= "string" or raw == "" then
-    return { mode = "auto", recompRoot = nil, useGbcPalettes = true }
+    return { mode = "auto", recompRoot = nil, useGbcPalettes = true, lastVersion = "red" }
   end
   local ok, data = pcall(Json.decode, raw)
   if not ok or type(data) ~= "table" then
-    return { mode = "auto", recompRoot = nil, useGbcPalettes = true }
+    return { mode = "auto", recompRoot = nil, useGbcPalettes = true, lastVersion = "red" }
   end
   local useGbc = data.useGbcPalettes
   if useGbc == nil then useGbc = true end
+  local GameVersion = require("src.core.GameVersion")
+  local lastVersion = data.lastVersion or "red"
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[lastVersion]) then
+    lastVersion = "red"
+  end
   return {
     mode = data.mode or "auto",
     recompRoot = data.recompRoot,
     useGbcPalettes = useGbc and true or false,
+    lastVersion = lastVersion,
   }
 end
 
@@ -77,26 +159,44 @@ function DataSource.savePrefs(prefs)
     mode = prefs.mode or "auto",
     recompRoot = prefs.recompRoot,
     useGbcPalettes = useGbc and true or false,
+    lastVersion = prefs.lastVersion or "red",
   })
   love.filesystem.write(PREFS_FILE, body)
   return prefs
 end
 
+function DataSource.setLastVersion(version)
+  local GameVersion = require("src.core.GameVersion")
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    version = "red"
+  end
+  local prefs = DataSource.loadPrefs()
+  prefs.lastVersion = version
+  DataSource.savePrefs(prefs)
+  return prefs
+end
+
 function DataSource.unmountLinked()
   if mountedRecomp then
-    pcall(CacheFs.unmountExternal, mountedRecomp)
+    if type(CacheFs.unmountExternal) == "function" then
+      pcall(CacheFs.unmountExternal, mountedRecomp)
+    end
     mountedRecomp = nil
   end
 end
 
 function DataSource.mountRecomp(path)
   if not DataSource.isValidRecompRoot(path) then
-    return false, "Not a Gen1Recomp folder with data/generated"
+    return false, "Not a Gen1Recomp folder with data/generated (or red|blue|yellow|gold/)"
   end
   path = path:gsub("[/\\]+$", "")
   DataSource.unmountLinked()
   -- Prepend so linked cache wins over missing local generated files.
-  if not CacheFs.mountExternal(path, false) then
+  if type(CacheFs.mountExternal) ~= "function" then
+    return false, "CacheFs.mountExternal unavailable"
+  end
+  local ok, mounted = pcall(CacheFs.mountExternal, path, false)
+  if not ok or not mounted then
     return false, "Could not mount folder (PHYSFS unavailable?)"
   end
   mountedRecomp = path
@@ -122,20 +222,55 @@ local function hasImportedCache(version)
   if ok and RomImporter and RomImporter.isReady then
     return RomImporter.isReady(version)
   end
-  return love.filesystem.getInfo("data/generated/maps.lua", "file") ~= nil
+  local GameVersion = require("src.core.GameVersion")
+  local prefix = GameVersion.cachePrefix and GameVersion.cachePrefix(version) or ""
+  if love.filesystem.getInfo(prefix .. "data/generated/maps.lua", "file") then
+    return true
+  end
+  -- Legacy un-prefixed import is Red only.
+  if version == "red" or prefix == "" then
+    return love.filesystem.getInfo("data/generated/maps.lua", "file") ~= nil
+  end
+  return false
 end
 
-local function tryLocal()
-  if not DataSource.hasLocalCache() then return false end
-  return pcall(function() Data:load() end)
+local mountedVersion = nil
+
+local function remountVersion(version)
+  if mountedVersion and mountedVersion ~= version then
+    pcall(CacheFs.unmountVersion, mountedVersion)
+  end
+  pcall(CacheFs.mountVersion, version)
+  mountedVersion = version
+  local GameVersion = require("src.core.GameVersion")
+  pcall(GameVersion.set, version)
+end
+
+local function finishLoad(version)
+  local ok, err = pcall(function() Data:load() end)
+  if not ok then return false, err end
+  if not loadedDataMatches(version) then
+    if Data._pristineKeys then pcall(function() Data:unloadGenerated() end) end
+    return false, "cache does not match " .. tostring(version)
+  end
+  return true
+end
+
+local function tryLocal(version)
+  if not DataSource.hasLocalCache(version) then return false end
+  remountVersion(version)
+  return finishLoad(version)
 end
 
 local function tryRecomp(prefs, version)
   if not prefs.recompRoot then return false, "no linked folder" end
+  if not DataSource.recompHasVersion(prefs.recompRoot, version) then
+    return false, "linked folder has no " .. tostring(version) .. " cache"
+  end
   local mok, merr = DataSource.mountRecomp(prefs.recompRoot)
   if not mok then return false, merr end
-  pcall(CacheFs.mountVersion, version)
-  local ok, err = pcall(function() Data:load() end)
+  remountVersion(version)
+  local ok, err = finishLoad(version)
   if ok then return true end
   DataSource.unmountLinked()
   return false, err
@@ -143,71 +278,100 @@ end
 
 local function tryImported(version)
   if not hasImportedCache(version) then return false end
-  pcall(CacheFs.mountVersion, version)
-  return pcall(function() Data:load() end)
+  -- Imported Gold lives in the save dir; keep a Red-only linked Recomp from
+  -- shadowing gold/data/generated via a root data/generated mount.
+  DataSource.unmountLinked()
+  remountVersion(version)
+  return finishLoad(version)
 end
 
 -- Resolve and load data. Returns source id: "local"|"recomp"|"imported"|"fixtures"
 -- Explicit Project-tab choices (recomp / imported / fixtures) win over auto.
 function DataSource.apply(opts)
   opts = opts or {}
-  local version = opts.version or "red"
   local prefs = DataSource.loadPrefs()
+  local version = opts.version or prefs.lastVersion or "red"
+  local GameVersion = require("src.core.GameVersion")
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    version = "red"
+  end
+  prefs.lastVersion = version
+  DataSource.savePrefs(prefs)
+
   if Data._pristineKeys then Data:unloadGenerated() end
   DataSource.unmountLinked()
 
   local mode = prefs.mode or "auto"
+  local verLabel = (GameVersion.info(version) and GameVersion.info(version).label)
+    or version
 
   if mode == "fixtures" then
+    remountVersion(version)
     local ok, err = loadFixtures()
     if not ok then
       error("content editor fixtures failed:\n" .. tostring(err))
     end
     return "fixtures", prefs,
-      "Loaded fixture data (no ROM cache) — Link Recomp or Import ROM for full data"
+      "Loaded fixture data (" .. verLabel
+        .. ") — Link Recomp or Import ROM for full data"
   end
 
   if mode == "recomp" then
     local ok = tryRecomp(prefs, version)
     if ok then
       return "recomp", prefs,
-        "Linked Gen1Recomp: " .. tostring(prefs.recompRoot)
+        "Linked Gen1Recomp (" .. verLabel .. "): " .. tostring(prefs.recompRoot)
     end
   elseif mode == "imported" then
     local ok = tryImported(version)
     if ok then
-      return "imported", prefs, "Loaded imported ROM cache (save directory)"
+      return "imported", prefs,
+        "Loaded imported " .. verLabel .. " ROM cache (save directory)"
     end
   end
 
   -- auto (or failed explicit mode): local → linked → imported → fixtures
   do
-    local ok = tryLocal()
+    local ok = tryLocal(version)
     if ok then
-      return "local", prefs, "Loaded local ROM cache (dev / pack data/generated)"
+      return "local", prefs,
+        "Loaded local " .. verLabel .. " ROM cache (dev / pack data/generated)"
     end
   end
   do
     local ok = tryRecomp(prefs, version)
     if ok then
       return "recomp", prefs,
-        "Linked Gen1Recomp: " .. tostring(prefs.recompRoot)
+        "Linked Gen1Recomp (" .. verLabel .. "): " .. tostring(prefs.recompRoot)
     end
   end
   do
     local ok = tryImported(version)
     if ok then
-      return "imported", prefs, "Loaded imported ROM cache (save directory)"
+      return "imported", prefs,
+        "Loaded imported " .. verLabel .. " ROM cache (save directory)"
     end
   end
 
+  remountVersion(version)
   local ok, err = loadFixtures()
   if not ok then
     error("content editor needs an imported ROM cache, linked Recomp, or fixtures:\n"
       .. tostring(err))
   end
   return "fixtures", prefs,
-    "Loaded fixture data (no ROM cache) — Link Recomp or Import ROM for full data"
+    "Loaded fixture data (" .. verLabel
+      .. ") — Link Recomp or Import ROM for full data"
+end
+
+function DataSource.linkRecomp(path)
+  if not DataSource.isValidRecompRoot(path) then
+    return nil, "Folder needs data/generated or <version>/data/generated "
+      .. "(import a ROM in Gen1Recomp first)"
+  end
+  path = path:gsub("[/\\]+$", "")
+  local prefs = DataSource.setMode("recomp", path)
+  return prefs
 end
 
 function DataSource.label(source)
@@ -226,15 +390,6 @@ function DataSource.setMode(mode, recompRoot)
     -- keep path for later re-link, but mode wins
   end
   DataSource.savePrefs(prefs)
-  return prefs
-end
-
-function DataSource.linkRecomp(path)
-  if not DataSource.isValidRecompRoot(path) then
-    return nil, "Folder needs data/generated (import a ROM in Gen1Recomp first)"
-  end
-  path = path:gsub("[/\\]+$", "")
-  local prefs = DataSource.setMode("recomp", path)
   return prefs
 end
 

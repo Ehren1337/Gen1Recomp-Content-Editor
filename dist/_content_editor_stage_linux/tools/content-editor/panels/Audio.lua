@@ -1,4 +1,5 @@
 -- AUDIO tab: music, cries, sfx, map_songs overrides + in-editor playback.
+-- Gold: generation-tagged ROM refs, 16-bit cry pitch/length, SFX fanfare.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -7,7 +8,7 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local Autocomplete = require("Autocomplete")
-local ModIO = require("ModIO")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Audio = {}
@@ -17,6 +18,11 @@ local MODES = {
   { id = "cries", label = "Cries", tip = "Species cry overrides" },
   { id = "sfx", label = "SFX", tip = "Sound effect registry" },
   { id = "map_songs", label = "Map songs", tip = "Which song plays on each map" },
+}
+
+local GEN1_FALLBACK_SONGS = { "Music_PalletTown", "Music_Cities1", "Music_Gym" }
+local GEN2_FALLBACK_SONGS = {
+  "Music_NewBarkTown", "Music_AzaleaTown", "Music_VioletCity", "Music_Gym",
 }
 
 -- ---- Playback (file via love.audio; chip/ROM via Music / Sound) ----
@@ -75,6 +81,8 @@ function Audio.stopPreview(S)
   if p and p.src then pcall(p.src.stop, p.src) end
   S.audioPreview = nil
   pcall(function() require("src.core.Music").stop() end)
+  -- playEngineMusic may own a ChipAudio stream without Music.state.chip
+  pcall(function() require("src.core.ChipAudio").stopMusic() end)
 end
 
 function Audio.isPreviewPlaying(S)
@@ -101,6 +109,21 @@ function Audio.update(S, _dt)
   if not S or not S.audioPreview then return end
   local p = S.audioPreview
   if p.engine == "music" then
+    -- Editor previews drive ChipAudio directly (see playEngineMusic); also
+    -- tick Music when a file-backed preview left state there.
+    local okE, ChipAudio = pcall(require, "src.core.ChipAudio")
+    if okE and ChipAudio then
+      if ChipAudio.update then pcall(ChipAudio.update) end
+      if ChipAudio.ensureMusicPlaying then pcall(ChipAudio.ensureMusicPlaying) end
+      if ChipAudio.consumeLastError then
+        local err = ChipAudio.consumeLastError()
+        if err then
+          S.status = "Audio: " .. err
+          Audio.stopPreview(S)
+          return
+        end
+      end
+    end
     pcall(function()
       require("src.core.Music").update(p.data or S.data)
     end)
@@ -138,15 +161,84 @@ local function playFilePreview(S, path, opts)
   return true
 end
 
+local function programsDiag(data, prefix)
+  local parts = {}
+  local audio = data and data.audio
+  local need = 0
+  if audio and type(audio.bankOrder) == "table" then
+    need = #audio.bankOrder * 0x4000
+  end
+  parts[#parts + 1] = "need=" .. tostring(need)
+  parts[#parts + 1] = "prefix=" .. tostring(prefix or "")
+  parts[#parts + 1] = "banks=" .. tostring(
+    audio and audio.bankOrder and #audio.bankOrder or 0)
+  if love and love.filesystem and love.filesystem.getInfo then
+    for _, p in ipairs({
+      (prefix or "") .. "assets/generated/audio/programs.bin",
+      "assets/generated/audio/programs.bin",
+      "gold/assets/generated/audio/programs.bin",
+    }) do
+      if p ~= "" then
+        local info = love.filesystem.getInfo(p)
+        parts[#parts + 1] = p .. "=" .. (info and tostring(info.size) or "missing")
+      end
+    end
+  end
+  return table.concat(parts, " ")
+end
+
 local function playEngineMusic(S, songId)
   Audio.stopPreview(S)
   local data = previewData(S)
-  local ok, err = pcall(function()
-    local Music = require("src.core.Music")
-    Music.reload()
-    Music.play(data, songId, true, { reason = "preview" })
+  local def = data.audio and data.audio.songs and data.audio.songs[songId]
+  if type(def) ~= "table" then
+    return false, "unknown song: " .. tostring(songId)
+  end
+  if type(def.file) == "string" and def.file ~= "" then
+    return playFilePreview(S, def.file, {
+      mode = "music", loop = true, label = songId,
+    })
+  end
+  if not (def.chip or (def.address and def.bank)) then
+    return false, "no chip program and no file"
+  end
+  -- Use the editor's selected game (S.version), not whatever GameVersion.current
+  -- still is — a stale "red" prefix loads the leftover 3-bank programs.bin.
+  local ver = S.version or require("src.core.GameVersion").current
+  local okp, prefix = pcall(function()
+    return require("src.core.GameVersion").cachePrefix(ver)
   end)
-  if not ok then return false, err end
+  if not (okp and prefix) then prefix = "" end
+  if prefix ~= "" and data.audio then
+    data.audio.programPrefix = prefix
+  end
+
+  local ChipSynth = require("src.core.ChipSynth")
+  local ChipAudio = require("src.core.ChipAudio")
+  -- Full invalidate (main + worker bank cache). Preview always uses the sync
+  -- stream so a worker mount miss cannot look like a silent Play success.
+  pcall(function() ChipAudio.invalidate() end)
+  pcall(ChipSynth.invalidateBanks)
+
+  local prevForce = ChipAudio.forceSyncMusic
+  ChipAudio.forceSyncMusic = true
+  -- Bypass Music.play: mod music.select hooks / failed-song blacklist can
+  -- return false with a lost err under pcall. ChipAudio is the real engine.
+  local ok, srcOrErr, playErr = pcall(function()
+    return ChipAudio.playMusic(data, def, true)
+  end)
+  ChipAudio.forceSyncMusic = prevForce
+  if not ok then
+    return false, tostring(srcOrErr) .. " | " .. programsDiag(data, prefix)
+  end
+  if not srcOrErr then
+    local err = playErr or ChipAudio.lastError
+    return false, tostring(err or "chip play failed")
+      .. " | " .. programsDiag(data, prefix)
+      .. " | song bank=" .. tostring(def.bank)
+      .. " addr=" .. tostring(def.address)
+  end
+
   S.audioPreview = {
     engine = "music", id = songId, data = data, label = songId,
   }
@@ -220,6 +312,34 @@ local function resolve(S, mode, id)
   return nil, false
 end
 
+local function defaultMapSong(S)
+  return Generation.isGen2(S) and "Music_NewBarkTown" or "Music_PalletTown"
+end
+
+local function fallbackSongs(S)
+  return Generation.isGen2(S) and GEN2_FALLBACK_SONGS or GEN1_FALLBACK_SONGS
+end
+
+local function shallowCopyRec(rec)
+  local copy = {}
+  for k, v in pairs(rec) do
+    if type(v) == "table" then
+      local nested = {}
+      for nk, nv in pairs(v) do nested[nk] = nv end
+      copy[k] = nested
+    else
+      copy[k] = v
+    end
+  end
+  return copy
+end
+
+local function clearRomFields(e)
+  e.address, e.bank, e.chip = nil, nil, nil
+  e.engine, e.generation, e.header = nil, nil, nil
+  e.program, e.channels, e.waves, e.drums = nil, nil, nil, nil
+end
+
 function Audio.playPreview(S, mode, id)
   if not (S and id) then return false end
   State.ensureProjectFields(S.project)
@@ -256,9 +376,11 @@ function Audio.playPreview(S, mode, id)
     end
   elseif mode == "cries" then
     if type(rec) == "table" and type(rec.file) == "string" and rec.file ~= "" then
+      -- Gen1 pitch byte ~128; Gen2 16-bit words are chip-only — skip rate map.
+      local pitch = tonumber(rec.pitch)
+      local filePitch = (pitch and pitch >= 0 and pitch <= 255) and pitch or nil
       ok, err = playFilePreview(S, rec.file, {
-        mode = "sfx", label = id,
-        pitch = tonumber(rec.pitch) or 128,
+        mode = "sfx", label = id, pitch = filePitch,
       })
     else
       ok, err = playEngineCry(S, id)
@@ -282,8 +404,17 @@ local function summarize(rec, mode)
   if type(rec) ~= "table" then return "?" end
   if rec.file then return "file " .. tostring(rec.file) end
   if rec.chip then return "chip" end
-  if rec.address then return string.format("ROM %s:%s", tostring(rec.bank), tostring(rec.address)) end
+  if rec.address then
+    local tag = rec.generation and (" gen" .. tostring(rec.generation))
+      or (rec.engine and (" eng" .. tostring(rec.engine))) or ""
+    return string.format("ROM %s:%s%s", tostring(rec.bank), tostring(rec.address), tag)
+  end
+  if rec.header and rec.header.address then
+    return string.format("cry ROM %s:%s",
+      tostring(rec.header.bank), tostring(rec.header.address))
+  end
   if rec.base then return "base " .. tostring(rec.base) end
+  if rec.fanfare then return "fanfare" end
   return "record"
 end
 
@@ -293,15 +424,15 @@ function Audio.draw(S, x, y, w, h, App)
     Kit.emptyBox(x, y, w, h, "Open a mod on the Project tab first")
     return
   end
+  local gen2 = Generation.isGen2(S)
   local modeY = RegList.modeChips(S, "audioMode", MODES, x, y, s)
   local mode = S.audioMode or "music"
   local proj = projectBucket(S, mode)
   local data = dataBucket(S, mode)
   local ids
   if mode == "map_songs" then
-    -- map ids from data.maps + project
+    -- map ids from live data.maps (Gold aliases gen2Maps here) + project
     ids = RegList.mergeIds(S.project.maps, S.data and S.data.maps)
-    -- also include existing mapSongs keys
     for id in pairs(proj) do
       local found = false
       for _, m in ipairs(ids) do if m == id then found = true; break end end
@@ -340,9 +471,12 @@ function Audio.draw(S, x, y, w, h, App)
           nid = "MOD_" .. mode:upper() .. "_" .. n
         end
         if mode == "music" or mode == "sfx" then
-          proj[nid] = { file = "assets/" .. nid:lower() .. ".ogg" }
+          proj[nid] = { file = "assets/" .. nid:lower() .. ".ogg", _isNew = true }
         elseif mode == "cries" then
-          proj[nid] = { file = "assets/" .. nid:lower() .. ".ogg", pitch = 128, length = 128 }
+          proj[nid] = {
+            file = "assets/" .. nid:lower() .. ".ogg",
+            pitch = 128, length = 128, _isNew = true,
+          }
         end
         S[selKey] = nid
         App.markDirty()
@@ -374,14 +508,14 @@ function Audio.draw(S, x, y, w, h, App)
     if owned then return proj[id] end
     local copy
     if mode == "map_songs" then
-      copy = tostring(rec or "Music_PalletTown")
+      copy = tostring(rec or defaultMapSong(S))
     elseif type(rec) == "string" then
-      copy = { file = rec }
+      copy = { file = rec, _isNew = false }
     elseif type(rec) == "table" then
-      copy = {}
-      for k, v in pairs(rec) do copy[k] = v end
+      copy = shallowCopyRec(rec)
+      copy._isNew = false
     else
-      copy = { file = "assets/sound.ogg" }
+      copy = { file = "assets/sound.ogg", _isNew = true }
     end
     proj[id] = copy
     owned = true
@@ -421,8 +555,7 @@ function Audio.draw(S, x, y, w, h, App)
     row("Song id", function(fx, fy_, fw, fh_)
       local cur = tostring((owned and proj[id]) or rec or "")
       local songs = RegList.sortedKeys((audioRoot(S) and audioRoot(S).songs) or {})
-      if #songs == 0 then songs = { "Music_PalletTown", "Music_Cities1", "Music_Gym" } end
-      -- include project songs
+      if #songs == 0 then songs = { unpack(fallbackSongs(S)) } end
       for sid in pairs(projectBucket(S, "music")) do
         local found = false
         for _, e in ipairs(songs) do if e == sid then found = true; break end end
@@ -439,8 +572,9 @@ function Audio.draw(S, x, y, w, h, App)
     end)
     row("Or type", function(fx, fy_, fw, fh_)
       local cur = tostring((owned and proj[id]) or rec or "")
+      local ph = gen2 and "Music_NewBarkTown" or "Music_..."
       local v = RegList.suggestField(App, S, "au_ms", fx, fy_, fw, fh_, cur,
-        "Music_...", function() return Autocomplete.songIds(S) end)
+        ph, function() return Autocomplete.songIds(S) end)
       if v ~= cur then
         proj[id] = v
         owned = true
@@ -463,21 +597,23 @@ function Audio.draw(S, x, y, w, h, App)
             local bucket = projectBucket(S, amode)
             local e = bucket[aid]
             if type(e) ~= "table" then
-              e = { file = "" }
+              e = { file = "", _isNew = false }
               bucket[aid] = e
             end
             App.importToMod(picked, nil, function(rel)
               e.file = rel
-              e.address, e.bank, e.chip = nil, nil, nil
+              clearRomFields(e)
             end)
           end)
       end
     end)
     if mode == "cries" then
+      local pitchHint = gen2 and "0-65535" or "0-255"
       row("Pitch", function(fx, fy_, fw, fh_)
         local e = owned and proj[id] or r
         local cur = (type(e) == "table" and e.pitch) or 128
-        local v = RegList.num(App, "au_pitch", fx, fy_, 80 * s, fh_, cur)
+        local v = RegList.num(App, "au_pitch", fx, fy_, 100 * s, fh_, cur)
+        Kit.text("micro", pitchHint, fx + 108 * s, fy_ + 8 * s, PAL.faint)
         if v ~= cur then
           e = ensure()
           if type(e) == "table" then e.pitch = v end
@@ -486,10 +622,24 @@ function Audio.draw(S, x, y, w, h, App)
       row("Length", function(fx, fy_, fw, fh_)
         local e = owned and proj[id] or r
         local cur = (type(e) == "table" and e.length) or 128
-        local v = RegList.num(App, "au_len", fx, fy_, 80 * s, fh_, cur)
+        local v = RegList.num(App, "au_len", fx, fy_, 100 * s, fh_, cur)
+        Kit.text("micro", pitchHint, fx + 108 * s, fy_ + 8 * s, PAL.faint)
         if v ~= cur then
           e = ensure()
           if type(e) == "table" then e.length = v end
+        end
+      end)
+    end
+    if mode == "sfx" and gen2 then
+      row("Fanfare", function(fx, fy_, fw, fh_)
+        local e = owned and proj[id] or r
+        local on = type(e) == "table" and e.fanfare == true
+        if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.green) then
+          e = ensure()
+          if type(e) == "table" then
+            e.fanfare = (not on) and true or nil
+          end
+          App.markDirty()
         end
       end)
     end

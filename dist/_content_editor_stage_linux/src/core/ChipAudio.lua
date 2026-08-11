@@ -100,12 +100,15 @@ end
 -- play so a hot-reloaded dataset (or a mod's audio) always reaches the worker
 local function slimAudio(data)
   local audio = data.audio or {}
-  -- NX-only: resolve the versioned cache prefix on the main thread and hand
-  -- it to the worker, which runs in a fresh Lua state without GameVersion.
-  local programPrefix
-  if require("src.core.Platform").isNX() then
-    local prefix = require("src.core.GameVersion").cachePrefix()
-    if prefix ~= "" then programPrefix = prefix end
+  -- Resolve the versioned cache prefix on the main thread and hand it to the
+  -- worker (fresh Lua state, no GameVersion).  Needed on NX and also helpful
+  -- on desktop when mountVersion overlays lag a thread's first read.
+  local programPrefix = audio.programPrefix
+  if not programPrefix or programPrefix == "" then
+    local ok, prefix = pcall(function()
+      return require("src.core.GameVersion").cachePrefix()
+    end)
+    if ok and prefix and prefix ~= "" then programPrefix = prefix end
   end
   return {
     programFile = audio.programFile,
@@ -153,7 +156,14 @@ local function fillSync(limit)
   limit = limit or MUSIC_FILL_PER_CALL
   local free = music.source:getFreeBufferCount()
   while free > 0 and limit > 0 and not music.engine:finished() do
-    music.source:queue(ChipSynth.soundData(music.engine, MUSIC_BUFFER_SAMPLES, 2))
+    local ok, sd = pcall(ChipSynth.soundData, music.engine,
+      MUSIC_BUFFER_SAMPLES, 2)
+    if not ok then
+      ChipAudio.lastError = tostring(sd)
+      music.finished = true
+      return
+    end
+    music.source:queue(sd)
     free = free - 1
     limit = limit - 1
   end
@@ -169,9 +179,15 @@ local function playMusicSync(data, header, allowLoops)
     love.audio.newQueueableSource, SAMPLE_RATE, 16, 2, MUSIC_BUFFER_COUNT)
   if not ok2 then return nil, source end
   ChipAudio.stopMusic()
+  ChipAudio.lastError = nil
   currentMusic = { source = source, engine = engine, threaded = false,
                    started = true, finished = false }
   fillSync(MUSIC_FILL_INITIAL)
+  if ChipAudio.lastError then
+    local err = ChipAudio.lastError
+    ChipAudio.stopMusic()
+    return nil, err
+  end
   if not musicHeld then source:play() end
   return source
 end
@@ -182,8 +198,13 @@ end
 
 local musicGen = 0
 
+-- Editor/preview can force the sync fill path: the worker may report success
+-- while never delivering buffers under some mount setups, which looks like
+-- "Play" stuck with silence.  Gameplay leaves this false.
+ChipAudio.forceSyncMusic = false
+
 function ChipAudio.playMusic(data, header, allowLoops)
-  if not ensureWorker() then
+  if ChipAudio.forceSyncMusic or not ensureWorker() then
     return playMusicSync(data, header, allowLoops)
   end
   -- validate the def on this thread (cheap: engine construction, no synthesis)
@@ -198,6 +219,7 @@ function ChipAudio.playMusic(data, header, allowLoops)
   ChipAudio.stopMusic()
   musicGen = musicGen + 1
   local gen = musicGen
+  ChipAudio.lastError = nil
   cmdCh:push({ cmd = "play", gen = gen, header = header,
                allowLoops = allowLoops, audio = slimAudio(data),
                channelVolumes = ChipSynth.getChannelVolumes(),
@@ -235,7 +257,8 @@ local function updateThreaded()
     elseif buf.done then
       m.finished = true
     elseif buf.error then
-      require("src.core.Logger").warn("chip audio: %s", tostring(buf.error))
+      ChipAudio.lastError = tostring(buf.error)
+      require("src.core.Logger").warn("chip audio: %s", ChipAudio.lastError)
       m.finished = true
     elseif buf.sd then
       if free > 0 then
@@ -252,6 +275,12 @@ local function updateThreaded()
       m.started = true
     end
   end
+end
+
+function ChipAudio.consumeLastError()
+  local err = ChipAudio.lastError
+  ChipAudio.lastError = nil
+  return err
 end
 
 function ChipAudio.update()
@@ -271,11 +300,15 @@ function ChipAudio.ensureMusicPlaying()
   local m = currentMusic
   if not m or m.finished or musicHeld then return end
   if m.threaded then
-    if not m.started then return end
+    local queued = MUSIC_BUFFER_COUNT - m.source:getFreeBufferCount()
+    if queued <= 0 then return end
+    -- Also cover the case where buffers arrived while musicHeld was true:
+    -- started stayed false, and a plain "if not started then return" would
+    -- leave the song silent forever after the fanfare released the hold.
     local ok, playing = pcall(function() return m.source:isPlaying() end)
-    if ok and not playing
-       and (MUSIC_BUFFER_COUNT - m.source:getFreeBufferCount()) > 0 then
+    if (not m.started) or (ok and not playing) then
       pcall(function() m.source:play() end)
+      m.started = true
     end
   else
     if not m.engine or m.engine:finished() then return end
@@ -329,6 +362,8 @@ function ChipAudio.stopMusic()
   pendingBuf = nil
   currentMusic = nil
   forceAwaitingFirstBuffer = nil
+  -- Stopping clears any fanfare hold so the next song is not born muted.
+  musicHeld = false
 end
 
 -- hot reload: the next play re-reads programs.bin (a mod may have swapped the
@@ -429,6 +464,29 @@ function ChipAudio.newCry(data, species, resolved)
     frequencyOffset = cry.pitch,
     cryLength = cry.length,
   })
+end
+
+-- Optional short static clip (tests / fallback). Keep ≤2s — longer pre-renders
+-- freeze the content-editor main thread. Prefer forceSyncMusic + Music.play.
+function ChipAudio.previewMusic(data, header, seconds)
+  if not header then return nil, "no song header" end
+  seconds = tonumber(seconds) or 2
+  if seconds < 0.25 then seconds = 0.25 end
+  if seconds > 2 then seconds = 2 end
+  local ok, engine = pcall(ChipSynth.newEngine, data, header,
+    { allowLoops = true })
+  if not ok then return nil, engine end
+  local samples = math.floor(SAMPLE_RATE * seconds)
+  local ok2, sd = pcall(ChipSynth.soundData, engine, samples, 2)
+  if not ok2 then return nil, sd end
+  if not (love and love.audio and love.audio.newSource) then
+    return nil, "no audio"
+  end
+  local ok3, src = pcall(love.audio.newSource, sd, "static")
+  if not ok3 or not src then return nil, ok3 and "no source" or tostring(src) end
+  pcall(src.setLooping, src, true)
+  pcall(src.setVolume, src, 0.7)
+  return src
 end
 
 -- Two channels for the same reason ChipSynth.renderEffectData renders stereo:

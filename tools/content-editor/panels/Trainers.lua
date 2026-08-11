@@ -11,8 +11,42 @@ local SpeciesPicker = require("SpeciesPicker")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
 local RegList = require("RegList")
+local Autocomplete = require("Autocomplete")
 local Pokemon = require("src.pokemon.Pokemon")
+local Generation = require("Generation")
 local PAL = Theme.PAL
+local acS -- session for RegList.suggestField (set in Trainers.draw)
+
+local function trainersRoot(S)
+  local t = S.data and S.data.trainers
+  if type(t) ~= "table" then return nil end
+  if t.classes then return t.classes end
+  return t
+end
+
+local function classIndexForId(S, classId)
+  if not classId then return nil end
+  local owned = S.project and S.project.trainers and S.project.trainers[classId]
+  if owned and type(owned.index) == "number" then return owned.index end
+  local root = trainersRoot(S)
+  local rec = root and root[classId]
+  return rec and rec.index or nil
+end
+
+local function classIdForIndex(S, index)
+  index = tonumber(index)
+  if not index then return nil end
+  local root = trainersRoot(S)
+  if root then
+    for id, rec in pairs(root) do
+      if type(rec) == "table" and rec.index == index then return id end
+    end
+  end
+  for id, rec in pairs((S.project and S.project.trainers) or {}) do
+    if type(rec) == "table" and rec.index == index then return id end
+  end
+  return nil
+end
 
 local DV_KEYS = { "attack", "defense", "speed", "special", "hp" }
 local DV_LABELS = { attack = "Atk", defense = "Def", speed = "Spe",
@@ -58,6 +92,9 @@ local function copyPartySlot(mon)
   slot.moves = copyMoves(mon.moves)
   slot.dvs = copyStatBlock(mon.dvs, DV_KEYS, 15)
   slot.statExp = copyStatBlock(mon.statExp, EV_KEYS, 65535)
+  if type(mon.item) == "string" and mon.item ~= "" then
+    slot.item = mon.item
+  end
   return slot
 end
 
@@ -206,9 +243,10 @@ local function allTrainerIds(S)
       ids[#ids + 1] = id
     end
   end
-  if S.data and S.data.trainers then
-    for id in pairs(S.data.trainers) do
-      if not seen[id] and not deleted[id] then
+  local root = trainersRoot(S)
+  if root then
+    for id in pairs(root) do
+      if id ~= "classes" and not seen[id] and not deleted[id] then
         ids[#ids + 1] = id
       end
     end
@@ -220,8 +258,9 @@ end
 local function getTrainer(S, id)
   if not id then return nil, false end
   if S.project.trainers[id] then return S.project.trainers[id], true end
-  if S.data and S.data.trainers and S.data.trainers[id] then
-    return S.data.trainers[id], false
+  local root = trainersRoot(S)
+  if root and root[id] then
+    return root[id], false
   end
   return nil, false
 end
@@ -240,13 +279,30 @@ local function deepCloneTrainer(tr, id)
     aiMods = tr.aiMods and { unpack(tr.aiMods) } or nil,
     aiClass = tr.aiClass,
     battleTheme = tr.battleTheme,
+    encounterMusic = tr.encounterMusic,
+    items = tr.items and { unpack(tr.items) } or nil,
+    attributes = tr.attributes and { unpack(tr.attributes) } or nil,
     parties = {},
+    trainers = {},
     _isNew = false,
   }
-  for pi, party in ipairs(tr.parties or {}) do
-    copy.parties[pi] = {}
-    for mi, mon in ipairs(party) do
-      copy.parties[pi][mi] = copyPartySlot(mon)
+  if type(tr.trainers) == "table" and #tr.trainers > 0 then
+    for ti, named in ipairs(tr.trainers) do
+      local nt = {
+        id = named.id, name = named.name, index = named.index,
+        trainerType = named.trainerType, party = {},
+      }
+      for mi, mon in ipairs(named.party or {}) do
+        nt.party[mi] = copyPartySlot(mon)
+      end
+      copy.trainers[ti] = nt
+    end
+  else
+    for pi, party in ipairs(tr.parties or {}) do
+      copy.parties[pi] = {}
+      for mi, mon in ipairs(party) do
+        copy.parties[pi][mi] = copyPartySlot(mon)
+      end
     end
   end
   return copy
@@ -262,7 +318,10 @@ local function ensureOwned(S, id, App)
   return copy
 end
 
-local function field(App, id, x, y, w, h, value, ph)
+local function field(App, id, x, y, w, h, value, ph, suggest)
+  if acS and suggest then
+    return RegList.suggestField(App, acS, id, x, y, w, h, value, ph, suggest)
+  end
   local v = Kit.textfield(id, x, y, w, h, value, ph)
   if v ~= tostring(value or "") then App.markDirty() end
   return v
@@ -348,6 +407,7 @@ end
 
 function Trainers.draw(S, x, y, w, h, App)
   local s = Kit.scale
+  acS = S
   if not S.project then
     Kit.emptyBox(x, y, w, h, "Open a mod on the Project tab first")
     return
@@ -404,8 +464,7 @@ function Trainers.draw(S, x, y, w, h, App)
       S.trainerId = id
       S.trainerPartyIndex = 1
     end
-    local rowPal = Preview.trainerPaletteName(S, rowTr)
-    if rowTr and rowTr.trueColor then rowPal = false end
+    local rowPal = Preview.trainerPalette(S, rowTr)
     Preview.draw(S, Preview.trainerPicPath(S, rowTr),
       x + 10 * s, ry + (rowH - thumb) / 2, thumb, thumb, rowPal)
     local textX = x + 14 * s + thumb
@@ -419,19 +478,32 @@ function Trainers.draw(S, x, y, w, h, App)
 
   if Kit.button(x, y + h - 36 * s, listW, 32 * s, "+ New trainer",
       { kind = "good" }) then
-    local nid = "OPP_NEW_TRAINER"
+    local root = trainersRoot(S)
+    local nid = Generation.isGen2(S) and "NEW_TRAINER" or "OPP_NEW_TRAINER"
     local n = 1
-    while S.project.trainers[nid] or (S.data.trainers and S.data.trainers[nid]) do
+    while S.project.trainers[nid] or (root and root[nid]) do
       n = n + 1
-      nid = "OPP_NEW_TRAINER_" .. n
+      nid = (Generation.isGen2(S) and "NEW_TRAINER_" or "OPP_NEW_TRAINER_") .. n
     end
-    S.project.trainers[nid] = {
-      id = nid, name = "COOLTRAINER", baseMoney = 20, index = 200,
-      parties = { { { level = 5, species = "PIDGEY" } } },
-      basePic = "OPP_YOUNGSTER",
-      aiMods = { 1 },
-      _isNew = true,
-    }
+    local party = { { level = 5, species = "PIDGEY" } }
+    if Generation.isGen2(S) then
+      S.project.trainers[nid] = {
+        id = nid, name = "YOUNGSTER", baseMoney = 20,
+        trainers = {
+          { name = "TRAINER", trainerType = "TRAINERTYPE_NORMAL", party = party },
+        },
+        parties = { party },
+        _isNew = true,
+      }
+    else
+      S.project.trainers[nid] = {
+        id = nid, name = "COOLTRAINER", baseMoney = 20, index = 200,
+        parties = { party },
+        basePic = "OPP_YOUNGSTER",
+        aiMods = { 1 },
+        _isNew = true,
+      }
+    end
     S.trainerId = nid
     App.markDirty()
   end
@@ -473,7 +545,8 @@ function Trainers.draw(S, x, y, w, h, App)
 
   -- Party tab strip needs the wheel before FormPane steals it for vertical scroll.
   if S.trainerSection == "parties" and (Kit.wheelY or 0) ~= 0 then
-    local n = #(tr.parties or {})
+    local n = Generation.isGen2(S)
+      and #(tr.trainers or {}) or #(tr.parties or {})
     local bw, gap, navW, actW = 56 * s, 4 * s, 28 * s, 148 * s
     local stripW = math.max(40 * s, viewW - actW - navW * 2 - 12 * s)
     local maxOff = math.max(0, n * (bw + gap) - stripW)
@@ -502,19 +575,20 @@ function Trainers.draw(S, x, y, w, h, App)
 
   if S.trainerSection == "basics" then
     local prevW = 112 * s
-    -- false = skip SGB remap (trueColor); string = palette id.
-    -- Do not use `x and false or y` — in Lua that always yields y.
-    local trPal = false
-    if not tr.trueColor then trPal = Preview.trainerPaletteName(S, tr) end
+    -- false = skip remap (trueColor); string = SGB id; table = Gen2 colors.
+    local trPal = Preview.trainerPalette(S, tr)
     local picX = viewX + viewW - prevW
     Preview.draw(S, Preview.trainerPicPath(S, tr),
       picX, fy, prevW, prevW, trPal)
     if tr.trueColor then
       Kit.text("micro", "true color", picX, fy + prevW + 4 * s, PAL.yellow)
-    else
+    elseif type(trPal) == "table" then
+      Preview.drawSwatches(trPal, picX, fy + prevW + 4 * s, prevW, 12 * s)
+    elseif type(trPal) == "string" then
       Preview.drawNamedSwatches(S, trPal, picX, fy + prevW + 4 * s, prevW, 12 * s)
     end
     local function openTrPal()
+      if Generation.isGen2(S) then return end -- Gold uses palettes.trainers[class]
       local eid = S.trainerId or tr.id
       PalettePicker.open(S, {
         current = tr.paletteSource,
@@ -540,17 +614,20 @@ function Trainers.draw(S, x, y, w, h, App)
         },
       })
     end
-    if not tr.trueColor and Kit.press(picX, fy, prevW, prevW + 18 * s) then
+    if not Generation.isGen2(S) and not tr.trueColor
+        and Kit.press(picX, fy, prevW, prevW + 18 * s) then
       openTrPal()
     end
     local textW = viewW - prevW - 16 * s
 
     row("ID", function(fx, fy_, fw, fh_)
       fw = math.min(fw, textW - labelW)
-      local v = field(App, "tr_id", fx, fy_, fw, fh_, tr.id or S.trainerId, "OPP_")
+      local ph = Generation.isGen2(S) and "YOUNGSTER" or "OPP_"
+      local v = field(App, "tr_id", fx, fy_, fw, fh_, tr.id or S.trainerId, ph)
+      local root = trainersRoot(S)
       if v ~= (tr.id or S.trainerId) and v:match("^[%w_]+$")
          and not S.project.trainers[v]
-         and not (S.data.trainers and S.data.trainers[v]) then
+         and not (root and root[v]) then
         tr = mutate()
         S.project.trainers[S.trainerId] = nil
         tr.id = v
@@ -575,20 +652,36 @@ function Trainers.draw(S, x, y, w, h, App)
         tostring(cur), "0")) or 0
       if v ~= cur then tr = mutate(); tr.index = v end
     end)
-    row("Base pic", function(fx, fy_, fw, fh_)
-      local v = field(App, "tr_base", fx, fy_, math.min(fw, textW - labelW), fh_,
-        tr.basePic or "", "OPP_YOUNGSTER")
-      if v ~= (tr.basePic or "") then
-        tr = mutate()
-        tr.basePic = (v ~= "" and v) or nil
-      end
-    end)
+    if not Generation.isGen2(S) then
+      row("Base pic", function(fx, fy_, fw, fh_)
+        local v = field(App, "tr_base", fx, fy_, math.min(fw, textW - labelW), fh_,
+          tr.basePic or "", "OPP_YOUNGSTER")
+        if v ~= (tr.basePic or "") then
+          tr = mutate()
+          tr.basePic = (v ~= "" and v) or nil
+        end
+      end)
+    end
     row("Pic path", function(fx, fy_, fw, fh_)
-      local path = tr.pic or ""
-      Kit.text("micro", path ~= "" and path or "(from base pic)",
+      local path = Preview.trainerPicPath(S, tr) or ""
+      local label
+      if tr.pic and tr.pic ~= "" then
+        label = tr.pic
+      elseif path ~= "" and Generation.isGen2(S) then
+        label = path
+      elseif path ~= "" then
+        label = "(from base pic)"
+      else
+        label = Generation.isGen2(S)
+          and "(no class pic in menu_gfx)" or "(from base pic)"
+      end
+      Kit.text("micro", Kit.ellipsize("micro", label, math.min(fw, textW - labelW) - 96 * s),
         fx, fy_ + 8 * s, PAL.muted)
       if Kit.button(fx + math.min(fw, textW - labelW) - 90 * s, fy_, 90 * s, fh_,
-          "Browse", { kind = "ghost", tooltip = "Import trainer portrait PNG" }) then
+          "Browse", { kind = "ghost",
+            tooltip = Generation.isGen2(S)
+              and "Import class frontpic (Save → gen2MenuGfx.battleHud.trainerPics)"
+              or "Import trainer portrait PNG" }) then
         tr = mutate()
         local tid = tr.id or S.trainerId
         App.pickFile("Trainer portrait PNG", "PNG (*.png)|*.png|All (*.*)|*.*",
@@ -597,10 +690,131 @@ function Trainers.draw(S, x, y, w, h, App)
             if not t then return end
           App.importToMod(picked, nil, function(rel)
               t.pic = rel
+              Preview.invalidate()
             end)
           end)
       end
     end)
+    if Generation.isGen2(S) then
+      row("Encounter music", function(fx, fy_, fw, fh_)
+        local cur = tr.encounterMusic
+        local shown = (type(cur) == "string" and cur)
+          or (cur ~= nil and tostring(cur)) or ""
+        local v = field(App, "tr_encm", fx, fy_, math.min(fw, textW - labelW), fh_,
+          shown, "Music_LookYoungster",
+          function() return Autocomplete.songIds(S) end)
+        if v ~= shown then
+          tr = mutate()
+          tr.encounterMusic = (v ~= "" and v) or nil
+        end
+      end)
+      -- TRNATTR_AI_MOVE_WEIGHTS / AI_ITEM_SWITCH live in attributes[4..7].
+      do
+        local AI_BITS = {
+          { "BASIC", 0x0001 }, { "SETUP", 0x0002 }, { "TYPES", 0x0004 },
+          { "OFFENSIVE", 0x0008 }, { "SMART", 0x0010 }, { "OPPORTUNIST", 0x0020 },
+          { "AGGRESSIVE", 0x0040 }, { "CAUTIOUS", 0x0080 },
+          { "STATUS", 0x0100 }, { "RISKY", 0x0200 },
+        }
+        local SW_BITS = {
+          { "OFTEN", 0x0001 }, { "RARELY", 0x0002 }, { "SOMETIMES", 0x0004 },
+        }
+        local function attrsOf(t)
+          local a = {}
+          for i = 1, 7 do a[i] = 0 end
+          if type(t.attributes) == "table" then
+            for i = 1, 7 do
+              a[i] = tonumber(t.attributes[i]) or 0
+            end
+          end
+          return a
+        end
+        local function aiWord(a)
+          return (a[4] or 0) + (a[5] or 0) * 256
+        end
+        local function swWord(a)
+          return (a[6] or 0) + (a[7] or 0) * 256
+        end
+        local function writeAi(a, word)
+          a[4] = word % 256
+          a[5] = math.floor(word / 256) % 256
+        end
+        local function writeSw(a, word)
+          a[6] = word % 256
+          a[7] = math.floor(word / 256) % 256
+        end
+
+        Kit.text("small", "AI layers", viewX, fy + 6 * s, PAL.caption)
+        fy = fy + 22 * s
+        local a0 = attrsOf(tr)
+        local flags = aiWord(a0)
+        local chipW, chipH, gap = 92 * s, 26 * s, 4 * s
+        local cx, cy = viewX, fy
+        local maxX = viewX + viewW
+        for _, bit in ipairs(AI_BITS) do
+          local name, mask = bit[1], bit[2]
+          local on = math.floor(flags / mask) % 2 == 1
+          if cx + chipW > maxX then
+            cx = viewX
+            cy = cy + chipH + gap
+          end
+          if Kit.chip(cx, cy, chipW, chipH, name, on, PAL.yellow) then
+            tr = mutate()
+            local a = attrsOf(tr)
+            local w = aiWord(a)
+            if on then w = w - mask else w = w + mask end
+            writeAi(a, w)
+            tr.attributes = a
+            App.markDirty()
+          end
+          cx = cx + chipW + gap
+        end
+        fy = cy + chipH + 10 * s
+
+        Kit.text("small", "Switch AI", viewX, fy + 6 * s, PAL.caption)
+        fy = fy + 22 * s
+        local sw = swWord(attrsOf(tr))
+        cx = viewX
+        for _, bit in ipairs(SW_BITS) do
+          local name, mask = bit[1], bit[2]
+          local on = math.floor(sw / mask) % 2 == 1
+          if Kit.chip(cx, fy, chipW, chipH, name, on, PAL.red) then
+            tr = mutate()
+            local a = attrsOf(tr)
+            local w = swWord(a)
+            -- Cart treats these as exclusive styles; clear siblings.
+            if on then
+              w = 0
+            else
+              w = mask
+            end
+            writeSw(a, w)
+            tr.attributes = a
+            App.markDirty()
+          end
+          cx = cx + chipW + gap
+        end
+        fy = fy + chipH + 6 * s
+        Kit.text("micro",
+          "Bits map to AI tab layers. Read AI tab for BASIC/SMART/… behavior.",
+          viewX, fy, PAL.faint)
+        fy = fy + 18 * s
+      end
+      row("Class items", function(fx, fy_, fw, fh_)
+        local joined = table.concat(tr.items or {}, ",")
+        local v = field(App, "tr_items", fx, fy_, math.min(fw, textW - labelW), fh_,
+          joined, "POTION"):upper():gsub("%s+", "")
+        if v ~= joined:upper():gsub("%s+", "") then
+          tr = mutate()
+          local items = {}
+          for part in tostring(v):gmatch("[^,]+") do
+            local id = part:match("%S+")
+            if id and id ~= "" then items[#items + 1] = id end
+          end
+          tr.items = (#items > 0) and items or nil
+        end
+      end)
+    else
     row("AI mods", function(fx, fy_, fw, fh_)
       local joined = table.concat(tr.aiMods or {}, ",")
       local v = field(App, "tr_ai", fx, fy_, math.min(fw, textW - labelW), fh_,
@@ -657,6 +871,7 @@ function Trainers.draw(S, x, y, w, h, App)
       end
       fy = fy + fh + 8 * s
     end
+    end
 
     do
       Kit.text("small", "TrueColor", viewX, fy + 6 * s, PAL.caption)
@@ -677,7 +892,7 @@ function Trainers.draw(S, x, y, w, h, App)
       fy = fy + 16 * s
     end
 
-    do
+    if not Generation.isGen2(S) then
       Kit.text("small", "Palette", viewX, fy + 6 * s, PAL.caption)
       local fx = viewX + labelW
       local fw = math.min(viewW - labelW - 12 * s, textW - labelW)
@@ -731,30 +946,117 @@ function Trainers.draw(S, x, y, w, h, App)
           fieldPrefix = "tr_pal_c",
         })
       end
+    else
+      Kit.text("micro",
+        "Gold palette: palettes.trainers[" .. tostring(tr.id or S.trainerId or "?")
+          .. "] (edit under Gfx → Trainers)",
+        viewX, fy, PAL.faint)
+      fy = fy + 18 * s
     end
 
+    local nParties = Generation.isGen2(S)
+      and #(tr.trainers or {}) or #(tr.parties or {})
     Kit.text("micro",
-      string.format("%d parties - preview uses pic or basePic",
-        #(tr.parties or {})),
+      string.format("%d %s - preview uses class pic / override",
+        nParties, Generation.isGen2(S) and "named trainers" or "parties"),
       viewX, fy + 4 * s, PAL.faint)
     fy = fy + 28 * s
 
   elseif S.trainerSection == "parties" then
-    tr.parties = tr.parties or { {} }
-    S.trainerPartyIndex = S.trainerPartyIndex or 1
-    if S.trainerPartyIndex > #tr.parties then
-      S.trainerPartyIndex = #tr.parties
+    -- Never write parties/trainers onto a vanilla class table. Alias through a
+    -- local `parties` list; mutate() clones first, then rebinds.
+    local parties
+    local function syncGen2Parties(t)
+      t.trainers = t.trainers or {}
+      if #t.trainers == 0 then
+        t.trainers[1] = {
+          name = t.name or "TRAINER",
+          trainerType = "TRAINERTYPE_NORMAL",
+          party = { { level = 5, species = "PIDGEY" } },
+        }
+      end
+      t.parties = {}
+      for i, named in ipairs(t.trainers) do
+        named.party = named.party or {}
+        t.parties[i] = named.party
+      end
+      return t.parties
     end
-    Kit.text("micro", "Each class can have multiple parties (roster variants).",
+    if Generation.isGen2(S) then
+      if owned then
+        parties = syncGen2Parties(tr)
+      else
+        parties = {}
+        for i, named in ipairs(tr.trainers or {}) do
+          parties[i] = (type(named) == "table" and named.party) or {}
+        end
+        if #parties == 0 then parties = { {} } end
+      end
+      local baseMutate = mutate
+      mutate = function()
+        tr = baseMutate()
+        owned = true
+        parties = syncGen2Parties(tr)
+        return tr
+      end
+    else
+      if owned then
+        tr.parties = tr.parties or { {} }
+        parties = tr.parties
+      else
+        parties = tr.parties or { {} }
+      end
+      local baseMutate = mutate
+      mutate = function()
+        tr = baseMutate()
+        owned = true
+        tr.parties = tr.parties or { {} }
+        parties = tr.parties
+        return tr
+      end
+    end
+    S.trainerPartyIndex = S.trainerPartyIndex or 1
+    if S.trainerPartyIndex > #parties then
+      S.trainerPartyIndex = #parties
+    end
+    Kit.text("micro", Generation.isGen2(S)
+        and "Named trainers of this class (trainerType NORMAL/MOVES/ITEM)."
+        or "Each class can have multiple parties (roster variants).",
       viewX, fy, PAL.muted)
     fy = fy + 20 * s
+    if Generation.isGen2(S) then
+      local named = tr.trainers and tr.trainers[S.trainerPartyIndex]
+      if named then
+        local TYPES = {
+          "TRAINERTYPE_NORMAL", "TRAINERTYPE_MOVES",
+          "TRAINERTYPE_ITEM", "TRAINERTYPE_ITEM_MOVES",
+        }
+        local cur = named.trainerType or "TRAINERTYPE_NORMAL"
+        if Kit.button(viewX, fy, math.min(viewW, 220 * s), fh,
+            cur:gsub("TRAINERTYPE_", ""), { kind = "accent" }) then
+          tr = mutate()
+          local idx = 1
+          for i, t in ipairs(TYPES) do if t == cur then idx = i; break end end
+          tr.trainers[S.trainerPartyIndex].trainerType =
+            TYPES[(idx % #TYPES) + 1]
+          App.markDirty()
+        end
+        local nm = field(App, "tr_named", viewX + 230 * s, fy,
+          math.max(80 * s, viewW - 240 * s), fh, named.name or "", "NAME")
+        if nm ~= (named.name or "") then
+          tr = mutate()
+          tr.trainers[S.trainerPartyIndex].name = nm
+        end
+        fy = fy + fh + 10 * s
+      end
+    end
 
     -- Scrollable P1..Pn strip; +Party / Del stay pinned on the right.
     local bw, gap = 56 * s, 4 * s
     local navW = 28 * s
     local actW = 148 * s
     local stripW = math.max(40 * s, viewW - actW - navW * 2 - 12 * s)
-    local contentW = #tr.parties * (bw + gap)
+    local contentW = #parties * (bw + gap)
     local maxOff = math.max(0, contentW - stripW)
     S.trainerPartyTabScroll = Theme.clamp(S.trainerPartyTabScroll or 0, 0, maxOff)
 
@@ -789,7 +1091,7 @@ function Trainers.draw(S, x, y, w, h, App)
 
     Kit.pushClip(stripX, fy, stripW, fh)
     local px = stripX - (S.trainerPartyTabScroll or 0)
-    for pi = 1, #tr.parties do
+    for pi = 1, #parties do
       local on = S.trainerPartyIndex == pi
       if Kit.chip(px, fy, bw, fh, "P" .. pi, on, PAL.yellow) then
         S.trainerPartyIndex = pi
@@ -816,31 +1118,45 @@ function Trainers.draw(S, x, y, w, h, App)
       end
       ax = ax + navW + 4 * s
     end
-    if #tr.parties < 20 and Kit.button(ax, fy, 70 * s, fh, "+Party",
+    if #parties < 20 and Kit.button(ax, fy, 70 * s, fh, "+Party",
         { kind = "good" }) then
       tr = mutate()
-      tr.parties[#tr.parties + 1] = { { level = 5, species = "PIDGEY" } }
-      S.trainerPartyIndex = #tr.parties
-      S.trainerPartyTabScroll = math.max(0, #tr.parties * (bw + gap) - stripW)
+      local party = { { level = 5, species = "PIDGEY" } }
+      if Generation.isGen2(S) then
+        tr.trainers = tr.trainers or {}
+        tr.trainers[#tr.trainers + 1] = {
+          name = "TRAINER", trainerType = "TRAINERTYPE_NORMAL", party = party,
+        }
+        parties = syncGen2Parties(tr)
+      else
+        parties[#parties + 1] = party
+      end
+      S.trainerPartyIndex = #parties
+      S.trainerPartyTabScroll = math.max(0, #parties * (bw + gap) - stripW)
       App.markDirty()
     end
-    if #tr.parties > 1 and Kit.button(ax + 78 * s, fy, 70 * s, fh, "Del P",
+    if #parties > 1 and Kit.button(ax + 78 * s, fy, 70 * s, fh, "Del P",
         { kind = "danger" }) then
       tr = mutate()
-      table.remove(tr.parties, S.trainerPartyIndex)
-      S.trainerPartyIndex = math.min(S.trainerPartyIndex, #tr.parties)
+      if Generation.isGen2(S) and tr.trainers then
+        table.remove(tr.trainers, S.trainerPartyIndex)
+        parties = syncGen2Parties(tr)
+      else
+        table.remove(parties, S.trainerPartyIndex)
+      end
+      S.trainerPartyIndex = math.min(S.trainerPartyIndex, #parties)
       App.markDirty()
     end
     fy = fy + fh + 12 * s
 
-    local party = tr.parties[S.trainerPartyIndex] or {}
+    local party = parties[S.trainerPartyIndex] or {}
     local prevSize = 56 * s
     local slots = math.max(1, #party)
     local numW = 44 * s
     local defDvs = defaultTrainerDvs(S)
 
     -- Bulk DVs / Stat Exp for every mon in this party (or all parties).
-    do
+    if not Generation.isGen2(S) then do
       S.trainerBulkDvs = S.trainerBulkDvs or normalizeBulkDvs(nil, defDvs)
       S.trainerBulkSe = S.trainerBulkSe or normalizeBulkSe(nil)
       Kit.text("micro", "Bulk DVs / Stat Exp — written on Save",
@@ -871,7 +1187,7 @@ function Trainers.draw(S, x, y, w, h, App)
           tooltip = "Copy these DVs onto every mon in the current party",
         }) then
         tr = mutate()
-        local p = tr.parties[S.trainerPartyIndex]
+        local p = parties[S.trainerPartyIndex]
         local dvs = normalizeBulkDvs(S.trainerBulkDvs, defDvs)
         local n = applyStatsToParty(p, dvs, nil)
         App.markDirty()
@@ -886,7 +1202,7 @@ function Trainers.draw(S, x, y, w, h, App)
         tr = mutate()
         local dvs = normalizeBulkDvs(S.trainerBulkDvs, defDvs)
         local n = 0
-        for _, p in ipairs(tr.parties or {}) do
+        for _, p in ipairs(parties) do
           n = n + applyStatsToParty(p, dvs, nil)
         end
         App.markDirty()
@@ -911,7 +1227,7 @@ function Trainers.draw(S, x, y, w, h, App)
           tooltip = "Copy these Stat Exp values onto every mon in the current party",
         }) then
         tr = mutate()
-        local p = tr.parties[S.trainerPartyIndex]
+        local p = parties[S.trainerPartyIndex]
         local se = normalizeBulkSe(S.trainerBulkSe)
         local n = applyStatsToParty(p, nil, se)
         App.markDirty()
@@ -926,14 +1242,14 @@ function Trainers.draw(S, x, y, w, h, App)
         tr = mutate()
         local se = normalizeBulkSe(S.trainerBulkSe)
         local n = 0
-        for _, p in ipairs(tr.parties or {}) do
+        for _, p in ipairs(parties) do
           n = n + applyStatsToParty(p, nil, se)
         end
         App.markDirty()
         S.status = string.format("Applied Stat Exp to %d mon(s) across all parties", n)
       end
       fy = fy + 36 * s
-    end
+    end end
 
     for mi = 1, slots do
       local mon = party[mi] or { level = 5, species = "PIDGEY" }
@@ -958,7 +1274,7 @@ function Trainers.draw(S, x, y, w, h, App)
         title = "TRAINER PARTY SPECIES",
         onPick = function(id)
           tr = mutate()
-          local p = tr.parties[S.trainerPartyIndex]
+          local p = parties[S.trainerPartyIndex]
           local cur = p[mi] or { level = 5, species = "PIDGEY" }
           p[mi] = {
             level = cur.level or 5,
@@ -966,6 +1282,7 @@ function Trainers.draw(S, x, y, w, h, App)
             moves = cur.moves,
             dvs = cur.dvs,
             statExp = cur.statExp,
+            item = cur.item,
           }
           App.markDirty()
         end,
@@ -973,11 +1290,36 @@ function Trainers.draw(S, x, y, w, h, App)
       if Kit.button(mx + 230 * s, fy, 36 * s, fh, "X", { kind = "danger" })
           and #party > 1 then
         tr = mutate()
-        table.remove(tr.parties[S.trainerPartyIndex], mi)
+        table.remove(parties[S.trainerPartyIndex], mi)
         App.markDirty()
         break
       end
       fy = fy + fh + 4 * s
+
+      local named = Generation.isGen2(S)
+        and tr.trainers and tr.trainers[S.trainerPartyIndex] or nil
+      local ttype = named and named.trainerType or ""
+      local showItem = Generation.isGen2(S) and ttype:find("ITEM", 1, true)
+      local showMoves = (not Generation.isGen2(S))
+        or ttype:find("MOVES", 1, true)
+
+      if showItem then
+        Kit.text("micro", "Held item", mx, fy, PAL.caption)
+        fy = fy + 14 * s
+        local curItem = mon.item or ""
+        local v = field(App, "tr_item_" .. mi, mx, fy, 160 * s, fh,
+          curItem, "ITEM"):upper():gsub("%s+", "_")
+        if v == "ITEM" then v = "" end
+        if v ~= curItem then
+          tr = mutate()
+          local p = parties[S.trainerPartyIndex]
+          local cur = p[mi] or { level = 5, species = "PIDGEY" }
+          cur.item = (v ~= "" and v) or nil
+          p[mi] = cur
+          App.markDirty()
+        end
+        fy = fy + fh + 8 * s
+      end
 
       local partyIdx = S.trainerPartyIndex or 1
       local defMoves = defaultMovesForMon(S, S.trainerId, partyIdx, mi, mon)
@@ -986,52 +1328,60 @@ function Trainers.draw(S, x, y, w, h, App)
       local hasDvOverride = mon.dvs ~= nil
       local hasSeOverride = mon.statExp ~= nil
 
-      -- Caption row, then fields on the next line so hints never cover inputs.
-      local moveHint = hasMoveOverride and "override" or "level-up default"
-      Kit.text("micro", "Moves · " .. moveHint, mx, fy, PAL.caption)
-      fy = fy + 14 * s
-      local moves = mon.moves or {}
-      local typedMoves = {}
-      local moveW = math.max(70 * s, math.floor((viewW - (mx - viewX) - 8 * s) / 4))
-      for slot = 1, 4 do
-        local cur = hasMoveOverride and tostring(moves[slot] or "")
-          or tostring(defMoves[slot] or "")
-        local v = field(App, "tr_mv_" .. mi .. "_" .. slot,
-          mx + (slot - 1) * (moveW + 4 * s), fy, moveW, fh,
-          cur, "MOVE"):upper():gsub("%s+", "_")
-        if v == "MOVE" then v = "" end
-        typedMoves[slot] = v
-      end
-      local newMoves = {}
-      for slot = 1, 4 do
-        if typedMoves[slot] ~= "" then
-          newMoves[#newMoves + 1] = typedMoves[slot]
+      local newMoves = mon.moves
+      if showMoves then
+        -- Caption row, then fields on the next line so hints never cover inputs.
+        local moveHint = hasMoveOverride and "override" or "level-up default"
+        Kit.text("micro", "Moves · " .. moveHint, mx, fy, PAL.caption)
+        fy = fy + 14 * s
+        local moves = mon.moves or {}
+        local typedMoves = {}
+        local moveW = math.max(70 * s, math.floor((viewW - (mx - viewX) - 8 * s) / 4))
+        for slot = 1, 4 do
+          local cur = hasMoveOverride and tostring(moves[slot] or "")
+            or tostring(defMoves[slot] or "")
+          local v = field(App, "tr_mv_" .. mi .. "_" .. slot,
+            mx + (slot - 1) * (moveW + 4 * s), fy, moveW, fh,
+            cur, "MOVE"):upper():gsub("%s+", "_")
+          if v == "MOVE" then v = "" end
+          typedMoves[slot] = v
         end
-      end
-      do
-        local same = #newMoves == #defMoves
-        if same then
-          for i = 1, #newMoves do
-            if newMoves[i] ~= defMoves[i] then same = false; break end
+        newMoves = {}
+        for slot = 1, 4 do
+          if typedMoves[slot] ~= "" then
+            newMoves[#newMoves + 1] = typedMoves[slot]
           end
         end
-        -- Keep nil unless the user actually overrides the level-up set.
-        if same and not hasMoveOverride then
-          newMoves = nil
-        elseif #newMoves == 0 and hasMoveOverride then
-          newMoves = nil
-        elseif same and hasMoveOverride then
-          -- Explicitly same as defaults: drop the override.
-          newMoves = nil
+        do
+          local same = #newMoves == #defMoves
+          if same then
+            for i = 1, #newMoves do
+              if newMoves[i] ~= defMoves[i] then same = false; break end
+            end
+          end
+          -- Keep nil unless the user actually overrides the level-up set.
+          if same and not hasMoveOverride then
+            newMoves = nil
+          elseif #newMoves == 0 and hasMoveOverride then
+            newMoves = nil
+          elseif same and hasMoveOverride then
+            -- Explicitly same as defaults: drop the override.
+            newMoves = nil
+          end
         end
+        fy = fy + fh + 8 * s
+      elseif Generation.isGen2(S) then
+        -- TRAINERTYPE_NORMAL / _ITEM: cart uses level-up moves.
+        newMoves = nil
       end
-      fy = fy + fh + 8 * s
 
+      local newDvs, newSe = mon.dvs, mon.statExp
+      if not Generation.isGen2(S) then
       local dvHint = hasDvOverride and "override" or "class default"
       Kit.text("micro", "DVs 0-15 · " .. dvHint, mx, fy, PAL.caption)
       fy = fy + 14 * s
       local dvs = hasDvOverride and (mon.dvs or {}) or defDvs
-      local newDvs = {}
+      newDvs = {}
       local dvGap = 8 * s
       local dvCell = numW + dvGap + 18 * s
       local hasDv = false
@@ -1069,7 +1419,7 @@ function Trainers.draw(S, x, y, w, h, App)
       local se = hasSeOverride and (mon.statExp or {}) or {
         hp = 0, attack = 0, defense = 0, speed = 0, special = 0,
       }
-      local newSe = {}
+      newSe = {}
       local hasSe = false
       local seGap = 8 * s
       local seCell = numW + seGap + 18 * s
@@ -1096,6 +1446,7 @@ function Trainers.draw(S, x, y, w, h, App)
         newSe = nil
       end
       fy = fy + 12 * s + fh + 10 * s
+      end
 
       local function optBlockChanged(oldB, newB, keys)
         local o = copyStatBlock(oldB, keys, nil)
@@ -1120,18 +1471,21 @@ function Trainers.draw(S, x, y, w, h, App)
           end
         end
       end
-      if optBlockChanged(mon.dvs, newDvs, DV_KEYS) then changed = true end
-      if optBlockChanged(mon.statExp, newSe, EV_KEYS) then changed = true end
+      if not Generation.isGen2(S) then
+        if optBlockChanged(mon.dvs, newDvs, DV_KEYS) then changed = true end
+        if optBlockChanged(mon.statExp, newSe, EV_KEYS) then changed = true end
+      end
 
       if changed then
         tr = mutate()
-        local p = tr.parties[S.trainerPartyIndex]
+        local p = parties[S.trainerPartyIndex]
         p[mi] = {
           level = lvl,
           species = sp,
           moves = newMoves,
-          dvs = newDvs,
-          statExp = newSe,
+          dvs = Generation.isGen2(S) and nil or newDvs,
+          statExp = Generation.isGen2(S) and nil or newSe,
+          item = mon.item,
         }
       end
 
@@ -1140,20 +1494,22 @@ function Trainers.draw(S, x, y, w, h, App)
     if #party < 6 and Kit.button(viewX, fy, 100 * s, 28 * s, "+ Mon",
         { kind = "accent" }) then
       tr = mutate()
-      local p = tr.parties[S.trainerPartyIndex]
+      local p = parties[S.trainerPartyIndex]
       p[#p + 1] = { level = 5, species = "PIDGEY" }
       App.markDirty()
     end
 
   else -- place
-    Kit.text("micro",
-      "Beat flags are per map object. Prefer Maps → Objects → Beat flag.",
+    Kit.text("micro", Generation.isGen2(S)
+        and "Gold placements use object.trainer (class index + member). Edit on Maps."
+        or "Beat flags are per map object. Prefer Maps → Objects → Beat flag.",
       viewX, fy, PAL.muted)
     fy = fy + 18 * s
     if Kit.button(viewX, fy, 180 * s, 30 * s, "Use on Maps tab",
         { kind = "primary" }) then
       S.tab = "maps"
       S.mapTool = "trainer"
+      S.placeTrainerParty = S.trainerPartyIndex or 1
       S.status = "Trainer tool active — click a cell to place "
         .. tostring(S.trainerId)
     end
@@ -1168,8 +1524,25 @@ function Trainers.draw(S, x, y, w, h, App)
       local mapDef = (S.project.maps and S.project.maps[mapId])
         or (S.data and S.data.maps and S.data.maps[mapId])
       local placements = {}
+      local selClassIdx = Generation.isGen2(S)
+        and classIndexForId(S, S.trainerId) or nil
       for i, obj in ipairs((mapDef and mapDef.objects) or {}) do
-        if obj.trainerClass and obj.trainerClass ~= "" then
+        if Generation.isGen2(S) then
+          local t = obj.trainer
+          if type(t) == "table" and t.class ~= nil then
+            placements[#placements + 1] = {
+              listI = i,
+              idx = obj.index or i,
+              class = classIdForIndex(S, t.class) or tostring(t.class),
+              classIndex = tonumber(t.class),
+              party = tonumber(t.member) or 1,
+              sight = obj.sight,
+              event = t.event,
+              seenText = t.seenText,
+              winText = t.winText,
+            }
+          end
+        elseif obj.trainerClass and obj.trainerClass ~= "" then
           placements[#placements + 1] = {
             listI = i,
             idx = obj.index or i,
@@ -1181,7 +1554,15 @@ function Trainers.draw(S, x, y, w, h, App)
       -- Prefer placements of the selected class; fall back to all on this map.
       local shown = {}
       for _, p in ipairs(placements) do
-        if p.class == S.trainerId then shown[#shown + 1] = p end
+        if Generation.isGen2(S) then
+          if selClassIdx and p.classIndex == selClassIdx then
+            shown[#shown + 1] = p
+          elseif p.class == S.trainerId then
+            shown[#shown + 1] = p
+          end
+        elseif p.class == S.trainerId then
+          shown[#shown + 1] = p
+        end
       end
       if #shown == 0 then shown = placements end
 
@@ -1204,7 +1585,7 @@ function Trainers.draw(S, x, y, w, h, App)
         end
         for _, p in ipairs(shown) do
           local on = selIdx == p.idx
-          local lab = string.format("#%d  %s  party %d",
+          local lab = string.format("#%d  %s  member %d",
             p.idx, p.class or "?", p.party or 1)
           if Kit.row(viewX, fy, viewW, rowH, on, PAL.red) then
             if selIdx ~= p.idx then Kit.blur() end
@@ -1225,145 +1606,173 @@ function Trainers.draw(S, x, y, w, h, App)
         end
         picked = picked or shown[1]
         idx = picked.idx
-        -- Field ids include map + object index so typing never bleeds.
-        local fid = "_" .. tostring(mapId) .. "_" .. tostring(idx)
-        local uniq = (mapId or "MAP") .. "_" .. idx
-        State.ensureProjectFields(S.project)
-        S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-        local bucket = S.project.trainer_headers[label]
 
-        local function cloneHdr(src)
-          local c = {}
-          if type(src) == "table" then
-            for k, v in pairs(src) do c[k] = v end
+        if Generation.isGen2(S) then
+          Kit.text("micro",
+            string.format("Object #%d · class %s (%s) · member %d",
+              idx, tostring(picked.classIndex or "?"),
+              tostring(picked.class or "?"), picked.party or 1),
+            viewX, fy, PAL.faint)
+          fy = fy + 16 * s
+          if picked.seenText and picked.seenText ~= "" then
+            Kit.text("micro", "seenText " .. tostring(picked.seenText),
+              viewX, fy, PAL.muted)
+            fy = fy + 14 * s
           end
-          return c
-        end
+          if picked.winText and picked.winText ~= "" then
+            Kit.text("micro", "winText " .. tostring(picked.winText),
+              viewX, fy, PAL.muted)
+            fy = fy + 14 * s
+          end
+          if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
+              { kind = "ghost" }) then
+            S.tab = "maps"
+            S.mapId = mapId
+            S.mapSection = "objects"
+            S.mapObjectIndex = picked.listI
+          end
+          fy = fy + 36 * s
+        else
+          -- Field ids include map + object index so typing never bleeds.
+          local fid = "_" .. tostring(mapId) .. "_" .. tostring(idx)
+          local uniq = (mapId or "MAP") .. "_" .. idx
+          State.ensureProjectFields(S.project)
+          S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
+          local bucket = S.project.trainer_headers[label]
 
-        -- Break accidental shared table refs across object indices.
-        local function isolate(i)
-          local h = bucket[i]
-          if type(h) ~= "table" then return h end
-          for other, oh in pairs(bucket) do
-            if other ~= i and oh == h then
-              bucket[other] = cloneHdr(oh)
+          local function cloneHdr(src)
+            local c = {}
+            if type(src) == "table" then
+              for k, v in pairs(src) do c[k] = v end
+            end
+            return c
+          end
+
+          -- Break accidental shared table refs across object indices.
+          local function isolate(i)
+            local h = bucket[i]
+            if type(h) ~= "table" then return h end
+            for other, oh in pairs(bucket) do
+              if other ~= i and oh == h then
+                bucket[other] = cloneHdr(oh)
+              end
+            end
+            return bucket[i]
+          end
+
+          local function ensureHdr()
+            local h = bucket[idx]
+            if not h then
+              h = {
+                range = 2,
+                battle = "_" .. uniq .. "Battle",
+                won = "_" .. uniq .. "Won",
+                after = "_" .. uniq .. "After",
+                event = State.modFlag(S.project, "BEAT_" .. uniq),
+                opponent = picked.class or S.trainerId,
+                party = picked.party or 1,
+              }
+              bucket[idx] = h
+              S.project.eventFlags = S.project.eventFlags or {}
+              S.project.eventFlags[h.event] = true
+            else
+              h = isolate(idx)
+              bucket[idx] = h
+            end
+            App.markDirty()
+            return h
+          end
+
+          local hdr = bucket[idx]
+          local draft = hdr or {
+            range = 2,
+            battle = "_" .. uniq .. "Battle",
+            won = "_" .. uniq .. "Won",
+            after = "_" .. uniq .. "After",
+            event = State.modFlag(S.project, "BEAT_" .. uniq),
+            opponent = picked.class or S.trainerId,
+            party = picked.party or 1,
+          }
+
+          Kit.text("micro",
+            "Editing object #" .. tostring(idx) .. " only",
+            viewX, fy, PAL.faint)
+          fy = fy + 16 * s
+
+          local range = tonumber(field(App, "tr_hdr_range" .. fid, viewX, fy, 50 * s, fh,
+            tostring(draft.range or 2), "2")) or 2
+          if range ~= (draft.range or 2) then
+            draft = ensureHdr(); draft.range = range
+          end
+          Kit.text("micro", "sight range", viewX + 58 * s, fy + 6 * s, PAL.faint)
+          fy = fy + fh + 4 * s
+
+          local partyN = tonumber(field(App, "tr_hdr_party" .. fid, viewX, fy, 50 * s, fh,
+            tostring(draft.party or 1), "1")) or 1
+          if partyN ~= (draft.party or 1) then
+            draft = ensureHdr(); draft.party = partyN
+            if mapDef and mapDef.objects and mapDef.objects[picked.listI] then
+              mapDef.objects[picked.listI].trainerParty = partyN
             end
           end
-          return bucket[i]
-        end
+          Kit.text("micro", "party #", viewX + 58 * s, fy + 6 * s, PAL.faint)
+          fy = fy + fh + 4 * s
 
-        local function ensureHdr()
-          local h = bucket[idx]
-          if not h then
-            h = {
-              range = 2,
-              battle = "_" .. uniq .. "Battle",
-              won = "_" .. uniq .. "Won",
-              after = "_" .. uniq .. "After",
-              event = State.modFlag(S.project, "BEAT_" .. uniq),
-              opponent = picked.class or S.trainerId,
-              party = picked.party or 1,
-            }
-            bucket[idx] = h
-            S.project.eventFlags = S.project.eventFlags or {}
-            S.project.eventFlags[h.event] = true
-          else
-            h = isolate(idx)
-            bucket[idx] = h
+          local battle = field(App, "tr_hdr_b" .. fid, viewX, fy, viewW, fh,
+            draft.battle or "", "_Battle")
+          if battle ~= (draft.battle or "") then
+            draft = ensureHdr(); draft.battle = battle
           end
-          App.markDirty()
-          return h
-        end
-
-        local hdr = bucket[idx]
-        local draft = hdr or {
-          range = 2,
-          battle = "_" .. uniq .. "Battle",
-          won = "_" .. uniq .. "Won",
-          after = "_" .. uniq .. "After",
-          event = State.modFlag(S.project, "BEAT_" .. uniq),
-          opponent = picked.class or S.trainerId,
-          party = picked.party or 1,
-        }
-
-        Kit.text("micro",
-          "Editing object #" .. tostring(idx) .. " only",
-          viewX, fy, PAL.faint)
-        fy = fy + 16 * s
-
-        local range = tonumber(field(App, "tr_hdr_range" .. fid, viewX, fy, 50 * s, fh,
-          tostring(draft.range or 2), "2")) or 2
-        if range ~= (draft.range or 2) then
-          draft = ensureHdr(); draft.range = range
-        end
-        Kit.text("micro", "sight range", viewX + 58 * s, fy + 6 * s, PAL.faint)
-        fy = fy + fh + 4 * s
-
-        local partyN = tonumber(field(App, "tr_hdr_party" .. fid, viewX, fy, 50 * s, fh,
-          tostring(draft.party or 1), "1")) or 1
-        if partyN ~= (draft.party or 1) then
-          draft = ensureHdr(); draft.party = partyN
-          if mapDef and mapDef.objects and mapDef.objects[picked.listI] then
-            mapDef.objects[picked.listI].trainerParty = partyN
+          fy = fy + fh + 4 * s
+          local won = field(App, "tr_hdr_w" .. fid, viewX, fy, viewW, fh,
+            draft.won or "", "_Won")
+          if won ~= (draft.won or "") then
+            draft = ensureHdr(); draft.won = won
           end
-        end
-        Kit.text("micro", "party #", viewX + 58 * s, fy + 6 * s, PAL.faint)
-        fy = fy + fh + 4 * s
+          fy = fy + fh + 4 * s
+          local after = field(App, "tr_hdr_a" .. fid, viewX, fy, viewW, fh,
+            draft.after or "", "_After")
+          if after ~= (draft.after or "") then
+            draft = ensureHdr(); draft.after = after
+          end
+          fy = fy + fh + 4 * s
 
-        local battle = field(App, "tr_hdr_b" .. fid, viewX, fy, viewW, fh,
-          draft.battle or "", "_Battle")
-        if battle ~= (draft.battle or "") then
-          draft = ensureHdr(); draft.battle = battle
-        end
-        fy = fy + fh + 4 * s
-        local won = field(App, "tr_hdr_w" .. fid, viewX, fy, viewW, fh,
-          draft.won or "", "_Won")
-        if won ~= (draft.won or "") then
-          draft = ensureHdr(); draft.won = won
-        end
-        fy = fy + fh + 4 * s
-        local after = field(App, "tr_hdr_a" .. fid, viewX, fy, viewW, fh,
-          draft.after or "", "_After")
-        if after ~= (draft.after or "") then
-          draft = ensureHdr(); draft.after = after
-        end
-        fy = fy + fh + 4 * s
+          local event = field(App, "tr_hdr_e" .. fid, viewX, fy, viewW, fh,
+            draft.event or "", "MOD_BEAT_")
+          if event ~= (draft.event or "") then
+            draft = ensureHdr()
+            local full = State.modFlag(S.project,
+              (event ~= "" and event) or ("BEAT_" .. uniq))
+            -- Write only this object index (never broadcast to other trainers).
+            -- Do not touch eventFlags here — each keystroke would leave partials;
+            -- Save / load rebuild from finished header.event values.
+            draft.event = full
+            bucket[idx] = draft
+            App.markDirty()
+          end
+          fy = fy + fh + 8 * s
 
-        local event = field(App, "tr_hdr_e" .. fid, viewX, fy, viewW, fh,
-          draft.event or "", "MOD_BEAT_")
-        if event ~= (draft.event or "") then
-          draft = ensureHdr()
-          local full = State.modFlag(S.project,
-            (event ~= "" and event) or ("BEAT_" .. uniq))
-          -- Write only this object index (never broadcast to other trainers).
-          -- Do not touch eventFlags here — each keystroke would leave partials;
-          -- Save / load rebuild from finished header.event values.
-          draft.event = full
-          bucket[idx] = draft
-          App.markDirty()
-        end
-        fy = fy + fh + 8 * s
-
-        if bucket[idx] then
-          for _, key in ipairs({ "battle", "won", "after" }) do
-            local tid = draft[key]
-            if type(tid) == "string" and tid:sub(1, 1) == "_"
-                and not S.project.text[tid] then
-              S.project.text[tid] = (key == "battle" and "Let's fight!")
-                or (key == "won" and "I lost...")
-                or "You're strong."
+          if bucket[idx] then
+            for _, key in ipairs({ "battle", "won", "after" }) do
+              local tid = draft[key]
+              if type(tid) == "string" and tid:sub(1, 1) == "_"
+                  and not S.project.text[tid] then
+                S.project.text[tid] = (key == "battle" and "Let's fight!")
+                  or (key == "won" and "I lost...")
+                  or "You're strong."
+              end
             end
           end
-        end
 
-        if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
-            { kind = "ghost" }) then
-          S.tab = "maps"
-          S.mapId = mapId
-          S.mapSection = "objects"
-          S.mapObjectIndex = picked.listI
+          if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
+              { kind = "ghost" }) then
+            S.tab = "maps"
+            S.mapId = mapId
+            S.mapSection = "objects"
+            S.mapObjectIndex = picked.listI
+          end
+          fy = fy + 36 * s
         end
-        fy = fy + 36 * s
       end
     end
   end
@@ -1383,7 +1792,7 @@ function Trainers.draw(S, x, y, w, h, App)
       "Delete", { kind = "danger",
         tooltip = "Remove from this mod (Save emits content:remove)" }) then
     State.markDeleted(S.project, "trainers", S.trainerId, tr,
-      S.data and S.data.trainers)
+      trainersRoot(S))
     local ids = allTrainerIds(S)
     S.trainerId = ids[1]
     App.markDirty()

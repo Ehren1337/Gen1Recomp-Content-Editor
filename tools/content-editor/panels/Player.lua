@@ -1,5 +1,6 @@
 -- Player tab: overworld wearable sprites (walk/bike/surf/fly) + battle /
--- intro pics.  Remaps write field.playerSprites / field.playerPics; sheet
+-- intro pics.  Gen1 remaps write field.playerSprites / field.playerPics;
+-- Gold remaps write data.gen2PlayerSprites + gen2MenuGfx paths.  Sheet
 -- edits go through project.sprites (same as GFX).
 
 local Kit = require("Kit")
@@ -9,18 +10,30 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
+local SpriteUtil = require("SpriteUtil")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Player = {}
 
-local MODES = {
-  { id = "overworld", label = "Overworld",
-    tip = "Walk / bike / surf / fly sprite sheets and slot remaps" },
-  { id = "pics", label = "Pics",
-    tip = "Battle back pic, trainer card / intro front pic" },
-}
+local function modesFor(S)
+  if Generation.isGen2(S) then
+    return {
+      { id = "overworld", label = "Overworld",
+        tip = "Walk / bike / surf sprite sheets and Chris slot remaps" },
+      { id = "pics", label = "Pics",
+        tip = "Battle back, Dude back, Oak-speech front (card art: UI → Badges)" },
+    }
+  end
+  return {
+    { id = "overworld", label = "Overworld",
+      tip = "Walk / bike / surf / fly sprite sheets and slot remaps" },
+    { id = "pics", label = "Pics",
+      tip = "Battle back pic, trainer card / intro front pic" },
+  }
+end
 
-local OW_SLOTS = {
+local OW_SLOTS_GEN1 = {
   { id = "walk", label = "Walk", tip = "On-foot player (default SPRITE_RED)" },
   { id = "bike", label = "Bike", tip = "Bicycle (default SPRITE_RED_BIKE)" },
   { id = "surf", label = "Surf", tip = "Surfing mount (default SPRITE_SEEL)" },
@@ -29,13 +42,38 @@ local OW_SLOTS = {
     tip = "Yellow: surf when party Pikachu (SPRITE_SURFING_PIKACHU)" },
 }
 
-local PIC_SLOTS = {
+local OW_SLOTS_GEN2 = {
+  { id = "walk", label = "Walk", tip = "On-foot Chris (SPRITE_CHRIS)" },
+  { id = "bike", label = "Bike", tip = "Bicycle (SPRITE_CHRIS_BIKE)" },
+  { id = "surf", label = "Surf", tip = "Surfing mount (SPRITE_SURF)" },
+  { id = "surfPikachu", label = "Surf Pika",
+    tip = "Surf when party Pikachu (SPRITE_SURFING_PIKACHU)" },
+}
+
+local PIC_SLOTS_GEN1 = {
   { id = "front", label = "Front",
     tip = "Trainer card / Oak intro / Hall of Fame" },
   { id = "back", label = "Back", tip = "Battle back pic (Go! …)" },
   { id = "demoBack", label = "Demo back", tip = "Old man catch tutorial" },
   { id = "oakBack", label = "Oak back", tip = "Yellow Pallet catch (Oak)" },
 }
+
+local PIC_SLOTS_GEN2 = {
+  { id = "front", label = "Front",
+    tip = "Oak speech / intro player pic (data.playerPic)" },
+  { id = "back", label = "Back",
+    tip = "Battle back pic (gen2MenuGfx.battleHud.playerBack)" },
+  { id = "demoBack", label = "Dude back",
+    tip = "Catch tutorial Dude (gen2MenuGfx.battleHud.dudeBack)" },
+}
+
+local function owSlots(S)
+  return Generation.isGen2(S) and OW_SLOTS_GEN2 or OW_SLOTS_GEN1
+end
+
+local function picSlots(S)
+  return Generation.isGen2(S) and PIC_SLOTS_GEN2 or PIC_SLOTS_GEN1
+end
 
 local FRAME_LABELS = {
   "Stand v", "Stand ^", "Stand <", "Walk v", "Walk ^", "Walk <",
@@ -56,7 +94,17 @@ local function defaults()
   return nil
 end
 
-local function defaultPlayerSprites()
+local function defaultPlayerSprites(S)
+  if Generation.isGen2(S) then
+    local ok, FieldMoves = pcall(require, "src.world.gen2.FieldMoves")
+    local st = ok and FieldMoves and FieldMoves.STATE_SPRITE or nil
+    return {
+      walk = (st and st.normal) or "SPRITE_CHRIS",
+      bike = (st and st.bike) or "SPRITE_CHRIS_BIKE",
+      surf = (st and st.surf) or "SPRITE_SURF",
+      surfPikachu = (st and st.surf_pika) or "SPRITE_SURFING_PIKACHU",
+    }
+  end
   local fd = defaults()
   return (fd and fd.FIELD.playerSprites) or {
     walk = "SPRITE_RED", bike = "SPRITE_RED_BIKE", surf = "SPRITE_SEEL",
@@ -64,7 +112,20 @@ local function defaultPlayerSprites()
   }
 end
 
-local function defaultPlayerPics()
+local function menuGfx(S)
+  return S.data and (S.data.gen2MenuGfx or S.data.menu_gfx) or nil
+end
+
+local function defaultPlayerPics(S)
+  if Generation.isGen2(S) then
+    local hud = menuGfx(S) and menuGfx(S).battleHud or {}
+    return {
+      back = hud.playerBack or "assets/generated/battle/player_back.png",
+      demoBack = hud.dudeBack or "assets/generated/battle/dude_back.png",
+      front = (S.data and S.data.playerPic)
+        or "assets/generated/intro/cal.png",
+    }
+  end
   local fd = defaults()
   return (fd and fd.FIELD.playerPics) or {
     back = "assets/generated/battle/redb.png",
@@ -79,12 +140,19 @@ local function slotSpriteId(S, slot)
   if proj and type(proj[slot]) == "string" and proj[slot] ~= "" then
     return proj[slot], true
   end
+  if Generation.isGen2(S) then
+    local ov = S.data and S.data.gen2PlayerSprites
+    if ov and type(ov[slot]) == "string" and ov[slot] ~= "" then
+      return ov[slot], false
+    end
+    return defaultPlayerSprites(S)[slot], false
+  end
   local fd = defaults()
   if fd and fd.fieldValue then
     local v = fd.fieldValue(S.data, "playerSprites", slot)
     if type(v) == "string" and v ~= "" then return v, false end
   end
-  return defaultPlayerSprites()[slot], false
+  return defaultPlayerSprites(S)[slot], false
 end
 
 local function slotPicPath(S, slot)
@@ -92,12 +160,15 @@ local function slotPicPath(S, slot)
   if proj and type(proj[slot]) == "string" and proj[slot] ~= "" then
     return proj[slot], true
   end
+  if Generation.isGen2(S) then
+    return defaultPlayerPics(S)[slot], false
+  end
   local fd = defaults()
   if fd and fd.fieldValue then
     local v = fd.fieldValue(S.data, "playerPics", slot)
     if type(v) == "string" and v ~= "" then return v, false end
   end
-  return defaultPlayerPics()[slot], false
+  return defaultPlayerPics(S)[slot], false
 end
 
 local function resolveSprite(S, id)
@@ -136,7 +207,7 @@ end
 
 local function setSlotSprite(S, slot, spriteId, App)
   State.ensureProjectFields(S.project)
-  local def = defaultPlayerSprites()[slot]
+  local def = defaultPlayerSprites(S)[slot]
   if spriteId == nil or spriteId == "" or spriteId == def then
     S.project.playerSprites[slot] = nil
   else
@@ -147,7 +218,7 @@ end
 
 local function setSlotPic(S, slot, path, App)
   State.ensureProjectFields(S.project)
-  local def = defaultPlayerPics()[slot]
+  local def = defaultPlayerPics(S)[slot]
   if path == nil or path == "" or path == def then
     S.project.playerPics[slot] = nil
   else
@@ -156,9 +227,14 @@ local function setSlotPic(S, slot, path, App)
   if App then App.markDirty() end
 end
 
+-- Gen1: SGB palette name (MEWMON default). Gold: PAL_OW_* color row
+-- (same as Gfx / Maps — paletteSource is Gen1-only).
 local function spritePal(S, rec)
   if not rec or rec.trueColor then return nil end
-  local src = rec.paletteSource
+  if Generation.isGen2(S) then
+    return Preview.gen2ObjectPalette(S, rec.palette or rec.paletteId)
+  end
+  local src = rec.paletteSource or rec.palette
   if type(src) == "string" and src ~= "" and Preview.paletteColors(S, src) then
     return src
   end
@@ -326,8 +402,17 @@ local function drawOverworld(S, x, y, w, h, App)
   S.project.sprites = S.project.sprites or {}
   S.project.playerSprites = S.project.playerSprites or {}
 
+  local slots = owSlots(S)
   local slotIds = {}
-  for _, slot in ipairs(OW_SLOTS) do slotIds[#slotIds + 1] = slot.id end
+  for _, slot in ipairs(slots) do slotIds[#slotIds + 1] = slot.id end
+  -- Drop a Gen1-only selection (fly) after switching to Gold.
+  do
+    local ok = false
+    for _, id in ipairs(slotIds) do
+      if id == S.playerOwSlot then ok = true; break end
+    end
+    if not ok then S.playerOwSlot = slotIds[1] or "walk" end
+  end
 
   local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, y, w, h,
     "PLAYER SPRITES", slotIds, {
@@ -353,7 +438,7 @@ local function drawOverworld(S, x, y, w, h, App)
   if not S.playerOwSlot then S.playerOwSlot = shown[1] or "walk" end
   local slot = S.playerOwSlot
   local slotMeta
-  for _, row in ipairs(OW_SLOTS) do
+  for _, row in ipairs(slots) do
     if row.id == slot then slotMeta = row; break end
   end
 
@@ -377,8 +462,9 @@ local function drawOverworld(S, x, y, w, h, App)
     viewX, fy, PAL.muted)
   fy = fy + 18 * s
 
-  Kit.text("micro",
-    "Sheet layout: 16×(16×frames). Walkers use 6 frames — stand D/U/L, walk D/U/L; right = flip left.",
+  Kit.text("micro", Generation.isGen2(S)
+      and "Gold: ChrisStateSprites. Remap writes gen2PlayerSprites; sheet → sprites:patch."
+      or "Sheet layout: 16×(16×frames). Walkers use 6 frames — stand D/U/L, walk D/U/L; right = flip left.",
     viewX, fy, PAL.faint)
   fy = fy + 28 * s
 
@@ -390,8 +476,9 @@ local function drawOverworld(S, x, y, w, h, App)
 
   row("Sprite id", function(fx, fy_, fw, fh_)
     local cur = spriteId or ""
+    local ph = Generation.isGen2(S) and "SPRITE_CHRIS" or "SPRITE_RED"
     local v = RegList.field(App, "pl_sid", fx, fy_, math.max(40 * s, fw - 100 * s),
-      fh_, cur, "SPRITE_RED")
+      fh_, cur, ph)
     if v ~= cur and v:match("^[%w_]+$") then
       setSlotSprite(S, slot, v, App)
       spriteId = v
@@ -431,7 +518,10 @@ local function drawOverworld(S, x, y, w, h, App)
   local pal = spritePal(S, rec)
   local prevY = fy
   Preview.draw(S, rec.image, viewX + viewW - prev, prevY, prev, prev, pal)
-  if pal then
+  if type(pal) == "table" then
+    Preview.drawSwatches(pal,
+      viewX + viewW - prev, prevY + prev + 4 * s, prev, 12 * s)
+  elseif type(pal) == "string" then
     Preview.drawNamedSwatches(S, pal,
       viewX + viewW - prev, prevY + prev + 4 * s, prev, 12 * s)
   end
@@ -485,7 +575,8 @@ local function drawOverworld(S, x, y, w, h, App)
 
   row("TrueColor", function(fx, fy_, fw, fh_)
     local on = rec.trueColor and true or false
-    if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+    if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow,
+        nil, "YES = raw PNG colors (skip palette remap)") then
       local e = ensure()
       e.trueColor = not on
       if not e.trueColor then e.trueColor = nil end
@@ -493,37 +584,83 @@ local function drawOverworld(S, x, y, w, h, App)
       Preview.invalidate()
       App.markDirty()
     end
+    Kit.text("micro",
+      on and "raw PNG"
+        or (Generation.isGen2(S) and "OBJ remap" or "SGB remap"),
+      fx + 90 * s, fy_ + 8 * s, PAL.faint)
   end)
 
-  row("Palette", function(fx, fy_, fw, fh_)
-    PalettePicker.row(S, {
-      x = fx, y = fy_, w = fw, h = fh_,
-      current = rec.paletteSource or "",
-      effective = pal,
-      emptyLabel = "(MEWMON)",
-      clearLabel = "(MEWMON default)",
-      allowClear = true,
-      title = "PLAYER SPRITE PALETTE",
-      tooltip = "SGB palette for this overworld sheet",
-      onPick = function(id)
+  if Generation.isGen2(S) then
+    row("Palette", function(fx, fy_, fw, fh_)
+      if rec.trueColor then
+        Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+        return
+      end
+      local cur = rec.palette or "PAL_OW_RED"
+      if Kit.button(fx, fy_, math.min(fw, 160 * s), fh_,
+          Kit.ellipsize("small", cur, math.min(fw, 160 * s) - 8 * s),
+          { kind = "ghost", tooltip = "Cycle PAL_OW_*" }) then
         local e = ensure()
-        e.paletteSource = id
+        e.palette = RegList.cycle(SpriteUtil.OW_PALETTES, cur)
+        local idx
+        for i, name in ipairs(SpriteUtil.OW_PALETTES) do
+          if name == e.palette then idx = i - 1; break end
+        end
+        if idx then e.paletteId = idx end
+        rec = e
         Preview.invalidate()
         App.markDirty()
-      end,
-      owner = {
-        kind = "sprite",
-        entityId = spriteId,
-        entityLabel = spriteId,
-        assign = function(id)
+      end
+      local colors = spritePal(S, rec)
+      if colors then
+        Preview.drawSwatches(colors, fx + fw - 80 * s,
+          fy_ + (fh_ - 14 * s) / 2, 80 * s, 14 * s)
+      end
+    end)
+    row("Palette id", function(fx, fy_, fw, fh_)
+      local cur = tonumber(rec.paletteId) or 0
+      local v = RegList.num(App, "pl_pid", fx, fy_, 60 * s, fh_, cur)
+      v = math.max(0, math.min(7, math.floor(v)))
+      if v ~= cur then
+        local e = ensure()
+        e.paletteId = v
+        e.palette = SpriteUtil.OW_PALETTES[v + 1] or e.palette
+        rec = e
+        Preview.invalidate()
+        App.markDirty()
+      end
+    end)
+  else
+    row("Palette", function(fx, fy_, fw, fh_)
+      PalettePicker.row(S, {
+        x = fx, y = fy_, w = fw, h = fh_,
+        current = rec.paletteSource or "",
+        effective = type(pal) == "string" and pal or nil,
+        emptyLabel = "(MEWMON)",
+        clearLabel = "(MEWMON default)",
+        allowClear = true,
+        title = "PLAYER SPRITE PALETTE",
+        tooltip = "SGB palette for this overworld sheet",
+        onPick = function(id)
           local e = ensure()
           e.paletteSource = id
           Preview.invalidate()
           App.markDirty()
         end,
-      },
-    })
-  end)
+        owner = {
+          kind = "sprite",
+          entityId = spriteId,
+          entityLabel = spriteId,
+          assign = function(id)
+            local e = ensure()
+            e.paletteSource = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+        },
+      })
+    end)
+  end
 
   fy = fy + 4 * s
   fy = drawAnimPreview(S, rec, viewX, fy, viewW, s)
@@ -555,8 +692,16 @@ local function drawPics(S, x, y, w, h, App)
   State.ensureProjectFields(S.project)
   S.project.playerPics = S.project.playerPics or {}
 
+  local slots = picSlots(S)
   local slotIds = {}
-  for _, slot in ipairs(PIC_SLOTS) do slotIds[#slotIds + 1] = slot.id end
+  for _, slot in ipairs(slots) do slotIds[#slotIds + 1] = slot.id end
+  do
+    local ok = false
+    for _, id in ipairs(slotIds) do
+      if id == S.playerPicSlot then ok = true; break end
+    end
+    if not ok then S.playerPicSlot = slotIds[1] or "front" end
+  end
 
   local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, y, w, h,
     "PLAYER PICS", slotIds, {
@@ -573,7 +718,7 @@ local function drawPics(S, x, y, w, h, App)
   if not S.playerPicSlot then S.playerPicSlot = shown[1] or "front" end
   local slot = S.playerPicSlot
   local slotMeta
-  for _, row in ipairs(PIC_SLOTS) do
+  for _, row in ipairs(slots) do
     if row.id == slot then slotMeta = row; break end
   end
   local path, owned = slotPicPath(S, slot)
@@ -642,7 +787,7 @@ function Player.draw(S, x, y, w, h, App)
   end
   State.ensureProjectFields(S.project)
 
-  local modeY = RegList.modeChips(S, "playerMode", MODES, x, y, s)
+  local modeY = RegList.modeChips(S, "playerMode", modesFor(S), x, y, s)
   local mode = S.playerMode or "overworld"
   if mode == "pics" then
     drawPics(S, x, modeY, w, h - (modeY - y), App)

@@ -41,9 +41,10 @@ local PAL = {
   blue        = { 70, 150, 255 },  -- #4696ff
   blueInk     = { 207, 224, 255 }, -- #cfe0ff  ink on blue-tinted controls
   steel       = { 149, 161, 189 }, -- #95a1bd  disabled
-  -- the tri-colour version rail, identical to the launcher's
+  -- version rail: Red / Blue / Yellow / Gold
   railRed     = { 255, 60, 72 },
   railBlue    = { 70, 150, 255 },
+  railYellow  = { 255, 220, 60 },
   railGold    = { 255, 203, 5 },
   -- chip / tab tile gradient (the launcher's mod chip)
   chipTop     = { 61, 74, 109 },   -- #3d4a6d
@@ -312,11 +313,11 @@ function Theme.field(w, h)
   G.draw(mesh)
 end
 
--- The 6px tri-colour rail across the very top of both windows.
+-- The 6px four-colour rail across the very top of both windows (R/B/Y/Gold).
 function Theme.versionRail(x, y, w, h)
   if not G then return end
-  local seg = w / 3
-  local bars = { PAL.railRed, PAL.railBlue, PAL.railGold }
+  local bars = { PAL.railRed, PAL.railBlue, PAL.railYellow or PAL.yellow, PAL.railGold }
+  local seg = w / #bars
   for i, c in ipairs(bars) do
     col(c, 1)
     G.rectangle("fill", x + (i - 1) * seg, y, seg, h)

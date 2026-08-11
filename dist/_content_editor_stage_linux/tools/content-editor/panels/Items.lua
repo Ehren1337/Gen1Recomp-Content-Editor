@@ -1,5 +1,7 @@
 -- Items tab: every item + its effect kind/params.  First edit clones into
 -- the mod; Save emits items:patch and item_effects/balls as needed.
+-- Gold: canToss / pocket / teaches / held* (field is not used); effect
+-- overrides stay data-only unless a ball multiplier is authored.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -11,9 +13,13 @@ local PalettePicker = require("PalettePicker")
 local PaletteEdit = require("PaletteEdit")
 local ModIO = require("ModIO")
 local RegList = require("RegList")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Items = {}
+
+local POCKETS = { "ITEM", "KEY_ITEM", "BALL", "TM_HM" }
+local POCKET_IDS = { ITEM = 1, KEY_ITEM = 2, BALL = 3, TM_HM = 4 }
 
 local TEMPLATES = {
   { id = "none",         label = "None" },
@@ -39,6 +45,9 @@ local TEMPLATES = {
 local HEAL_AMOUNT = {
   POTION = 20, SUPER_POTION = 50, HYPER_POTION = 200,
   FRESH_WATER = 50, SODA_POP = 60, LEMONADE = 80,
+  MOOMOO_MILK = 100, BERRY = 10, GOLD_BERRY = 30,
+  ENERGYPOWDER = 50, ENERGY_ROOT = 200, RAGECANDYBAR = 20,
+  BERRY_JUICE = 20,
 }
 
 local STATUS_HEAL = {
@@ -46,16 +55,28 @@ local STATUS_HEAL = {
   ICE_HEAL = { "FRZ" }, AWAKENING = { "SLP" },
   PARLYZ_HEAL = { "PAR" },
   FULL_HEAL = { "PSN", "BRN", "FRZ", "SLP", "PAR" },
+  HEAL_POWDER = { "PSN", "BRN", "FRZ", "SLP", "PAR" },
+  PSNCUREBERRY = { "PSN" }, PRZCUREBERRY = { "PAR" },
+  BURNT_BERRY = { "FRZ" }, ICE_BERRY = { "BRN" },
+  MINT_BERRY = { "SLP" }, MIRACLEBERRY = { "PSN", "BRN", "FRZ", "SLP", "PAR" },
 }
 
 local BALL_IDS = {
   MASTER_BALL = true, POKE_BALL = true, GREAT_BALL = true,
   ULTRA_BALL = true, SAFARI_BALL = true,
+  LEVEL_BALL = true, LURE_BALL = true, MOON_BALL = true,
+  FRIEND_BALL = true, FAST_BALL = true, HEAVY_BALL = true,
+  LOVE_BALL = true, PARK_BALL = true,
+}
+
+local BALL_MULTIPLIER = {
+  MASTER_BALL = math.huge, ULTRA_BALL = 2, GREAT_BALL = 1.5,
+  POKE_BALL = 1, SAFARI_BALL = 1.5, PARK_BALL = 1.5, FRIEND_BALL = 1,
 }
 
 local STONES = {
   FIRE_STONE = true, WATER_STONE = true, THUNDER_STONE = true,
-  LEAF_STONE = true, MOON_STONE = true,
+  LEAF_STONE = true, MOON_STONE = true, SUN_STONE = true,
 }
 
 local VITAMINS = {
@@ -70,23 +91,30 @@ local X_ITEMS = {
 
 local STATUSES = { "PSN", "BRN", "FRZ", "SLP", "PAR" }
 local VIT_STATS = { "hp", "attack", "defense", "speed", "special" }
+local VIT_STATS_GEN2 = {
+  "hp", "attack", "defense", "speed", "specialAttack", "specialDefense",
+}
 local X_STATS = { "attack", "defense", "speed", "special", "accuracy" }
+local X_STATS_GEN2 = {
+  "attack", "defense", "speed", "specialAttack", "specialDefense", "accuracy",
+}
 
 local function allItemIds(S)
   local seen, ids = {}, {}
   local deleted = (S.project and S.project.deleted and S.project.deleted.items) or {}
-  for id in pairs((S.project and S.project.items) or {}) do
-    if not deleted[id] then
-      seen[id] = true
-      ids[#ids + 1] = id
+  local function consider(id, rec)
+    if seen[id] or deleted[id] or not State.isItemRecord(id, rec) then
+      return
     end
+    seen[id] = true
+    ids[#ids + 1] = id
+  end
+  for id, rec in pairs((S.project and S.project.items) or {}) do
+    consider(id, rec)
   end
   if S.data and S.data.items then
-    for id in pairs(S.data.items) do
-      if not seen[id] and not deleted[id] then
-        seen[id] = true
-        ids[#ids + 1] = id
-      end
+    for id, rec in pairs(S.data.items) do
+      consider(id, rec)
     end
   end
   table.sort(ids)
@@ -116,25 +144,31 @@ local function registeredEffects(S)
 end
 
 local function inferTemplate(S, def)
-  if not def then return "none" end
+  if type(def) ~= "table" then return "none" end
   if def.effectTemplate then return def.effectTemplate end
   local id = def.id
   if def.effect then return "custom" end
-  if def.machine then return "machine" end
-  if def.ball or BALL_IDS[id] or (S.data and S.data.balls and S.data.balls[id]) then
+  if def.machine or def.teaches or def.pocket == "TM_HM" then return "machine" end
+  if def.ball or def.pocket == "BALL" or BALL_IDS[id]
+      or (S.data and S.data.balls and S.data.balls[id]) then
     return "ball"
   end
-  if def.keyItem then return "key" end
-  if HEAL_AMOUNT[id] then return "heal" end
+  if def.keyItem or (def.pocket == "KEY_ITEM" and def.canToss == false) then
+    return "key"
+  end
+  if HEAL_AMOUNT[id] and id ~= "MAX_POTION" and id ~= "FULL_RESTORE" then
+    return "heal"
+  end
   if id == "MAX_POTION" then return "max_heal" end
   if id == "FULL_RESTORE" then return "full_restore" end
   if STATUS_HEAL[id] then return "status" end
   if id == "REVIVE" then return "revive" end
-  if id == "MAX_REVIVE" then return "max_revive" end
+  if id == "MAX_REVIVE" or id == "REVIVAL_HERB" then return "max_revive" end
   if STONES[id] then return "stone" end
   if VITAMINS[id] then return "vitamin" end
   if id == "RARE_CANDY" then return "rare_candy" end
-  if id == "ETHER" or id == "MAX_ETHER" or id == "ELIXER" or id == "MAX_ELIXER" then
+  if id == "ETHER" or id == "MAX_ETHER" or id == "ELIXER" or id == "MAX_ELIXER"
+      or id == "MYSTERYBERRY" then
     return "pp_restore"
   end
   if id == "PP_UP" then return "pp_up" end
@@ -143,7 +177,32 @@ local function inferTemplate(S, def)
   return "none"
 end
 
+local function machineView(item)
+  if type(item.machine) == "table" then return item.machine end
+  if item.teaches then
+    local label = tostring(item.tmLabel or "")
+    local kind = (label:sub(1, 2) == "HM" or (item.id or ""):sub(1, 3) == "HM_")
+      and "HM" or "TM"
+    return {
+      kind = kind,
+      move = item.teaches,
+      number = item.tmNumber or 1,
+    }
+  end
+  return { kind = "TM", move = "HEADBUTT", number = 1 }
+end
+
+local function writeMachine(item, kind, move, number)
+  item.machine = { kind = kind, move = move, number = number }
+  item.teaches = move
+  item.tmNumber = number
+  item.tmLabel = string.format("%s%02d", kind, number or 1)
+  item.pocket = "TM_HM"
+  item.pocketId = POCKET_IDS.TM_HM
+end
+
 local function effectSummary(S, def)
+  if type(def) ~= "table" then return "" end
   local tmpl = inferTemplate(S, def)
   if tmpl == "heal" then
     local amt = def.healAmount or HEAL_AMOUNT[def.id] or "?"
@@ -168,11 +227,14 @@ local function effectSummary(S, def)
   elseif tmpl == "x_item" then
     return "X " .. (def.xStat or X_ITEMS[def.id] or "?")
   elseif tmpl == "machine" then
-    local m = def.machine
-    return m and string.format("%s %s", m.kind or "TM", m.move or "?") or "TM/HM"
+    local m = machineView(def)
+    return string.format("%s %s", m.kind or "TM", m.move or def.teaches or "?")
   elseif tmpl == "flute" then return "Poké Flute"
   elseif tmpl == "key" then return "key item"
   elseif tmpl == "custom" then return "effect " .. tostring(def.effect or "?")
+  end
+  if def.heldEffect and def.heldEffect ~= "HELD_NONE" then
+    return def.heldEffect
   end
   return "data only"
 end
@@ -209,12 +271,22 @@ local function seedEffectFields(S, copy, def)
     if copy.ppAllMoves == nil then
       copy.ppAllMoves = (id == "ELIXER" or id == "MAX_ELIXER")
     end
-  elseif tmpl == "machine" and def.machine then
-    local m = {}
-    for k, v in pairs(def.machine) do m[k] = v end
-    copy.machine = copy.machine or m
+  elseif tmpl == "machine" then
+    if def.machine then
+      local m = {}
+      for k, v in pairs(def.machine) do m[k] = v end
+      copy.machine = copy.machine or m
+    elseif def.teaches then
+      copy.machine = copy.machine or machineView(def)
+    end
   elseif tmpl == "custom" then
     copy.effect = copy.effect or def.effect
+  end
+  if tmpl == "ball" then
+    copy.ballMultiplier = copy.ballMultiplier or BALL_MULTIPLIER[id] or 1
+    if id == "MASTER_BALL" and copy.ballAutoCatch == nil then
+      copy.ballAutoCatch = true
+    end
   end
 end
 
@@ -254,10 +326,10 @@ end
 
 local function resolveItem(S, id)
   if not id then return nil, false end
-  if S.project.items[id] then return S.project.items[id], true end
-  if S.data and S.data.items and S.data.items[id] then
-    return S.data.items[id], false
-  end
+  local proj = S.project.items[id]
+  if State.isItemRecord(id, proj) then return proj, true end
+  local base = S.data and S.data.items and S.data.items[id]
+  if State.isItemRecord(id, base) then return base, false end
   return nil, false
 end
 
@@ -271,6 +343,25 @@ local function ensureOwned(S, id)
 end
 
 local function defaultItem(id)
+  if Generation.isGen2(nil) then
+    return {
+      id = id,
+      name = id,
+      price = 300,
+      pocket = "ITEM",
+      pocketId = 1,
+      canToss = true,
+      canSelect = false,
+      description = "",
+      fieldMenu = "ITEMMENU_PARTY",
+      battleMenu = "ITEMMENU_PARTY",
+      heldEffect = "HELD_NONE",
+      heldParameter = 0,
+      effectTemplate = "heal",
+      healAmount = 20,
+      _isNew = true,
+    }
+  end
   return {
     id = id,
     name = id,
@@ -432,12 +523,13 @@ function Items.draw(S, x, y, w, h, App)
   local fh = 28 * s
 
   local prevSize = 72 * s
-  local itemPal = Preview.itemPaletteName(S, item)
+  local gen2 = Generation.isGen2(S)
+  local itemPal = (not gen2) and Preview.itemPaletteName(S, item) or nil
   -- false = skip SGB remap. Avoid `x and false or y` (always yields y in Lua).
   local drawPal = itemPal
   if item.trueColor then drawPal = false end
   local function openItemPal()
-    if item.trueColor then return end
+    if gen2 or item.trueColor then return end
     local eid = S.itemId or item.id
     PalettePicker.open(S, {
       current = item.palette,
@@ -464,18 +556,23 @@ function Items.draw(S, x, y, w, h, App)
     })
   end
   Preview.drawItemIcon(S, item, formX + formW - prevSize, fy, prevSize, prevSize, drawPal)
-  if Kit.press(formX + formW - prevSize, fy, prevSize, prevSize) then
+  if not gen2 and Kit.press(formX + formW - prevSize, fy, prevSize, prevSize) then
     openItemPal()
   end
-  if item.trueColor then
+  if gen2 then
+    Kit.text("micro", Preview.itemPocket(item),
+      formX + formW - prevSize, fy + prevSize + 2 * s, PAL.muted)
+    Kit.text("micro", "pack", formX + formW - prevSize + 4 * s,
+      fy + prevSize + 14 * s, PAL.faint)
+  elseif item.trueColor then
     Kit.text("micro", "true color",
       formX + formW - prevSize, fy + prevSize + 2 * s, PAL.yellow)
   else
     Preview.drawNamedSwatches(S, itemPal,
       formX + formW - prevSize, fy + prevSize + 2 * s, prevSize, 10 * s)
+    Kit.text("micro", "icon", formX + formW - prevSize + 4 * s,
+      fy + prevSize + 14 * s, PAL.faint)
   end
-  Kit.text("micro", "icon", formX + formW - prevSize + 4 * s,
-    fy + prevSize + 14 * s, PAL.faint)
   local fieldW = formW - labelW - prevSize - 16 * s
   if fieldW < 140 * s then fieldW = formW - labelW - 8 * s end
 
@@ -507,104 +604,159 @@ function Items.draw(S, x, y, w, h, App)
       tostring(item.price or 0), "0")) or 0
     if v ~= (item.price or 0) then item = mutate(); item.price = v end
   end)
+  if Generation.isGen2(S) then
+    row("Pocket", function(fx, fy_, fw, fh_)
+      local cur = item.pocket or "ITEM"
+      if Kit.button(fx, fy_, math.min(fw, 140 * s), fh_, cur, { kind = "accent" }) then
+        item = mutate()
+        local idx = 1
+        for i, p in ipairs(POCKETS) do if p == cur then idx = i; break end end
+        item.pocket = POCKETS[(idx % #POCKETS) + 1]
+        item.pocketId = POCKET_IDS[item.pocket]
+        App.markDirty()
+      end
+    end)
+    row("Description", function(fx, fy_, fw, fh_)
+      local cur = tostring(item.description or "")
+      local v = field(App, "it_desc", fx, fy_, fw, fh_, cur, "Restores…")
+      if v ~= cur then item = mutate(); item.description = v end
+    end)
+  end
   row("Tossable", function(fx, fy_, fw, fh_)
-    local on = item.tossable ~= false and not item.keyItem
+    local on
+    if Generation.isGen2(S) then
+      on = item.canToss ~= false
+    else
+      on = item.tossable ~= false and not item.keyItem
+    end
     if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.green) then
       item = mutate()
-      item.tossable = not on
-      if item.tossable then item.keyItem = nil end
+      if Generation.isGen2(S) then
+        item.canToss = not on
+      else
+        item.tossable = not on
+        if item.tossable then item.keyItem = nil end
+      end
       App.markDirty()
     end
   end)
-  row("Icon PNG", function(fx, fy_, fw, fh_)
-    local path = Preview.itemIconPath(S, item) or ""
-    local custom = type(item.icon) == "string" or (type(item.icon) == "table" and item.icon.image)
-    Kit.text("micro",
-      Kit.ellipsize("micro", custom and path or ("default: " .. path), fw - 100 * s),
-      fx, fy_ + 8 * s, PAL.muted)
-    if Kit.button(fx + fw - 96 * s, fy_, 96 * s, fh_, "Browse", {
-        kind = "ghost", tooltip = "Import item icon PNG",
-      }) then
-      item = mutate()
-      local id = item.id
-      App.pickFile("Item icon PNG", "PNG (*.png)|*.png|All (*.*)|*.*",
-        function(picked)
-          local it = S.project.items[id]
-          if not it then return end
-          App.importToMod(picked, nil, function(rel)
-            it.icon = rel
-          end)
-        end)
-    end
-  end)
-  row("TrueColor", function(fx, fy_, fw, fh_)
-    local on = item.trueColor and true or false
-    if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
-      item = mutate()
-      item.trueColor = not on
-      if not item.trueColor then item.trueColor = nil end
-      Preview.invalidate()
-      App.markDirty()
-    end
-  end)
-  if item.trueColor then
-    row("Palette", function(fx, fy_, fw, fh_)
-      Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+  if Generation.isGen2(S) then
+    row("Held effect", function(fx, fy_, fw, fh_)
+      local cur = tostring(item.heldEffect or "HELD_NONE")
+      local v = field(App, "it_held", fx, fy_, fw, fh_, cur, "HELD_LEFTOVERS")
+      v = v:upper():gsub("%s+", "_")
+      if v ~= cur then item = mutate(); item.heldEffect = v ~= "" and v or "HELD_NONE" end
     end)
+    row("Held param", function(fx, fy_, fw, fh_)
+      local cur = item.heldParameter or 0
+      local v = tonumber(field(App, "it_heldp", fx, fy_, 80 * s, fh_,
+        tostring(cur), "0")) or 0
+      if v ~= cur then item = mutate(); item.heldParameter = v end
+    end)
+  end
+  if gen2 then
+    Kit.text("micro",
+      "Gold pack is pocket chrome + text — no per-item bag icons. Preview shows PackGFX for this pocket.",
+      formX, fy, PAL.faint)
+    fy = fy + 18 * s
   else
-    row("Palette", function(fx, fy_, fw, fh_)
-      local eid = S.itemId or item.id
-      PalettePicker.row(S, {
-        x = fx, y = fy_, w = fw, h = fh_,
-        current = item.palette or "",
-        effective = Preview.itemPaletteName(S, item),
-        emptyLabel = "(default)",
-        clearLabel = "(sprite / MEWMON default)",
-        allowClear = true,
-        title = "ITEM ICON PALETTE",
-        tooltip = "SGB palette for this item's icon preview",
-        onPick = function(id)
-          item = mutate()
-          item.palette = id
-          Preview.invalidate()
-          App.markDirty()
-        end,
-        owner = {
+    row("Icon PNG", function(fx, fy_, fw, fh_)
+      local path = Preview.itemIconPath(S, item) or ""
+      local custom = type(item.icon) == "string"
+        or (type(item.icon) == "table" and item.icon.image)
+      Kit.text("micro",
+        Kit.ellipsize("micro", custom and path or ("default: " .. path), fw - 100 * s),
+        fx, fy_ + 8 * s, PAL.muted)
+      if Kit.button(fx + fw - 96 * s, fy_, 96 * s, fh_, "Browse", {
+          kind = "ghost", tooltip = "Import item icon PNG",
+        }) then
+        item = mutate()
+        local id = item.id
+        App.pickFile("Item icon PNG", "PNG (*.png)|*.png|All (*.*)|*.*",
+          function(picked)
+            local it = S.project.items[id]
+            if not it then return end
+            App.importToMod(picked, nil, function(rel)
+              it.icon = rel
+            end)
+          end)
+      end
+    end)
+    row("TrueColor", function(fx, fy_, fw, fh_)
+      local on = item.trueColor and true or false
+      if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+        item = mutate()
+        item.trueColor = not on
+        if not item.trueColor then item.trueColor = nil end
+        Preview.invalidate()
+        App.markDirty()
+      end
+    end)
+    if item.trueColor then
+      row("Palette", function(fx, fy_, fw, fh_)
+        Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
+      end)
+    else
+      row("Palette", function(fx, fy_, fw, fh_)
+        local eid = S.itemId or item.id
+        PalettePicker.row(S, {
+          x = fx, y = fy_, w = fw, h = fh_,
+          current = item.palette or "",
+          effective = Preview.itemPaletteName(S, item),
+          emptyLabel = "(default)",
+          clearLabel = "(sprite / MEWMON default)",
+          allowClear = true,
+          title = "ITEM ICON PALETTE",
+          tooltip = "SGB palette for this item's icon preview",
+          onPick = function(id)
+            item = mutate()
+            item.palette = id
+            Preview.invalidate()
+            App.markDirty()
+          end,
+          owner = {
+            kind = "item",
+            entityId = eid,
+            entityLabel = item.name or eid,
+            assign = function(id)
+              item = mutate()
+              item.palette = id
+              Preview.invalidate()
+              App.markDirty()
+            end,
+          },
+        })
+      end)
+      do
+        local eid = S.itemId or item.id
+        fy = PaletteEdit.drawColorRows(S, {
           kind = "item",
           entityId = eid,
           entityLabel = item.name or eid,
+          paletteId = Preview.itemPaletteName(S, item),
           assign = function(id)
             item = mutate()
             item.palette = id
             Preview.invalidate()
             App.markDirty()
           end,
-        },
-      })
-    end)
-    do
-      local eid = S.itemId or item.id
-      fy = PaletteEdit.drawColorRows(S, {
-        kind = "item",
-        entityId = eid,
-        entityLabel = item.name or eid,
-        paletteId = Preview.itemPaletteName(S, item),
-        assign = function(id)
-          item = mutate()
-          item.palette = id
-          Preview.invalidate()
-          App.markDirty()
-        end,
-        App = App,
-        x = formX, y = fy, labelW = labelW,
-        fieldW = formW - labelW - 20 * s, fh = fh,
-        fieldPrefix = "it_pal_c",
-      })
+          App = App,
+          x = formX, y = fy, labelW = labelW,
+          fieldW = formW - labelW - 20 * s, fh = fh,
+          fieldPrefix = "it_pal_c",
+        })
+      end
     end
   end
 
   Kit.text("small", "Effect", formX, fy + 6 * s, PAL.caption)
   fy = fy + 18 * s
+  if Generation.isGen2(S) then
+    Kit.text("micro",
+      "Gold: Save patches item data (pocket/teaches/held). Ball chips emit balls:register; other use overrides stay vanilla.",
+      formX, fy, PAL.muted)
+    fy = fy + 20 * s
+  end
   local tx, ty = formX, fy
   local maxX = formX + formW - 8 * s
   for _, t in ipairs(TEMPLATES) do
@@ -619,6 +771,10 @@ function Items.draw(S, x, y, w, h, App)
       item.effectTemplate = t.id
       tmpl = t.id
       seedEffectFields(S, item, item)
+      if Generation.isGen2(S) and t.id == "machine" then
+        local m = machineView(item)
+        writeMachine(item, m.kind, m.move, m.number)
+      end
       App.markDirty()
     end
     tx = tx + bw + 4 * s
@@ -656,56 +812,93 @@ function Items.draw(S, x, y, w, h, App)
     end
     fy = fy + fh + 8 * s
   elseif tmpl == "ball" then
-    row("randMax", function(fx, fy_, fw, fh_)
-      local cur = item.ballRandMax or 255
-      local v = tonumber(field(App, "it_br", fx, fy_, 80 * s, fh_,
-        tostring(cur), "255")) or 255
-      if v ~= cur then
-        item = mutate(); item.effectTemplate = "ball"; item.ballRandMax = v
-      end
-    end)
-    row("hpFactor", function(fx, fy_, fw, fh_)
-      local cur = item.ballHpFactor or 12
-      local v = tonumber(field(App, "it_bh", fx, fy_, 80 * s, fh_,
-        tostring(cur), "12")) or 12
-      if v ~= cur then
-        item = mutate(); item.effectTemplate = "ball"; item.ballHpFactor = v
-      end
-    end)
-    row("wobble", function(fx, fy_, fw, fh_)
-      local cur = item.ballWobble or 255
-      local v = tonumber(field(App, "it_bw", fx, fy_, 80 * s, fh_,
-        tostring(cur), "255")) or 255
-      if v ~= cur then
-        item = mutate(); item.effectTemplate = "ball"; item.ballWobble = v
-      end
-    end)
-    row("Master?", function(fx, fy_, fw, fh_)
-      local on = item.ballAutoCatch and true or false
-      if Kit.chip(fx, fy_, 100 * s, fh_, on and "AUTO CATCH" or "ROLL", on, PAL.red) then
-        item = mutate()
-        item.effectTemplate = "ball"
-        item.ballAutoCatch = not on
-        App.markDirty()
-      end
-    end)
+    if Generation.isGen2(S) then
+      row("Multiplier", function(fx, fy_, fw, fh_)
+        local cur = item.ballMultiplier
+        if cur == nil then cur = BALL_MULTIPLIER[item.id] or 1 end
+        if cur == math.huge then cur = 0 end -- 0 in the field means master/auto
+        local v = tonumber(field(App, "it_bm", fx, fy_, 80 * s, fh_,
+          tostring(cur), "1")) or 1
+        if v ~= cur then
+          item = mutate()
+          item.effectTemplate = "ball"
+          item.ballMultiplier = (v <= 0) and math.huge or v
+          item.ballAutoCatch = v <= 0
+          item.pocket = "BALL"
+          item.pocketId = POCKET_IDS.BALL
+        end
+      end)
+      row("Master?", function(fx, fy_, fw, fh_)
+        local on = item.ballAutoCatch and true or false
+        if Kit.chip(fx, fy_, 100 * s, fh_, on and "AUTO CATCH" or "ROLL", on, PAL.red) then
+          item = mutate()
+          item.effectTemplate = "ball"
+          item.ballAutoCatch = not on
+          item.ballMultiplier = item.ballAutoCatch and math.huge or (BALL_MULTIPLIER[item.id] or 1)
+          item.pocket = "BALL"
+          item.pocketId = POCKET_IDS.BALL
+          App.markDirty()
+        end
+      end)
+      Kit.text("micro", "Specialty balls (Fast/Love/…) keep engine arms; multiplier is for flat-rate balls.",
+        formX, fy, PAL.muted)
+      fy = fy + 22 * s
+    else
+      row("randMax", function(fx, fy_, fw, fh_)
+        local cur = item.ballRandMax or 255
+        local v = tonumber(field(App, "it_br", fx, fy_, 80 * s, fh_,
+          tostring(cur), "255")) or 255
+        if v ~= cur then
+          item = mutate(); item.effectTemplate = "ball"; item.ballRandMax = v
+        end
+      end)
+      row("hpFactor", function(fx, fy_, fw, fh_)
+        local cur = item.ballHpFactor or 12
+        local v = tonumber(field(App, "it_bh", fx, fy_, 80 * s, fh_,
+          tostring(cur), "12")) or 12
+        if v ~= cur then
+          item = mutate(); item.effectTemplate = "ball"; item.ballHpFactor = v
+        end
+      end)
+      row("wobble", function(fx, fy_, fw, fh_)
+        local cur = item.ballWobble or 255
+        local v = tonumber(field(App, "it_bw", fx, fy_, 80 * s, fh_,
+          tostring(cur), "255")) or 255
+        if v ~= cur then
+          item = mutate(); item.effectTemplate = "ball"; item.ballWobble = v
+        end
+      end)
+      row("Master?", function(fx, fy_, fw, fh_)
+        local on = item.ballAutoCatch and true or false
+        if Kit.chip(fx, fy_, 100 * s, fh_, on and "AUTO CATCH" or "ROLL", on, PAL.red) then
+          item = mutate()
+          item.effectTemplate = "ball"
+          item.ballAutoCatch = not on
+          App.markDirty()
+        end
+      end)
+    end
   elseif tmpl == "vitamin" then
     row("Stat", function(fx, fy_, fw, fh_)
+      local stats = Generation.isGen2(S) and VIT_STATS_GEN2 or VIT_STATS
       local cur = item.vitaminStat or VITAMINS[item.id] or "hp"
-      if Kit.button(fx, fy_, 120 * s, fh_, cur, { kind = "accent" }) then
+      if Generation.isGen2(S) and cur == "special" then cur = "specialAttack" end
+      if Kit.button(fx, fy_, 140 * s, fh_, cur, { kind = "accent" }) then
         item = mutate()
         item.effectTemplate = "vitamin"
-        item.vitaminStat = cycle(VIT_STATS, cur)
+        item.vitaminStat = cycle(stats, cur)
         App.markDirty()
       end
     end)
   elseif tmpl == "x_item" then
     row("Battle stat", function(fx, fy_, fw, fh_)
+      local stats = Generation.isGen2(S) and X_STATS_GEN2 or X_STATS
       local cur = item.xStat or X_ITEMS[item.id] or "attack"
-      if Kit.button(fx, fy_, 120 * s, fh_, cur, { kind = "accent" }) then
+      if Generation.isGen2(S) and cur == "special" then cur = "specialAttack" end
+      if Kit.button(fx, fy_, 140 * s, fh_, cur, { kind = "accent" }) then
         item = mutate()
         item.effectTemplate = "x_item"
-        item.xStat = cycle(X_STATS, cur)
+        item.xStat = cycle(stats, cur)
         App.markDirty()
       end
     end)
@@ -735,26 +928,25 @@ function Items.draw(S, x, y, w, h, App)
       end
     end)
   elseif tmpl == "machine" then
-    local machine = item.machine or { kind = "TM", move = "MEGA_PUNCH", number = 1 }
+    local machine = machineView(item)
     row("Kind", function(fx, fy_, fw, fh_)
       local cur = machine.kind or "TM"
       if Kit.chip(fx, fy_, 70 * s, fh_, cur, true, PAL.yellow) then
         item = mutate()
         item.effectTemplate = "machine"
-        item.machine = item.machine or { kind = "TM", move = "MEGA_PUNCH", number = 1 }
-        item.machine.kind = (cur == "TM") and "HM" or "TM"
+        local next = (cur == "TM") and "HM" or "TM"
+        writeMachine(item, next, machine.move or "HEADBUTT", machine.number or 1)
         App.markDirty()
       end
     end)
     row("Move", function(fx, fy_, fw, fh_)
       local v = field(App, "it_tm_move", fx, fy_, fw, fh_,
-        machine.move or "", "MEGA_PUNCH")
+        machine.move or "", "HEADBUTT")
       v = v:upper():gsub("%s+", "_")
       if v ~= (machine.move or "") then
         item = mutate()
         item.effectTemplate = "machine"
-        item.machine = item.machine or {}
-        item.machine.move = v
+        writeMachine(item, machine.kind or "TM", v, machine.number or 1)
       end
     end)
     row("Number", function(fx, fy_, fw, fh_)
@@ -764,10 +956,14 @@ function Items.draw(S, x, y, w, h, App)
       if v ~= cur then
         item = mutate()
         item.effectTemplate = "machine"
-        item.machine = item.machine or {}
-        item.machine.number = v
+        writeMachine(item, machine.kind or "TM", machine.move or "HEADBUTT", v)
       end
     end)
+    if Generation.isGen2(S) then
+      Kit.text("micro", "Gold uses teaches / tmLabel / tmNumber (Save drops Gen1 machine{}).",
+        formX, fy, PAL.muted)
+      fy = fy + 22 * s
+    end
   elseif tmpl == "custom" then
     local effects = registeredEffects(S)
     if #effects == 0 then effects = { (item.id or "ITEM") .. "_EFFECT" } end
@@ -809,8 +1005,9 @@ function Items.draw(S, x, y, w, h, App)
     fy = fy + 22 * s
   end
 
-  Kit.text("micro",
-    "List shows effect summary. First edit clones into the mod (Save = patch + effect).",
+  Kit.text("micro", Generation.isGen2(S)
+      and "First edit clones into the mod. Save = items:patch (+ balls for Ball chips)."
+      or "List shows effect summary. First edit clones into the mod (Save = patch + effect).",
     formX, fy + 4 * s, PAL.faint)
   fy = fy + 28 * s
   FormPane.finish(S, "itemFormScroll", contentTop, fy, view)

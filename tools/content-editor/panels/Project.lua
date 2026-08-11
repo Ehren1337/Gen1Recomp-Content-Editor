@@ -7,6 +7,7 @@ local RegList = require("RegList")
 local FormPane = require("FormPane")
 local ModIO = require("ModIO")
 local DataSource = require("DataSource")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Project = {}
@@ -205,6 +206,35 @@ function Project.draw(S, x, y, w, h, App)
 
   row = cardY + contentH + 20 * s
 
+  Kit.caption(x, row, "GAME")
+  row = row + 28 * s
+  local GameVersion = require("src.core.GameVersion")
+  local curVer = S.version or App.dataVersion or "red"
+  local gen = (GameVersion.generation and GameVersion.generation(curVer)) or 1
+  local chipW = math.floor((w - 3 * 8 * s) / 4)
+  local order = GameVersion.ORDER or { "red", "blue", "yellow", "gold" }
+  for i, vid in ipairs(order) do
+    local info = GameVersion.info(vid) or {}
+    local label = info.label or vid
+    local bx = x + (i - 1) * (chipW + 8 * s)
+    local kind = (vid == curVer) and "primary" or "ghost"
+    if Kit.button(bx, row, chipW, btnH, label, {
+        kind = kind,
+        tooltip = (info.displayName or label)
+          .. " — Gen " .. tostring(GameVersion.generation(vid) or 1),
+      }) then
+      if App.setGameVersion then App.setGameVersion(vid) end
+    end
+  end
+  row = row + btnH + 8 * s
+  Kit.text("micro",
+    string.format("Authoring for %s (Gen %d). Import mounts %scache.",
+      (GameVersion.info(curVer) and GameVersion.info(curVer).displayName) or curVer,
+      gen,
+      (GameVersion.cachePrefix and GameVersion.cachePrefix(curVer)) or ""),
+    x, row, PAL.muted)
+  row = row + 22 * s
+
   Kit.caption(x, row, "GAME DATA")
   row = row + 28 * s
   local src = S.dataSource or "fixtures"
@@ -225,7 +255,7 @@ function Project.draw(S, x, y, w, h, App)
   local dsGap = 10 * s
   if Kit.button(x, row, dsW, btnH, "Link Recomp", {
       kind = "primary",
-      tooltip = "Use data/generated + assets from an existing Gen1Recomp install",
+      tooltip = "Use data/generated (or red|blue|yellow|gold/) from a Gen1Recomp install",
     }) then
     App.pickFolder("Choose Gen1Recomp folder", function(path)
       App.linkRecompFolder(path)
@@ -233,7 +263,8 @@ function Project.draw(S, x, y, w, h, App)
   end
   if Kit.button(x + dsW + dsGap, row, dsW, btnH, "Import ROM", {
       kind = "accent",
-      tooltip = "Import a US Red/Blue/Yellow .gb into the save-directory cache",
+      tooltip = "Import US Red/Blue/Yellow (.gb, 1 MiB) or Gold (.gbc, 2 MiB)\n"
+        .. "into the versioned save-directory cache",
     }) then
     App.pickFile("Choose Pokemon ROM",
       "Game Boy ROM (*.gb;*.gbc)|*.gb;*.gbc|All (*.*)|*.*",
@@ -248,7 +279,7 @@ function Project.draw(S, x, y, w, h, App)
   row = row + btnH + 8 * s
   if Kit.button(x, row, dsW, btnH, "Clear cache", {
       kind = "danger",
-      tooltip = "Delete save-directory ROM cache (data/generated + assets/generated)\n"
+      tooltip = "Delete save-directory ROM caches (red|blue|yellow|gold/…)\n"
         .. "and flush editor image caches, then reload data.\n"
         .. "Does not delete a Linked Gen1Recomp folder.",
     }) then
@@ -409,6 +440,25 @@ function Project.draw(S, x, y, w, h, App)
   Kit.caption(viewX, fy, "CONSTANTS")
   fy = fy + 24 * s
 
+  if Generation.isGen2(S) then
+    row("Shiny rate", function(fx, fy_, fw, fh_)
+      -- Denominator: 8192 = vanilla (~1/8192). Stored on project.shinyRate
+      -- (not gen2Constants name lists) and emitted as data.shinyRate.
+      local cur = tonumber(S.project.shinyRate) or 8192
+      local v = RegList.num(App, "pr_shiny_rate", fx, fy_, 80 * s, fh_, cur)
+      v = math.max(1, math.floor(v))
+      if v ~= cur then
+        State.ensureProjectFields(S.project)
+        S.project.shinyRate = v
+        App.markDirty()
+      end
+    end)
+    Kit.text("micro",
+      "1 / N chance a wild/gift mon rolls forced shiny DVs (vanilla 8192).",
+      viewX, fy, PAL.faint)
+    fy = fy + 18 * s
+  end
+
   row("Level cap", function(fx, fy_, fw, fh_)
     local cur = constField(S, "levelCap") or 100
     local v = RegList.num(App, "pr_const_lvl", fx, fy_, 80 * s, fh_, cur)
@@ -508,83 +558,162 @@ function Project.draw(S, x, y, w, h, App)
   end
   fy = fy + fh + secGap
 
-  Kit.caption(viewX, fy, "FLY ORDER")
-  fy = fy + 24 * s
-  Kit.text("micro",
-    "field.flyOrder (Town Map / Fly menu) and landing spots in field.flyWarps.",
-    viewX, fy, PAL.muted)
-  fy = fy + 20 * s
+  -- Gen1 Town Map / Fly menu (field.flyOrder / field.flyWarps). Gold fly
+  -- points live in FieldMoves.FLYPOINTS + gen2Landmarks.spawns instead (below).
+  if not Generation.isGen2(S) then
+    Kit.caption(viewX, fy, "FLY ORDER")
+    fy = fy + 24 * s
+    Kit.text("micro",
+      "field.flyOrder (Town Map / Fly menu) and landing spots in field.flyWarps.",
+      viewX, fy, PAL.muted)
+    fy = fy + 20 * s
 
-  local function ensureFlyOrder()
-    if type(S.project.flyOrder) == "table" then return S.project.flyOrder end
-    local base = (S.data and S.data.field and S.data.field.flyOrder) or {}
-    local copy = {}
-    for i, mid in ipairs(base) do copy[i] = mid end
-    S.project.flyOrder = copy
-    if next(S.project.flyWarps or {}) == nil then
-      local fw = (S.data and S.data.field and S.data.field.flyWarps) or {}
-      S.project.flyWarps = {}
-      for mid, spot in pairs(fw) do
-        if type(spot) == "table" then
-          S.project.flyWarps[mid] = { x = spot.x or 0, y = spot.y or 0 }
+    local function ensureFlyOrder()
+      if type(S.project.flyOrder) == "table" then return S.project.flyOrder end
+      local base = (S.data and S.data.field and S.data.field.flyOrder) or {}
+      local copy = {}
+      for i, mid in ipairs(base) do copy[i] = mid end
+      S.project.flyOrder = copy
+      if next(S.project.flyWarps or {}) == nil then
+        local fw = (S.data and S.data.field and S.data.field.flyWarps) or {}
+        S.project.flyWarps = {}
+        for mid, spot in pairs(fw) do
+          if type(spot) == "table" then
+            S.project.flyWarps[mid] = { x = spot.x or 0, y = spot.y or 0 }
+          end
         end
       end
-    end
-    App.markDirty()
-    return copy
-  end
-
-  if type(S.project.flyOrder) ~= "table" then
-    if Kit.button(viewX, fy, 160 * s, fh, "Edit fly order…", { kind = "accent" }) then
-      ensureFlyOrder()
-    end
-    fy = fy + fh + 8 * s
-  else
-    local order = S.project.flyOrder
-    S.project.flyWarps = S.project.flyWarps or {}
-    for i, mid in ipairs(order) do
-      local midV = RegList.field(App, "pr_fly_" .. i, viewX, fy,
-        160 * s, fh, tostring(mid or ""), "PALLET_TOWN"):upper():gsub("%s+", "_")
-      if midV ~= mid then
-        order[i] = midV
-        if S.project.flyWarps[mid] and not S.project.flyWarps[midV] then
-          S.project.flyWarps[midV] = S.project.flyWarps[mid]
-          S.project.flyWarps[mid] = nil
-        end
-        App.markDirty()
-        mid = midV
-      end
-      local spot = S.project.flyWarps[mid]
-      if not spot then
-        local base = S.data and S.data.field and S.data.field.flyWarps
-          and S.data.field.flyWarps[mid]
-        spot = { x = (base and base.x) or 0, y = (base and base.y) or 0 }
-        S.project.flyWarps[mid] = spot
-      end
-      local xV = tonumber(RegList.num(App, "pr_flyx_" .. i,
-        viewX + 170 * s, fy, 50 * s, fh, tonumber(spot.x) or 0)) or 0
-      local yV = tonumber(RegList.num(App, "pr_flyy_" .. i,
-        viewX + 228 * s, fy, 50 * s, fh, tonumber(spot.y) or 0)) or 0
-      if xV ~= (spot.x or 0) or yV ~= (spot.y or 0) then
-        spot.x, spot.y = xV, yV
-        App.markDirty()
-      end
-      Kit.text("micro", "land x,y", viewX + 286 * s, fy + 8 * s, PAL.faint)
-      if Kit.button(viewX + viewW - 36 * s, fy, 32 * s, fh, "X",
-          { kind = "danger" }) then
-        S.project.flyWarps[mid] = nil
-        table.remove(order, i)
-        App.markDirty()
-        break
-      end
-      fy = fy + fh + 6 * s
-    end
-    if Kit.button(viewX, fy, 120 * s, fh, "+ Fly spot", { kind = "good" }) then
-      order[#order + 1] = "NEW_TOWN"
-      S.project.flyWarps["NEW_TOWN"] = { x = 0, y = 0 }
       App.markDirty()
+      return copy
     end
-    fy = fy + fh + 8 * s
+
+    if type(S.project.flyOrder) ~= "table" then
+      if Kit.button(viewX, fy, 160 * s, fh, "Edit fly order…", { kind = "accent" }) then
+        ensureFlyOrder()
+      end
+      fy = fy + fh + 8 * s
+    else
+      local order = S.project.flyOrder
+      S.project.flyWarps = S.project.flyWarps or {}
+      for i, mid in ipairs(order) do
+        local midV = RegList.field(App, "pr_fly_" .. i, viewX, fy,
+          160 * s, fh, tostring(mid or ""), "PALLET_TOWN"):upper():gsub("%s+", "_")
+        if midV ~= mid then
+          order[i] = midV
+          if S.project.flyWarps[mid] and not S.project.flyWarps[midV] then
+            S.project.flyWarps[midV] = S.project.flyWarps[mid]
+            S.project.flyWarps[mid] = nil
+          end
+          App.markDirty()
+          mid = midV
+        end
+        local spot = S.project.flyWarps[mid]
+        if not spot then
+          local base = S.data and S.data.field and S.data.field.flyWarps
+            and S.data.field.flyWarps[mid]
+          spot = { x = (base and base.x) or 0, y = (base and base.y) or 0 }
+          S.project.flyWarps[mid] = spot
+        end
+        local xV = tonumber(RegList.num(App, "pr_flyx_" .. i,
+          viewX + 170 * s, fy, 50 * s, fh, tonumber(spot.x) or 0)) or 0
+        local yV = tonumber(RegList.num(App, "pr_flyy_" .. i,
+          viewX + 228 * s, fy, 50 * s, fh, tonumber(spot.y) or 0)) or 0
+        if xV ~= (spot.x or 0) or yV ~= (spot.y or 0) then
+          spot.x, spot.y = xV, yV
+          App.markDirty()
+        end
+        Kit.text("micro", "land x,y", viewX + 286 * s, fy + 8 * s, PAL.faint)
+        if Kit.button(viewX + viewW - 36 * s, fy, 32 * s, fh, "X",
+            { kind = "danger" }) then
+          S.project.flyWarps[mid] = nil
+          table.remove(order, i)
+          App.markDirty()
+          break
+        end
+        fy = fy + fh + 6 * s
+      end
+      if Kit.button(viewX, fy, 120 * s, fh, "+ Fly spot", { kind = "good" }) then
+        order[#order + 1] = "NEW_TOWN"
+        S.project.flyWarps["NEW_TOWN"] = { x = 0, y = 0 }
+        App.markDirty()
+      end
+      fy = fy + fh + 8 * s
+    end
+  else
+    -- Gold: fly points live in FieldMoves.FLYPOINTS (landmark/spawn/flag
+    -- order) plus landing spots in gen2Landmarks.spawns; no field registry.
+    Kit.caption(viewX, fy, "FLY POINTS")
+    fy = fy + 24 * s
+    Kit.text("micro",
+      "FieldMoves.FLYPOINTS order (landmark/spawn/flag) and landing spots"
+        .. " (map/x/y) from gen2Landmarks.spawns.",
+      viewX, fy, PAL.muted)
+    fy = fy + 20 * s
+
+    local function ensureFlyPoints()
+      if type(S.project.flyPoints) == "table" and #S.project.flyPoints > 0 then
+        return S.project.flyPoints
+      end
+      local ok, FieldMoves = pcall(require, "src.world.gen2.FieldMoves")
+      local base = (ok and FieldMoves and FieldMoves.FLYPOINTS) or {}
+      local spawns = S.data and S.data.gen2Landmarks and S.data.gen2Landmarks.spawns
+      local copy = {}
+      for i, row in ipairs(base) do
+        local spot = spawns and spawns[row.spawn]
+        copy[i] = {
+          landmark = row.landmark, spawn = row.spawn, flag = row.flag,
+          map = spot and spot.map, x = spot and spot.x, y = spot and spot.y,
+        }
+      end
+      S.project.flyPoints = copy
+      App.markDirty()
+      return copy
+    end
+
+    if type(S.project.flyPoints) ~= "table" or #S.project.flyPoints == 0 then
+      if Kit.button(viewX, fy, 160 * s, fh, "Edit fly points…", { kind = "accent" }) then
+        ensureFlyPoints()
+      end
+      fy = fy + fh + 8 * s
+    else
+      local rows = S.project.flyPoints
+      for i, row in ipairs(rows) do
+        local landmarkV = RegList.field(App, "pr_flylm_" .. i, viewX, fy,
+          150 * s, fh, tostring(row.landmark or ""), "LANDMARK_...")
+          :upper():gsub("%s+", "_")
+        if landmarkV ~= row.landmark then row.landmark = landmarkV end
+        local spawnV = RegList.field(App, "pr_flysp_" .. i, viewX + 158 * s, fy,
+          130 * s, fh, tostring(row.spawn or ""), "SPAWN_...")
+          :upper():gsub("%s+", "_")
+        if spawnV ~= row.spawn then row.spawn = spawnV end
+        local flagV = tonumber(RegList.num(App, "pr_flyfl_" .. i,
+          viewX + 294 * s, fy, 44 * s, fh, tonumber(row.flag) or 0)) or 0
+        if flagV ~= (row.flag or 0) then row.flag = flagV end
+        local mapV = RegList.field(App, "pr_flymap_" .. i, viewX + 344 * s, fy,
+          130 * s, fh, tostring(row.map or ""), "map")
+          :upper():gsub("%s+", "_")
+        if mapV ~= (row.map or "") then row.map = (mapV ~= "" and mapV) or nil end
+        local xV = tonumber(RegList.num(App, "pr_flyx_" .. i,
+          viewX + 480 * s, fy, 44 * s, fh, tonumber(row.x) or 0)) or 0
+        local yV = tonumber(RegList.num(App, "pr_flyy_" .. i,
+          viewX + 528 * s, fy, 44 * s, fh, tonumber(row.y) or 0)) or 0
+        if xV ~= (row.x or 0) then row.x = xV end
+        if yV ~= (row.y or 0) then row.y = yV end
+        Kit.text("micro", "land map/x,y", viewX + 576 * s, fy + 8 * s, PAL.faint)
+        if Kit.button(viewX + viewW - 36 * s, fy, 32 * s, fh, "X",
+            { kind = "danger" }) then
+          table.remove(rows, i)
+          App.markDirty()
+          break
+        end
+        fy = fy + fh + 6 * s
+      end
+      if Kit.button(viewX, fy, 120 * s, fh, "+ Fly point", { kind = "good" }) then
+        rows[#rows + 1] = { landmark = "LANDMARK_NEW", spawn = "SPAWN_NEW", flag = 0 }
+        App.markDirty()
+      end
+      fy = fy + fh + 8 * s
+    end
   end
 
   FormPane.finish(S, "projectFormScroll", contentTop, fy, view)

@@ -6,6 +6,7 @@ local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
 local Preview = require("Preview")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local UiPreview = {}
@@ -53,6 +54,19 @@ local function pathOf(v)
 end
 
 local function dataField(S, key)
+  if Generation.isGen2(S) then
+    if key == "title" then
+      return (S.data and (S.data.title or S.data.gen2Title)) or {}
+    elseif key == "intro" then
+      return (S.data and (S.data.gen2Intro or S.data.intro)) or {}
+    elseif key == "townMap" then
+      local L = S.data and (S.data.gen2Landmarks or S.data.landmarks)
+      local locs = type(L) == "table" and (L.landmarks or L) or {}
+      return { locations = locs }
+    elseif key == "theme" then
+      return {}
+    end
+  end
   return (S.data and S.data.field and S.data.field[key]) or {}
 end
 
@@ -119,11 +133,47 @@ end
 -- ---- title driver ----
 
 local function buildTitle(S)
+  local layout = eff(S, "title", "layout")
+  local gold = Generation.isGen2(S)
+    or layout == "gold_title"
+    or pathOf(eff(S, "title", "hooh")) ~= ""
+    or pathOf(eff(S, "title", "screen")) ~= ""
+
+  if gold then
+    local logoPath = pathOf(eff(S, "title", "image") or eff(S, "title", "logo"))
+    if logoPath == "" then logoPath = "assets/generated/title/pokemon_logo.png" end
+    local screenPath = pathOf(eff(S, "title", "screen"))
+    if screenPath == "" then screenPath = "assets/generated/title/title_screen.png" end
+    local hoohPath = pathOf(eff(S, "title", "hooh"))
+    if hoohPath == "" then
+      local frames = eff(S, "title", "hoohFrames")
+      if type(frames) == "table" then hoohPath = pathOf(frames[1]) end
+    end
+    if hoohPath == "" then hoohPath = "assets/generated/title/hooh.png" end
+    local cloudsPath = pathOf(eff(S, "title", "clouds"))
+    if cloudsPath == "" then cloudsPath = "assets/generated/title/clouds.png" end
+    local copyPath = pathOf(eff(S, "title", "copyright"))
+    if copyPath == "" then copyPath = "assets/generated/title/copyright.png" end
+    return {
+      kind = "title",
+      gold = true,
+      logo = img(S, logoPath),
+      screen = img(S, screenPath),
+      clouds = img(S, cloudsPath),
+      hooh = img(S, hoohPath),
+      copyright = img(S, copyPath),
+      hoohX = tonumber(eff(S, "title", "hoohX")) or 48,
+      hoohY = tonumber(eff(S, "title", "hoohY")) or 56,
+      cloudY = tonumber(eff(S, "title", "cloudY")) or 88,
+      timer = 0,
+      data = S.data,
+    }
+  end
+
   local logoPath = pathOf(eff(S, "title", "logo"))
   if logoPath == "" then logoPath = "assets/logo/pokemon_logo.png" end
   local verPath = pathOf(eff(S, "title", "versionRibbon") or eff(S, "title", "version"))
   if verPath == "" then verPath = "assets/generated/title/red_version.png" end
-  local layout = eff(S, "title", "layout")
   local yellow = layout == "yellow_pikachu"
   local cycle = eff(S, "title", "cycleSpecies")
   if type(cycle) ~= "table" or #cycle == 0 then
@@ -187,6 +237,10 @@ local function titleSprite(st, S)
 end
 
 local function updateTitle(st)
+  if st.gold then
+    st.timer = (st.timer or 0) + 1
+    return
+  end
   if st.yellowLayout then
     if st.phase == "drop" then
       local step = DROP_STEPS[st.dropStep]
@@ -241,6 +295,24 @@ end
 local function drawTitleFrame(st, S)
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+  if st.gold then
+    if st.screen then
+      love.graphics.draw(st.screen, 0, 0)
+    else
+      love.graphics.setColor(123 / 255, 165 / 255, 1, 1)
+      love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+    if st.clouds then
+      local scroll = ((st.timer or 0) / 8) % GB_W
+      love.graphics.draw(st.clouds, -scroll, st.cloudY or 88)
+      love.graphics.draw(st.clouds, GB_W - scroll, st.cloudY or 88)
+    end
+    if st.hooh then love.graphics.draw(st.hooh, st.hoohX or 48, st.hoohY or 56) end
+    if st.logo then love.graphics.draw(st.logo, 0, 0) end
+    if st.copyright then love.graphics.draw(st.copyright, 0, 0) end
+    return
+  end
   local scrollY = st.yellowLayout and -(st.scy or 0) or 0
   if st.logo then
     love.graphics.draw(st.logo, 16, 8 + scrollY)
@@ -618,7 +690,16 @@ local function drawStringsFrame(st, S)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
-local function buildTownMap(S)
+-- Pokegear region: KANTO_LANDMARK = 46; index 94 is Fast Ship (Johto map).
+local function pokegearRegion(index, override)
+  if override == "johto" or override == "kanto" then return override end
+  index = tonumber(index) or 0
+  if index == 94 then return "johto" end
+  if index >= 46 then return "kanto" end
+  return "johto"
+end
+
+local function townMapLocs(S)
   local tm = {}
   local d = dataField(S, "townMap")
   local p = (S.project and S.project.townMap) or {}
@@ -630,11 +711,51 @@ local function buildTownMap(S)
     if type(e) == "table" then
       locs[#locs + 1] = {
         id = id, x = e.x or 0, y = e.y or 0,
-        name = e.name or id,
+        name = e.name or id, index = e.index,
       }
     end
   end
   table.sort(locs, function(a, b) return a.id < b.id end)
+  return locs, tm
+end
+
+local function buildTownMap(S)
+  local locs, tm = townMapLocs(S)
+  if Generation.isGen2(S) then
+    local gfx = (S.data and (S.data.gen2MenuGfx or S.data.menu_gfx) or {}).pokegear
+    local sheet
+    if type(gfx) == "table" and type(gfx.tiles) == "string" then
+      local okTs, TileSheet = pcall(require, "src.ui.gen2.TileSheet")
+      if okTs and TileSheet then
+        sheet = TileSheet.new({
+          path = gfx.tiles,
+          wide = gfx.tilesWide or 16,
+          firstTile = 0,
+          paletteFor = function(tile)
+            if not gfx.palettes then return nil end
+            if tile >= 0x60 then return gfx.palettes[1] end
+            return gfx.palettes[(gfx.palMap and gfx.palMap[tile + 1]) or 1]
+          end,
+        })
+      end
+    end
+    local ground = { 0, 0, 0 }
+    local pal0 = gfx and gfx.palettes and gfx.palettes[1]
+    if type(pal0) == "table" and type(pal0[4]) == "table" then
+      ground = pal0[4]
+    end
+    return {
+      kind = "townmap",
+      gen2 = true,
+      sheet = sheet,
+      maps = gfx and gfx.maps,
+      ground = ground,
+      locs = locs,
+      index = 1,
+      blink = 0,
+      timer = 0,
+    }
+  end
   return {
     kind = "townmap",
     bg = img(S, pathOf(tm.background)) or img(S, "assets/generated/town_map.png"),
@@ -649,12 +770,81 @@ end
 local function updateTownMap(st)
   st.timer = st.timer + 1
   st.blink = (st.blink + 1) % 30
+  -- Gold: pin to the landmark selected in the form; Gen1 still cycles.
+  if st.gen2 then return end
   if #st.locs > 0 and st.timer % 60 == 0 then
     st.index = (st.index % #st.locs) + 1
   end
 end
 
+local function drawPokegearTownMap(st, S)
+  local g = st.ground or { 0, 0, 0 }
+  love.graphics.setColor(g[1] / 255, g[2] / 255, g[3] / 255, 1)
+  love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+
+  local loc
+  local sel = S and S.uiTmLoc
+  if sel then
+    for i, e in ipairs(st.locs) do
+      if e.id == sel then
+        loc, st.index = e, i
+        break
+      end
+    end
+  end
+  loc = loc or st.locs[st.index]
+
+  local region = pokegearRegion(loc and loc.index, S and S.uiTmRegion)
+  local cells = st.maps and st.maps[region]
+  if st.sheet and cells then
+    love.graphics.setColor(1, 1, 1, 1)
+    for i = 1, 20 * 18 do
+      local tile = cells[i]
+      if tile ~= nil then
+        local tx = (i - 1) % 20
+        local ty = math.floor((i - 1) / 20)
+        -- $4f is the solid ground fill tile on the gear sheet.
+        if tile == 0x4f then
+          love.graphics.setColor(g[1] / 255, g[2] / 255, g[3] / 255, 1)
+          love.graphics.rectangle("fill", tx * 8, ty * 8, 8, 8)
+          love.graphics.setColor(1, 1, 1, 1)
+        else
+          pcall(function() st.sheet:draw(tile, tx, ty) end)
+        end
+      end
+    end
+  elseif not st.sheet then
+    love.graphics.setColor(0.2, 0.35, 0.25, 1)
+    love.graphics.rectangle("fill", 0, 24, GB_W, GB_H - 24)
+  end
+
+  -- Landmark coords are already screen pixels (extractor undoes OAM +8/+16).
+  if loc and st.blink < 15 then
+    local x, y = tonumber(loc.x) or 0, tonumber(loc.y) or 0
+    love.graphics.setColor(1, 0.15, 0.15, 1)
+    love.graphics.rectangle("fill", x - 2, y - 2, 5, 5)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.rectangle("fill", x - 1, y - 1, 3, 3)
+  end
+  if loc and ensureFont(S) then
+    love.graphics.setColor(0, 0, 0, 1)
+    local name = tostring(loc.name or "")
+    -- Match pokegear name plate: first line at top of screen.
+    local line1, line2 = name:match("^(.-)\n(.*)$")
+    if not line1 then line1 = name end
+    pcall(require("src.render.Font").draw, line1, 72, 0)
+    if line2 and line2 ~= "" then
+      pcall(require("src.render.Font").draw, line2, 72, 8)
+    end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 local function drawTownMapFrame(st, S)
+  if st.gen2 then
+    drawPokegearTownMap(st, S)
+    return
+  end
   love.graphics.setColor(0.75, 0.85, 0.65, 1)
   love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
   if st.bg then
@@ -677,7 +867,64 @@ local function drawTownMapFrame(st, S)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
+-- Trainer-card OAM order (Mineral before Storm); matches gen2 TrainerCard.
+local BADGE_OAM_ORDER = {
+  "ZEPHYR", "HIVE", "PLAIN", "FOG", "MINERAL", "STORM", "GLACIER", "RISING",
+}
+
+local function trainerCardMerged(S)
+  local gfx = S.data and (S.data.gen2MenuGfx or S.data.menu_gfx)
+  local base = (gfx and gfx.trainerCard) or {}
+  local proj = (S.project and S.project.trainerCard) or {}
+  local tc = {}
+  for k, v in pairs(base) do tc[k] = v end
+  for k, v in pairs(proj) do
+    if v ~= nil and v ~= "" then tc[k] = v end
+  end
+  return tc
+end
+
 local function buildBadges(S)
+  if Generation.isGen2(S) then
+    local tc = trainerCardMerged(S)
+    local badgeSheet, leaderSheet
+    local okTs, TileSheet = pcall(require, "src.ui.gen2.TileSheet")
+    if okTs and TileSheet then
+      local badgesPath = pathOf(tc.badges)
+      if badgesPath ~= "" then
+        badgeSheet = TileSheet.new({
+          path = badgesPath,
+          wide = tc.badgesWide or 2,
+          firstTile = 0,
+          palette = tc.badgePalette,
+        })
+      end
+      local leadersPath = pathOf(tc.leaders)
+      if leadersPath ~= "" then
+        leaderSheet = TileSheet.new({
+          path = leadersPath,
+          wide = tc.leadersWide or 10,
+          firstTile = tc.leadersFirstTile or 0x29,
+        })
+      end
+    end
+    return {
+      kind = "badges",
+      gen2 = true,
+      badgeSheet = badgeSheet,
+      leaderSheet = leaderSheet,
+      badgeOam = tc.badgeOam,
+      badgePalette = tc.badgePalette,
+      leadersFirst = tc.leadersFirstTile or 0x29,
+      badgesImg = img(S, pathOf(tc.badges)),
+      leadersImg = img(S, pathOf(tc.leaders)),
+      names = BADGE_OAM_ORDER,
+      highlight = 1,
+      timer = 0,
+      frames = 0,
+      badges = {}, -- unused; keeps updateBadges safe
+    }
+  end
   local rows = (S.project and S.project.constants and S.project.constants.badges)
     or (S.data and S.data.constants and S.data.constants.badges) or {}
   local badges = {}
@@ -693,12 +940,85 @@ end
 
 local function updateBadges(st)
   st.timer = st.timer + 1
+  if st.gen2 then
+    st.frames = (st.frames or 0) + 1
+    local n = st.names and #st.names or 0
+    if n > 0 and st.timer % 45 == 0 then
+      st.highlight = (st.highlight % n) + 1
+    end
+    return
+  end
   if #st.badges > 0 and st.timer % 45 == 0 then
     st.highlight = (st.highlight % #st.badges) + 1
   end
 end
 
+local function drawGen2BadgeSprites(st)
+  local list = st.badgeOam
+  local sheet = st.badgeSheet
+  if not (list and sheet and sheet:available()) then return false end
+  local G = love.graphics
+  local okPal, GbcPalette = pcall(require, "src.render.GbcPalette")
+  local frame = math.floor((st.frames or 0) / 8) % 8
+  for i, obj in ipairs(list) do
+    local tile = (obj.frames and obj.frames[frame + 1]) or 0
+    local flip = tile >= 0x80
+    local base = flip and (tile - 0x80) or tile
+    local sx = flip and -1 or 1
+    local hi = (i == st.highlight)
+    local function body()
+      for _, cell in ipairs({
+        { 0, 0, 0 }, { 1, 0, 1 }, { 0, 1, 2 }, { 1, 1, 3 },
+      }) do
+        local quad = sheet:quad(base + cell[3])
+        if quad then
+          local px = obj.x + (flip and (1 - cell[1]) or cell[1]) * 8
+          G.draw(sheet:image(), quad,
+            px + (flip and 8 or 0), obj.y + cell[2] * 8, 0, sx, 1)
+        end
+      end
+    end
+    G.setColor(1, 1, 1, 1)
+    if st.badgePalette and okPal and GbcPalette.available and GbcPalette.available() then
+      GbcPalette.with(st.badgePalette, body)
+    else
+      body()
+    end
+    if hi then
+      G.setColor(1, 0.85, 0.2, 1)
+      G.rectangle("line", obj.x - 1, obj.y - 1, 17, 17)
+    end
+  end
+  return true
+end
+
 local function drawBadgesFrame(st, S)
+  if st.gen2 then
+    love.graphics.setColor(0.95, 0.92, 0.78, 1)
+    love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+    -- Leaders sheet strip across the middle (faces live on this sheet).
+    if st.leadersImg then
+      love.graphics.setColor(1, 1, 1, 1)
+      local iw, ih = st.leadersImg:getDimensions()
+      local maxH = 48
+      local sc = math.min(GB_W / iw, maxH / ih)
+      local dw, dh = iw * sc, ih * sc
+      love.graphics.draw(st.leadersImg, (GB_W - dw) / 2, 8, 0, sc, sc)
+    end
+    if not drawGen2BadgeSprites(st) and st.badgesImg then
+      love.graphics.setColor(1, 1, 1, 1)
+      local iw, ih = st.badgesImg:getDimensions()
+      local sc = math.min((GB_W - 16) / iw, 56 / ih)
+      love.graphics.draw(st.badgesImg, 8, 72, 0, sc, sc)
+    end
+    local name = st.names and st.names[st.highlight]
+    if name and ensureFont(S) then
+      love.graphics.setColor(0, 0, 0, 1)
+      pcall(require("src.render.Font").draw, tostring(name) .. "BADGE", 8, 0)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    return
+  end
   love.graphics.setColor(0.9, 0.9, 0.85, 1)
   love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
   local n = #st.badges
@@ -988,8 +1308,8 @@ function UiPreview.draw(S, mode, x, y, w, s)
     theme = "textBox / choiceBox + blinking cursor",
     fonts = "scroll selected font sheet",
     strings = "menu labels with string overrides",
-    townmap = "background + blinking location cursor",
-    badges = "badge icons · highlight cycles",
+    townmap = "pokegear map + landmark cursor (Gold) / town map (Red)",
+    badges = "trainer-card badge sprites (Gold) / badge icons (Red)",
     boot = "splash → title → newGame screen ids",
   }
   local info = tips[mode] or mode
@@ -1002,6 +1322,11 @@ function UiPreview.draw(S, mode, x, y, w, s)
       local step = p.state.steps[p.state.index]
       info = string.format("boot · %s = %s",
         tostring(step and step.key), tostring(step and step.id))
+    elseif mode == "badges" and p.state.gen2 and p.state.names then
+      info = string.format("badges · %s",
+        tostring(p.state.names[p.state.highlight] or "?"))
+    elseif mode == "townmap" and p.state.gen2 then
+      info = "town map · pokegear landmarks"
     end
   end
   Kit.text("micro", Kit.ellipsize("micro", info, w), x, y + vh + 12 * s, PAL.muted)

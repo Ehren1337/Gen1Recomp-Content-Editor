@@ -1,0 +1,8 @@
+UiPreview	false	...Recomp Content Editor\tools\content-editor\UiPreview.lua:5: module 'Kit' not found:
+	no field package.preload['Kit']
+	no 'Kit' in LOVE game directories.
+	no file 'Kit' in LOVE paths.
+	no file 'C:\Users\amand\OneDrive\Documents\GitHub\Gen1Recomp Content Editor\Kit.lua'
+	no file 'C:\Users\amand\OneDrive\Documents\GitHub\Gen1Recomp Content Editor\Kit\init.lua'
+	no file 'C:\Users\amand\OneDrive\Documents\GitHub\Gen1Recomp Content Editor\tools\content-editor\Kit.lua'
+	no file 'C:\Users\amand\OneDr

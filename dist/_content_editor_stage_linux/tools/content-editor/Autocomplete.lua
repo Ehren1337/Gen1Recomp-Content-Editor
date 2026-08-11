@@ -188,7 +188,21 @@ function Autocomplete.itemIds(S)
   if ok and ItemPicker and ItemPicker.allIds then
     return ItemPicker.allIds(S)
   end
-  return mergeKeys(S.project and S.project.items, S.data and S.data.items)
+  local State = require("State")
+  local seen, ids = {}, {}
+  local function consider(bag)
+    if type(bag) ~= "table" then return end
+    for id, rec in pairs(bag) do
+      if not seen[id] and State.isItemRecord(id, rec) then
+        seen[id] = true
+        ids[#ids + 1] = id
+      end
+    end
+  end
+  consider(S.project and S.project.items)
+  consider(S.data and S.data.items)
+  table.sort(ids)
+  return ids
 end
 
 function Autocomplete.moveIds(S)
@@ -204,7 +218,12 @@ function Autocomplete.spriteIds(S)
 end
 
 function Autocomplete.trainerIds(S)
-  return mergeKeys(S.project and S.project.trainers, S.data and S.data.trainers)
+  -- Gold: data.trainers = { classes = { BEAUTY = … }, generation = 2 }.
+  local data = S.data and S.data.trainers
+  if type(data) == "table" and type(data.classes) == "table" then
+    data = data.classes
+  end
+  return mergeKeys(S.project and S.project.trainers, data)
 end
 
 function Autocomplete.songIds(S)

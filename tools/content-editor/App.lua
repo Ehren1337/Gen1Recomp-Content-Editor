@@ -28,6 +28,7 @@ local Trainers = require("Trainers")
 local Events = require("Events")
 local Trades = require("Trades")
 local Shops = require("Shops")
+local Breeding = require("Breeding")
 local Audio = require("Audio")
 local Gfx = require("Gfx")
 local AiClasses = require("AiClasses")
@@ -68,21 +69,23 @@ local TABS = {
   { id = "dialog",   label = "DIALOG",
     tip = "NPC / sign TEXT_* strings and bindings" },
   { id = "shops",    label = "SHOPS",
-    tip = "Poké Mart inventories (text_pointers.mart)" },
+    tip = "Poké Mart inventories (Gen1 TEXT_* / Gold MART_* shelves)" },
   { id = "trades",   label = "TRADES",
-    tip = "In-game trades (field.trades)" },
+    tip = "In-game trades (Gen1 field.trades / Gold NPC trades)" },
   { id = "trainers", label = "TRAINERS",
     tip = "Trainer classes, parties, and battle headers" },
   { id = "ai",       label = "AI",
-    tip = "Trainer AI classes (item use / switching)" },
+    tip = "Gen1 AI classes / Gold scoring layers (BASIC, SMART, …)" },
   { id = "player",   label = "PLAYER",
-    tip = "Player overworld sprites, walk anim frames, battle pics" },
+    tip = "Gen1 Red / Gold Chris: OW sheets, remaps, battle & intro pics" },
   { id = "ui",       label = "UI",
     tip = "Title/splash, theme, fonts, strings, town map, badge icons" },
   { id = "items",    label = "ITEMS",
     tip = "Items and bag effect templates" },
   { id = "pokemon",  label = "POKEMON",
     tip = "Species stats, sprites, icons, learnsets" },
+  { id = "breeding", label = "BREEDING",
+    tip = "Gold: egg groups / steps / moves and Day-Care knobs" },
   { id = "moves",    label = "MOVES",
     tip = "Move power, accuracy, effects, advanced flags" },
   { id = "anims",    label = "ANIMS",
@@ -104,6 +107,7 @@ local PANELS = {
   manifest = Manifest,
   code = Code,
   pokemon = Pokemon,
+  breeding = Breeding,
   items = Items,
   moves = Moves,
   anims = BattleAnims,
@@ -159,9 +163,15 @@ end
 function App.reloadData(opts)
   opts = opts or {}
   if not S then return false end
-  local source, prefs, status = DataSource.apply({
-    version = opts.version or S.version or App.dataVersion or "red",
-  })
+  -- Stop chip preview + drop programs.bin bank cache before remount; Red and
+  -- Gold share the same virtual path with different bank sets.
+  pcall(function() Audio.stopPreview(S) end)
+  pcall(function() require("src.core.ChipAudio").invalidate() end)
+  local version = opts.version or S.version or App.dataVersion
+  local source, prefs, status = DataSource.apply({ version = version })
+  version = (prefs and prefs.lastVersion) or version or "red"
+  S.version = version
+  App.dataVersion = version
   S.dataSource = source
   S.dataPrefs = prefs
   if prefs and prefs.useGbcPalettes ~= nil then
@@ -180,12 +190,116 @@ function App.reloadData(opts)
   return true
 end
 
+local function firstSortedId(tbl)
+  if type(tbl) ~= "table" then return nil end
+  local ids = {}
+  for id in pairs(tbl) do ids[#ids + 1] = id end
+  table.sort(ids)
+  return ids[1]
+end
+
+local function firstItemId(items)
+  if type(items) ~= "table" then return nil end
+  local State = require("State")
+  local ids = {}
+  for id, rec in pairs(items) do
+    if State.isItemRecord(id, rec) then ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  return ids[1]
+end
+
+-- Rebind list selections after a game switch so panels don't keep Red ids
+-- while S.data is Gold (or the reverse).
+function App.resetCatalogSelection()
+  if not S or not S.data then return end
+  S._liveTilesets = nil
+  S._vanillaMapBackup = nil
+  S._mapCenteredFor = nil
+  S.mapListOffset = 0
+  S.pokemonListOffset = 0
+  S.itemListOffset = 0
+  S.moveListOffset = 0
+  S.typeListOffset = 0
+  S.scrollY = 0
+  do
+    local ids = {}
+    for id, rec in pairs(S.data.pokemon or {}) do
+      if State.isPokemonRecord(id, rec) then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    S.pokemonId = ids[1]
+  end
+  S.itemId = firstItemId(S.data.items)
+  do
+    local ids = {}
+    for id, rec in pairs(S.data.moves or {}) do
+      if State.isMoveRecord(id, rec) then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    S.moveId = ids[1]
+  end
+  S.mapId = firstSortedId(S.data.maps)
+  S.dialogMapId = S.mapId
+  S.dialogTextId = nil
+  local trainers = S.data.trainers
+  if type(trainers) == "table" and type(trainers.classes) == "table" then
+    S.trainerId = firstSortedId(trainers.classes)
+  else
+    S.trainerId = firstSortedId(trainers)
+  end
+  do
+    local Generation = require("Generation")
+    if Generation.isGen2(S) then
+      local Ai = select(2, pcall(require, "src.battle.gen2.Ai"))
+      S.aiClassId = (Ai and Ai.LAYER_ORDER and Ai.LAYER_ORDER[1]) or "BASIC"
+    else
+      S.aiClassId = firstSortedId(S.data.ai_classes)
+    end
+  end
+  local ok, TypeChart = pcall(require, "src.battle.TypeChart")
+  if ok and TypeChart and TypeChart.TYPES then
+    S.typeId = firstSortedId(TypeChart.TYPES)
+  end
+end
+
+-- Switch active game (Red/Blue/Yellow/Gold): remount cache + reload Data.
+function App.setGameVersion(version)
+  local GameVersion = require("src.core.GameVersion")
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    say("Unknown game: " .. tostring(version))
+    return false
+  end
+  DataSource.setLastVersion(version)
+  GameVersion.set(version)
+  S.version = version
+  App.dataVersion = version
+  pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  App.reloadData({ version = version })
+  App.resetCatalogSelection()
+  local info = GameVersion.info(version)
+  local src = S.dataSource or "?"
+  say("Game: " .. ((info and info.displayName) or version)
+    .. " (Gen " .. tostring(GameVersion.generation(version)) .. ") — "
+    .. DataSource.label(src))
+  return true
+end
+
+function App.generation()
+  local GameVersion = require("src.core.GameVersion")
+  return GameVersion.generation(S and S.version or App.dataVersion or "red")
+end
+
 function App.load(modPath, opts)
   opts = opts or {}
   S = State.new()
-  S.version = opts.version
-  App.dataVersion = opts.version
-  local source, prefs, status = DataSource.apply({ version = opts.version })
+  local prefsPeek = DataSource.loadPrefs()
+  local version = opts.version or prefsPeek.lastVersion or "red"
+  S.version = version
+  App.dataVersion = version
+  local source, prefs, status = DataSource.apply({ version = version })
+  S.version = (prefs and prefs.lastVersion) or version
+  App.dataVersion = S.version
   S.dataSource = source
   S.dataPrefs = prefs
   S.useGbcPalettes = (prefs and prefs.useGbcPalettes ~= nil)
@@ -235,6 +349,7 @@ function App.importRomFile(path)
   local RomImporter = require("src.import.RomImporter")
   local importer = RomImporter.new(function(version)
     DataSource.setMode("imported")
+    DataSource.setLastVersion(version)
     if S then S._romImporter = nil end
     App.dataVersion = version
     S.version = version
@@ -322,21 +437,22 @@ function App.openMod(path)
   S.pokemonId = next(project.pokemon)
   if not S.pokemonId and S.data and S.data.pokemon then
     local ids = {}
-    for id in pairs(S.data.pokemon) do ids[#ids + 1] = id end
+    for id, rec in pairs(S.data.pokemon) do
+      if State.isPokemonRecord(id, rec) then ids[#ids + 1] = id end
+    end
     table.sort(ids)
     S.pokemonId = ids[1]
   end
   S.itemId = next(project.items)
   if not S.itemId and S.data and S.data.items then
-    local ids = {}
-    for id in pairs(S.data.items) do ids[#ids + 1] = id end
-    table.sort(ids)
-    S.itemId = ids[1]
+    S.itemId = firstItemId(S.data.items)
   end
   S.moveId = next(project.moves)
   if not S.moveId and S.data and S.data.moves then
     local ids = {}
-    for id in pairs(S.data.moves) do ids[#ids + 1] = id end
+    for id, rec in pairs(S.data.moves) do
+      if State.isMoveRecord(id, rec) then ids[#ids + 1] = id end
+    end
     table.sort(ids)
     S.moveId = ids[1]
   end
@@ -1279,6 +1395,8 @@ function App.keypressed(key)
     return MapBuilder.keypressed(S, key, App)
   elseif S.tab == "maps" and Maps.keypressed then
     Maps.keypressed(S, key, App)
+  elseif S.tab == "events" and Events.keypressed then
+    Events.keypressed(S, key, App)
   elseif S.tab == "code" and Code.keypressed then
     Code.keypressed(S, key)
   end

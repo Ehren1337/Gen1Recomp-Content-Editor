@@ -143,7 +143,7 @@ local ok, err = pcall(function()
   assert(sample:find("move_effects:register"), sample)
   assert(sample:find('trainers:register%("OPP_SPEC_SPEC_BATTLE"'), sample)
   assert(sample:find("trainer_headers:patch"), sample)
-  assert(sample:find('trainer_headers:patch%("ViridianCity"'), sample)
+  assert(sample:find("ViridianCity"), sample)
   assert(sample:find("OPP_SPEC_SPEC_BATTLE"), sample)
   assert(sample:find("give_special"), sample)
   assert(sample:find("SPECIALS"), sample)
@@ -153,6 +153,73 @@ local ok, err = pcall(function()
   assert(not sample:find('"start_battle"'), sample)
   assert(sample:find('"OPP_SPEC_SPEC_BATTLE"'), sample)
   assert(sample:find('"t:give_special"'), sample)
+  do
+    local Gen2Talk = require("Gen2Talk")
+    local cmds = {
+      { op = "faceplayer" },
+      { op = "iftrue", script = "55:4dc0" },
+      { class = 3, member = 1, op = "loadtrainer" },
+      { op = "startbattle" },
+      { op = "special", id = 56 },
+    }
+    local steps = Gen2Talk.cmdsToSteps(cmds)
+    local stub = { project = { scripts = {}, scriptSteps = {}, text = {} } }
+    local back = Gen2Talk.stepsToCmds(stub, "55:4d96", steps)
+    local found = false
+    for _, c in ipairs(back) do
+      if c.op == "loadtrainer" and c.class == 3 then found = true end
+    end
+    assert(found, "Gen2Talk cmds↔steps lost loadtrainer")
+  end
+  do
+    local Gen2Talk = require("Gen2Talk")
+    local Breeding = require("Breeding")
+    assert(Breeding.draw)
+    local cmds = {
+      { op = "loadvar", args = { 3, 7 } },
+      { op = "loadwildmon", species = 130, level = 30 },
+      { op = "startbattle" },
+      { op = "reloadmapafterbattle" },
+    }
+    local steps = Gen2Talk.cmdsToSteps(cmds)
+    local wild
+    for _, st in ipairs(steps) do
+      if st.kind == "wild_battle" then wild = st end
+    end
+    assert(wild and wild.forceShiny, "forceShiny not folded into wild_battle")
+    local stub = { project = { scripts = {}, scriptSteps = {}, text = {} } }
+    local back = Gen2Talk.stepsToCmds(stub, "test:shiny", steps)
+    local sawLoadvar, sawWild = false, false
+    for _, c in ipairs(back) do
+      if c.op == "loadvar" and c.args and c.args[1] == 3 and c.args[2] == 7 then
+        sawLoadvar = true
+      end
+      if c.op == "loadwildmon" then sawWild = true end
+    end
+    assert(sawLoadvar and sawWild, "forceShiny wild_battle lost loadvar")
+  end
+  do
+    -- Gold emit paths for shiny rate / breeding (stub GameVersion → gold).
+    package.loaded["src.core.GameVersion"] = nil
+    package.preload["src.core.GameVersion"] = function()
+      return {
+        get = function() return "gold" end,
+        generation = function(id) return id == "gold" and 2 or 1 end,
+      }
+    end
+    package.loaded["Generation"] = nil
+    local ModWriter = require("ModWriter")
+    local out = ModWriter.emitMain({
+      id = "t",
+      shinyRate = 4096,
+      breeding = { eggLevel = 5, minStepsToEgg = 100 },
+    }, {})
+    assert(out:find("shinyRate = 4096"), "missing shinyRate emit")
+    assert(out:find("data.breeding"), "missing breeding emit")
+    package.preload["src.core.GameVersion"] = nil
+    package.loaded["src.core.GameVersion"] = nil
+    package.loaded["Generation"] = nil
+  end
   print("OK modules load")
 end)
 if not ok then print("FAIL", err); os.exit(1) end

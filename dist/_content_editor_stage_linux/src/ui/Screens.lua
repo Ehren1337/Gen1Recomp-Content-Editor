@@ -16,7 +16,16 @@ local BUILTIN = {
 local cache = {}
 
 local function builtinFor(id)
-  return require(BUILTIN[id] or ("src.ui." .. id))
+  local path = BUILTIN[id]
+  if not path then
+    -- Gold ids are "Gen2TitleState" → src.ui.gen2.TitleState (and friends).
+    if type(id) == "string" and id:sub(1, 4) == "Gen2" then
+      path = "src.ui.gen2." .. id:sub(5)
+    else
+      path = "src.ui." .. id
+    end
+  end
+  return require(path)
 end
 
 local function resolve(game, id)

@@ -7,6 +7,12 @@ local FALLBACK = {
   "FIRE", "WATER", "GRASS", "ELECTRIC", "PSYCHIC_TYPE", "ICE", "DRAGON",
 }
 
+local FALLBACK_GEN2 = {
+  "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BIRD", "BUG",
+  "GHOST", "STEEL", "CURSE_TYPE", "FIRE", "WATER", "GRASS", "ELECTRIC",
+  "PSYCHIC_TYPE", "ICE", "DRAGON", "DARK",
+}
+
 function TypeIds.list(S)
   local seen, ids = {}, {}
   local function add(id)
@@ -33,7 +39,19 @@ function TypeIds.list(S)
     for id in pairs(S.project.types) do add(id) end
   end
   if #ids == 0 then
-    for _, id in ipairs(FALLBACK) do add(id) end
+    local Generation = require("Generation")
+    local fb = Generation.isGen2(S) and FALLBACK_GEN2 or FALLBACK
+    for _, id in ipairs(fb) do add(id) end
+  end
+  -- Gold authoring always exposes Gold-only types even if a Gen1 TypeChart
+  -- module was required first.
+  do
+    local Generation = require("Generation")
+    if Generation.isGen2(S) then
+      for _, id in ipairs({ "DARK", "STEEL", "CURSE_TYPE", "BIRD" }) do
+        add(id)
+      end
+    end
   end
   table.sort(ids)
   return ids

@@ -1,4 +1,5 @@
--- Types tab: browse/create types and edit matchup multipliers (x10 Gen1).
+-- Types tab: browse/create types and edit matchup multipliers (x10).
+-- Gold also edits foresightMatchups (the TypeMatchups block after $FE).
 
 local Kit = require("Kit")
 local Theme = require("Theme")
@@ -7,6 +8,7 @@ local TypeIds = require("TypeIds")
 local State = require("State")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Types = {}
@@ -19,18 +21,43 @@ local function field(App, id, x, y, w, h, value, ph)
   return v
 end
 
+local function numField(App, id, x, y, w, h, value)
+  local v = field(App, id, x, y, w, h, tostring(value or 0), "0")
+  return tonumber(v) or value or 0
+end
+
+local function dataTypes(S)
+  return S.data and S.data.type_chart and S.data.type_chart.types or nil
+end
+
+local function isVanillaType(S, id)
+  if Generation.isGen2(S) then
+    local types = dataTypes(S)
+    return types and types[id] ~= nil
+  end
+  local ok, TypeChart = pcall(require, "src.battle.TypeChart")
+  if ok and TypeChart and TypeChart.TYPES and TypeChart.TYPES[id] then
+    return true
+  end
+  local types = dataTypes(S)
+  return types and types[id] ~= nil
+end
+
 local function typeRecord(S, id)
   if S.project.types and S.project.types[id] then
     return S.project.types[id], true
+  end
+  -- Gold: prefer extracted type_chart.types (index + Gold categories).
+  if Generation.isGen2(S) then
+    local types = dataTypes(S)
+    if types and types[id] then return types[id], false end
   end
   local ok, TypeChart = pcall(require, "src.battle.TypeChart")
   if ok and TypeChart and TypeChart.TYPES and TypeChart.TYPES[id] then
     return TypeChart.TYPES[id], false
   end
-  if S.data and S.data.type_chart and S.data.type_chart.types
-      and S.data.type_chart.types[id] then
-    return S.data.type_chart.types[id], false
-  end
+  local types = dataTypes(S)
+  if types and types[id] then return types[id], false end
   return { name = id, category = "physical" }, false
 end
 
@@ -38,13 +65,12 @@ local function ensureType(S, id, App)
   State.ensureProjectFields(S.project)
   if S.project.types[id] then return S.project.types[id] end
   local base = select(1, typeRecord(S, id))
-  local ok, TypeChart = pcall(require, "src.battle.TypeChart")
-  local isVanilla = ok and TypeChart.TYPES and TypeChart.TYPES[id]
   S.project.types[id] = {
     id = id,
     name = base.name or id,
     category = base.category or "special",
-    _isNew = not isVanilla,
+    index = base.index,
+    _isNew = not isVanillaType(S, id),
   }
   App.markDirty()
   return S.project.types[id]
@@ -66,7 +92,7 @@ local function getMultiplier(S, atk, def)
       end
     end
   end
-  return 10, false  -- Gen1 default neutral
+  return 10, false  -- default neutral
 end
 
 local function setMultiplier(S, atk, def, mult, App)
@@ -76,6 +102,59 @@ local function setMultiplier(S, atk, def, mult, App)
   App.markDirty()
 end
 
+local function getForesight(S, atk, def)
+  local key = matchupKey(atk, def)
+  if S.project.type_foresight and S.project.type_foresight[key] ~= nil then
+    return S.project.type_foresight[key], true
+  end
+  local rows = S.data and S.data.type_chart and S.data.type_chart.foresightMatchups
+  if type(rows) == "table" then
+    for _, row in ipairs(rows) do
+      if row.attacker == atk and row.defender == def then
+        return row.multiplier, false
+      end
+    end
+  end
+  return nil, false
+end
+
+local function setForesight(S, atk, def, mult, App)
+  State.ensureProjectFields(S.project)
+  S.project.type_foresight = S.project.type_foresight or {}
+  local key = matchupKey(atk, def)
+  if mult == nil then
+    S.project.type_foresight[key] = nil
+  else
+    S.project.type_foresight[key] = mult
+  end
+  App.markDirty()
+end
+
+local function foresightKeys(S)
+  local seen, keys = {}, {}
+  local function add(atk, def)
+    local key = matchupKey(atk, def)
+    if not seen[key] then
+      seen[key] = true
+      keys[#keys + 1] = key
+    end
+  end
+  for key in pairs(S.project.type_foresight or {}) do
+    local a, d = key:match("^([^>]+)>([^>]+)$")
+    if a then add(a, d) end
+  end
+  local rows = S.data and S.data.type_chart and S.data.type_chart.foresightMatchups
+  if type(rows) == "table" then
+    for _, row in ipairs(rows) do
+      if row.attacker and row.defender then
+        add(row.attacker, row.defender)
+      end
+    end
+  end
+  table.sort(keys)
+  return keys
+end
+
 function Types.draw(S, x, y, w, h, App)
   local s = Kit.scale
   if not S.project then
@@ -83,6 +162,7 @@ function Types.draw(S, x, y, w, h, App)
     return
   end
   State.ensureProjectFields(S.project)
+  local gen2 = Generation.isGen2(S)
 
   local listW = math.min(200 * s, w * 0.24)
   Kit.caption(x, y, "TYPES")
@@ -135,7 +215,9 @@ function Types.draw(S, x, y, w, h, App)
     for _, id in ipairs(all) do used[id] = true end
     while used[nid] do n = n + 1; nid = "NEW_TYPE_" .. n end
     S.project.types[nid] = {
-      id = nid, name = nid, category = "special", _isNew = true,
+      id = nid, name = nid, category = "special",
+      index = gen2 and 28 or nil,
+      _isNew = true,
     }
     S.typeId = nid
     App.markDirty()
@@ -180,15 +262,20 @@ function Types.draw(S, x, y, w, h, App)
         S.project.types[id] = nil
         r.id = v
         S.project.types[v] = r
-        -- rewrite matchup keys
-        local nm = {}
-        for key, mult in pairs(S.project.type_matchups or {}) do
-          local a, d = key:match("^([^>]+)>([^>]+)$")
-          if a == id then a = v end
-          if d == id then d = v end
-          nm[a .. ">" .. d] = mult
+        local function rewrite(bucket)
+          local nm = {}
+          for key, mult in pairs(bucket or {}) do
+            local a, d = key:match("^([^>]+)>([^>]+)$")
+            if a == id then a = v end
+            if d == id then d = v end
+            if a and d then nm[a .. ">" .. d] = mult end
+          end
+          return nm
         end
-        S.project.type_matchups = nm
+        S.project.type_matchups = rewrite(S.project.type_matchups)
+        if gen2 then
+          S.project.type_foresight = rewrite(S.project.type_foresight)
+        end
         S.typeId = v
         id = v
         App.markDirty()
@@ -211,9 +298,23 @@ function Types.draw(S, x, y, w, h, App)
       App.markDirty()
     end
   end)
+  if gen2 then
+    row("Index", function(fx, fy_, fw, fh_)
+      local cur = tonumber(rec.index)
+      if cur == nil then cur = 0 end
+      local v = numField(App, "ty_idx", fx, fy_, 80 * s, fh_, cur)
+      v = math.max(0, math.min(255, v))
+      if v ~= cur then
+        rec = ensureType(S, id, App)
+        rec.index = v
+      end
+    end)
+  end
 
   Kit.text("micro",
-    "Matchups use Gen1 x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE.",
+    gen2
+      and "x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE. Gold physical/special is by type index."
+      or "Matchups use Gen1 x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE.",
     viewX, fy, PAL.muted)
   fy = fy + 22 * s
   Kit.caption(viewX, fy, "AS ATTACKER vs...")
@@ -235,19 +336,78 @@ function Types.draw(S, x, y, w, h, App)
     end
     fy = fy + mRowH + 3 * s
   end
+
+  if gen2 then
+    fy = fy + 10 * s
+    Kit.caption(viewX, fy, "FORESIGHT MATCHUPS")
+    fy = fy + 20 * s
+    Kit.text("micro",
+      "Rows after TypeMatchups $FE — immunities Foresight ignores (usually NORMAL/FIGHTING vs GHOST).",
+      viewX, fy, PAL.muted)
+    fy = fy + 20 * s
+
+    local fKeys = foresightKeys(S)
+    if #fKeys == 0 then
+      Kit.text("micro", "No foresight rows yet.", viewX, fy, PAL.faint)
+      fy = fy + 18 * s
+    end
+    for _, key in ipairs(fKeys) do
+      local atk, def = key:match("^([^>]+)>([^>]+)$")
+      local mult, custom = getForesight(S, atk, def)
+      if mult == nil then mult = 0 end
+      Kit.text("mono", Kit.ellipsize("mono", key, viewW - (#MULTS * 52 * s) - 60 * s),
+        viewX + 4 * s, fy + 5 * s, custom and PAL.text or PAL.muted)
+      local bx = viewX + viewW - (#MULTS * 52 * s) - 56 * s
+      for _, m in ipairs(MULTS) do
+        local on = mult == m
+        local label = (m == 0 and "0") or (m == 5 and "0.5") or (m == 10 and "1x") or "2x"
+        if Kit.chip(bx, fy, 48 * s, mRowH, label, on, PAL.yellow) then
+          setForesight(S, atk, def, m, App)
+        end
+        bx = bx + 52 * s
+      end
+      if custom and Kit.button(bx, fy, 52 * s, mRowH, "×", {
+          kind = "danger", tooltip = "Revert foresight row to vanilla / remove",
+        }) then
+        setForesight(S, atk, def, nil, App)
+      end
+      fy = fy + mRowH + 3 * s
+    end
+
+    if Kit.button(viewX, fy, 180 * s, fh, "+ Foresight row", {
+        kind = "ghost",
+        tooltip = "Add foresight matchup for selected type vs GHOST (or cycle)",
+      }) then
+      local def = "GHOST"
+      local key = matchupKey(id, def)
+      if S.project.type_foresight and S.project.type_foresight[key] ~= nil then
+        -- already have this attacker; pick next defender type
+        def = TypeIds.cycle(S, def) or "GHOST"
+        key = matchupKey(id, def)
+      end
+      setForesight(S, id, def, 0, App)
+    end
+    fy = fy + fh + 8 * s
+  end
+
   FormPane.finish(S, "typeFormScroll", contentTop, fy, view)
 
   if owned and Kit.button(formX + 12 * s, listY + listH - 36 * s, 120 * s, 28 * s,
       "Revert type", { kind = "danger" }) then
     S.project.types[id] = nil
-    -- drop matchups involving this type that were only for a new type
     if rec._isNew then
-      local nm = {}
-      for key, mult in pairs(S.project.type_matchups or {}) do
-        local a, d = key:match("^([^>]+)>([^>]+)$")
-        if a ~= id and d ~= id then nm[key] = mult end
+      local function scrub(bucket)
+        local nm = {}
+        for key, mult in pairs(bucket or {}) do
+          local a, d = key:match("^([^>]+)>([^>]+)$")
+          if a ~= id and d ~= id then nm[key] = mult end
+        end
+        return nm
       end
-      S.project.type_matchups = nm
+      S.project.type_matchups = scrub(S.project.type_matchups)
+      if gen2 then
+        S.project.type_foresight = scrub(S.project.type_foresight)
+      end
       S.typeId = TypeIds.list(S)[1]
     end
     App.markDirty()

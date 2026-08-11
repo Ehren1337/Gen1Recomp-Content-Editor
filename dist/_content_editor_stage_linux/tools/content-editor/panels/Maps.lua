@@ -19,10 +19,288 @@ local Autocomplete = require("Autocomplete")
 local MapLoader = require("src.world.MapLoader")
 local Map = require("src.world.Map")
 local SpriteRenderer = require("src.render.SpriteRenderer")
+local Generation = require("Generation")
+local Gen2Talk = require("Gen2Talk")
 local PAL = Theme.PAL
 
 local Maps = {}
 local acS -- session for RegList.suggestField (set in Maps.draw)
+
+local function trainersRoot(S)
+  local t = S.data and S.data.trainers
+  if type(t) ~= "table" then return nil end
+  if t.classes then return t.classes end
+  return t
+end
+
+local function classIndexForId(S, classId)
+  if not classId then return nil end
+  if type(classId) == "string" then
+    classId = classId:upper():gsub("%s+", "_")
+    -- Gen2 classes are YOUNGSTER / BUGSY; Gen1 uses OPP_*.
+    if Generation.isGen2(S) and classId:sub(1, 4) == "OPP_" then
+      classId = classId:sub(5)
+    end
+  end
+  local owned = S.project and S.project.trainers and S.project.trainers[classId]
+  if owned and type(owned.index) == "number" then return owned.index end
+  local root = trainersRoot(S)
+  local rec = root and root[classId]
+  return rec and rec.index or nil
+end
+
+local function classIdForIndex(S, index)
+  index = tonumber(index)
+  if not index then return nil end
+  local root = trainersRoot(S)
+  if root then
+    for id, rec in pairs(root) do
+      if type(rec) == "table" and rec.index == index then return id end
+    end
+  end
+  for id, rec in pairs((S.project and S.project.trainers) or {}) do
+    if type(rec) == "table" and rec.index == index then return id end
+  end
+  return nil
+end
+
+local function speciesIndexForId(S, id)
+  if not id or id == "" then return nil end
+  local rec = S.project and S.project.pokemon and S.project.pokemon[id]
+  if type(rec) == "table" and type(rec.index) == "number" then
+    return rec.index
+  end
+  rec = S.data and S.data.pokemon and S.data.pokemon[id]
+  if type(rec) == "table" and type(rec.index) == "number" then
+    return rec.index
+  end
+  return nil
+end
+
+local function speciesIdForIndex(S, index)
+  index = tonumber(index)
+  if not index then return nil end
+  for id, rec in pairs((S.project and S.project.pokemon) or {}) do
+    if type(rec) == "table" and rec.index == index then return id end
+  end
+  for id, rec in pairs((S.data and S.data.pokemon) or {}) do
+    if type(rec) == "table" and rec.index == index then return id end
+  end
+  return nil
+end
+
+local function scanScriptOp(S, scriptKey, opName)
+  local cmds = Gen2Talk.commands(S, scriptKey)
+  if type(cmds) ~= "table" then return nil end
+  local function scan(list, depth)
+    if depth > 10 or type(list) ~= "table" then return nil end
+    for _, cmd in ipairs(list) do
+      if type(cmd) == "table" then
+        if cmd.op == opName then return cmd end
+        if type(cmd.script) == "table" then
+          local hit = scan(cmd.script, depth + 1)
+          if hit then return hit end
+        end
+      end
+    end
+    return nil
+  end
+  return scan(cmds, 0)
+end
+
+-- Gen2 gym leaders are OBJECTTYPE_SCRIPT (type=0) with loadtrainer in
+-- scriptKey — not OBJECTTYPE_TRAINER (type=2 + trainer{}).
+local function scriptedTrainerInfo(S, obj)
+  if not (S and obj and type(obj.scriptKey) == "string" and obj.scriptKey ~= "") then
+    return nil
+  end
+  if type(obj.trainer) == "table" and obj.trainer.class ~= nil then
+    return nil
+  end
+  local cmd = scanScriptOp(S, obj.scriptKey, "loadtrainer")
+  if not cmd then return nil end
+  return {
+    class = tonumber(cmd.class) or tonumber(cmd.args and cmd.args[1]),
+    member = tonumber(cmd.member)
+      or tonumber(cmd.args and cmd.args[2]) or 1,
+    scriptKey = obj.scriptKey,
+  }
+end
+
+-- VAR_BATTLETYPE / BATTLETYPE_FORCESHINY (Lake of Rage Red Gyarados).
+local VAR_BATTLETYPE = 3
+local BATTLETYPE_FORCESHINY = 7
+
+local function isForceShinyLoadvar(cmd)
+  if type(cmd) ~= "table" or cmd.op ~= "loadvar" then return false end
+  local var = tonumber(cmd.var) or tonumber(cmd.args and cmd.args[1])
+  local val = tonumber(cmd.value) or tonumber(cmd.args and cmd.args[2])
+  return var == VAR_BATTLETYPE and val == BATTLETYPE_FORCESHINY
+end
+
+local function scriptHasForceShiny(S, scriptKey)
+  local cmds = Gen2Talk.commands(S, scriptKey)
+  if type(cmds) ~= "table" then return false end
+  local function scan(list, depth)
+    if depth > 10 or type(list) ~= "table" then return false end
+    for _, cmd in ipairs(list) do
+      if type(cmd) == "table" then
+        if isForceShinyLoadvar(cmd) then return true end
+        if type(cmd.script) == "table" and scan(cmd.script, depth + 1) then
+          return true
+        end
+      end
+    end
+    return false
+  end
+  return scan(cmds, 0)
+end
+
+-- Own script and arm / clear `loadvar VAR_BATTLETYPE, FORCESHINY` next to
+-- the first loadwildmon (Red Gyarados pattern).
+local function setScriptForceShiny(S, scriptKey, on)
+  if type(scriptKey) ~= "string" or scriptKey == "" then return false end
+  local cmds = Gen2Talk.commands(S, scriptKey)
+  if type(cmds) ~= "table" then return false end
+  State.ensureProjectFields(S.project)
+  S.project.scripts = S.project.scripts or {}
+  if not S.project.scripts[scriptKey] then
+    local copy = {}
+    for i, cmd in ipairs(cmds) do
+      if type(cmd) == "table" then
+        local c = {}
+        for k, v in pairs(cmd) do c[k] = v end
+        copy[i] = c
+      else
+        copy[i] = cmd
+      end
+    end
+    S.project.scripts[scriptKey] = copy
+  end
+  cmds = S.project.scripts[scriptKey]
+  local wildIdx
+  for i, cmd in ipairs(cmds) do
+    if type(cmd) == "table" and cmd.op == "loadwildmon" then
+      wildIdx = i
+      break
+    end
+  end
+  if not wildIdx then return false end
+  -- Drop any existing FORCESHINY loadvar beside the wild load.
+  for i = #cmds, 1, -1 do
+    if isForceShinyLoadvar(cmds[i]) then
+      local near = math.abs(i - wildIdx) <= 2
+        or (i < wildIdx and wildIdx - i <= 3)
+      if near then
+        table.remove(cmds, i)
+        if i < wildIdx then wildIdx = wildIdx - 1 end
+      end
+    end
+  end
+  if on then
+    table.insert(cmds, wildIdx, {
+      op = "loadvar",
+      var = VAR_BATTLETYPE,
+      args = { VAR_BATTLETYPE, BATTLETYPE_FORCESHINY },
+    })
+  end
+  Gen2Talk.mirrorLive(S, scriptKey, cmds)
+  if Gen2Talk.getScriptSteps(S, scriptKey) then
+    Gen2Talk.refreshStepsFromCmds(S, scriptKey)
+  end
+  return true
+end
+
+-- Red Gyarados / Sudowoodo-style statics: loadwildmon in scriptKey, not
+-- object.pokemon + level (content-editor / Gen1 shape).
+local function scriptedWildInfo(S, obj)
+  if not (S and obj and type(obj.scriptKey) == "string" and obj.scriptKey ~= "") then
+    return nil
+  end
+  if obj.pokemon and obj.pokemon ~= "" then return nil end
+  local cmd = scanScriptOp(S, obj.scriptKey, "loadwildmon")
+  if not cmd then return nil end
+  local speciesIdx = tonumber(cmd.species)
+    or tonumber(cmd.args and cmd.args[1])
+  local level = tonumber(cmd.level)
+    or tonumber(cmd.args and cmd.args[2]) or 1
+  return {
+    speciesIndex = speciesIdx,
+    species = speciesIdForIndex(S, speciesIdx),
+    level = level,
+    scriptKey = obj.scriptKey,
+    forceShiny = scriptHasForceShiny(S, obj.scriptKey) or nil,
+  }
+end
+
+local function isTrainerObject(obj, S)
+  if type(obj) ~= "table" then return false end
+  if type(obj.trainer) == "table" and obj.trainer.class ~= nil then
+    return true
+  end
+  if obj.trainerClass and obj.trainerClass ~= "" then return true end
+  if S and scriptedTrainerInfo(S, obj) then return true end
+  return false
+end
+
+local function isFixedWildObject(obj, S)
+  if type(obj) ~= "table" then return false end
+  if obj.pokemon and obj.pokemon ~= "" then return true end
+  if S and scriptedWildInfo(S, obj) then return true end
+  return false
+end
+
+local function normalizeTrainerClassId(S, classId)
+  if type(classId) ~= "string" or classId == "" then return classId end
+  local id = classId:upper():gsub("%s+", "_")
+  if Generation.isGen2(S) and id:sub(1, 4) == "OPP_" then
+    id = id:sub(5)
+  end
+  return id
+end
+
+-- Own a script and patch its first matching op (gym / story / static wild).
+local function mutateScriptOp(S, scriptKey, opName, patchFn)
+  if type(scriptKey) ~= "string" or scriptKey == "" then return false end
+  local cmds = Gen2Talk.commands(S, scriptKey)
+  if type(cmds) ~= "table" then return false end
+  State.ensureProjectFields(S.project)
+  S.project.scripts = S.project.scripts or {}
+  if not S.project.scripts[scriptKey] then
+    local copy = {}
+    for i, cmd in ipairs(cmds) do
+      if type(cmd) == "table" then
+        local c = {}
+        for k, v in pairs(cmd) do c[k] = v end
+        copy[i] = c
+      else
+        copy[i] = cmd
+      end
+    end
+    S.project.scripts[scriptKey] = copy
+  end
+  cmds = S.project.scripts[scriptKey]
+  for _, cmd in ipairs(cmds) do
+    if type(cmd) == "table" and cmd.op == opName then
+      patchFn(cmd)
+      Gen2Talk.mirrorLive(S, scriptKey, cmds)
+      -- Keep Events step bags in sync with surgical Maps edits.
+      if Gen2Talk.getScriptSteps(S, scriptKey) then
+        Gen2Talk.refreshStepsFromCmds(S, scriptKey)
+      end
+      return true
+    end
+  end
+  return false
+end
+
+local function mutateScriptLoadtrainer(S, scriptKey, patchFn)
+  return mutateScriptOp(S, scriptKey, "loadtrainer", patchFn)
+end
+
+local function mutateScriptLoadwildmon(S, scriptKey, patchFn)
+  return mutateScriptOp(S, scriptKey, "loadwildmon", patchFn)
+end
 
 local CELL = 16  -- walk cell; a block is 2x2 cells
 local BLOCK_PX = 32  -- one Gen1 block = 4x4 of 8x8 tiles
@@ -35,6 +313,69 @@ local SECTIONS = {
   { id = "hidden", label = "Hidden" },
   { id = "gates", label = "Gates" },
 }
+local ENV_GEN2 = {
+  "TOWN", "ROUTE", "INDOOR", "CAVE", "ENVIRONMENT_5", "GATE", "DUNGEON",
+}
+local BGEVENT_KINDS = {
+  { id = 0, label = "READ" },
+  { id = 1, label = "UP" },
+  { id = 2, label = "DOWN" },
+  { id = 3, label = "RIGHT" },
+  { id = 4, label = "LEFT" },
+  { id = 5, label = "IFSET" },
+  { id = 6, label = "IFNOTSET" },
+  { id = 7, label = "ITEM" },
+}
+
+-- Gold connections store the dest name in mapId; numeric map is the group index.
+local function connMapId(conn)
+  if type(conn) ~= "table" then return nil end
+  if type(conn.mapId) == "string" and conn.mapId ~= "" then return conn.mapId end
+  if type(conn.map) == "string" and conn.map ~= "" then return conn.map end
+  return nil
+end
+
+local function makeConnection(destId, offset, prev)
+  local entry = { mapId = destId, map = destId, offset = offset or 0 }
+  if type(prev) == "table" and connMapId(prev) == destId then
+    entry.group = prev.group
+    if type(prev.map) == "number" then entry.map = prev.map end
+    entry.stripLength = prev.stripLength
+    entry.width = prev.width
+    entry.xOffset = prev.xOffset
+    entry.yOffset = prev.yOffset
+  end
+  return entry
+end
+
+local function envOrder(S)
+  local c = S and S.data and S.data.constants
+  if type(c) == "table" and type(c.environmentOrder) == "table"
+      and #c.environmentOrder > 0 then
+    return c.environmentOrder
+  end
+  return ENV_GEN2
+end
+
+local function fishGroupOrder(S)
+  local c = S and S.data and S.data.constants
+  if type(c) == "table" and type(c.fishGroupOrder) == "table" then
+    return c.fishGroupOrder
+  end
+  return {
+    "FISHGROUP_NONE", "FISHGROUP_SHORE", "FISHGROUP_OCEAN", "FISHGROUP_LAKE",
+    "FISHGROUP_POND",
+  }
+end
+
+local function sectionLabel(S, sec)
+  if Generation.isGen2(S) then
+    if sec.id == "signs" then return "BG Events" end
+    if sec.id == "hidden" then return "Hidden" end
+    if sec.id == "gates" then return "Gates" end
+  end
+  return sec.label
+end
 
 -- RPG Maker XP–style edit modes (Map = tiles / Passage; Events = NPCs & transfers).
 local MAP_MODE_SECTIONS = {
@@ -46,6 +387,54 @@ local EVENT_MODE_SECTIONS = {
 local EVENT_TOOLS = {
   object = true, warp = true, sign = true, trainer = true, wild = true,
 }
+
+local function allocGen2Talk(S, mapId, kind, index, facePlayer)
+  return Gen2Talk.allocTalk(S, mapId, kind, index, facePlayer)
+end
+
+local function gen2TalkTextKey(S, scriptKey)
+  return Gen2Talk.textKeyForScript(S, scriptKey)
+end
+
+-- Nearest event at a cell (exact match preferred).
+local function pickEventAt(S, mapDef, cx, cy)
+  local best, bestD, kind = nil, 0.5, nil
+  for i, obj in ipairs(mapDef.objects or {}) do
+    local d = math.abs((obj.x or 0) - cx) + math.abs((obj.y or 0) - cy)
+    if d <= bestD then best, bestD, kind = i, d, "object" end
+  end
+  for i, w in ipairs(mapDef.warps or {}) do
+    local d = math.abs((w.x or 0) - cx) + math.abs((w.y or 0) - cy)
+    if d <= bestD then best, bestD, kind = i, d, "warp" end
+  end
+  local signs = Generation.isGen2(S) and (mapDef.bgEvents or {}) or (mapDef.signs or {})
+  for i, sign in ipairs(signs) do
+    local d = math.abs((sign.x or 0) - cx) + math.abs((sign.y or 0) - cy)
+    if d <= bestD then best, bestD, kind = i, d, "sign" end
+  end
+  return kind, best
+end
+
+local function selectEvent(S, kind, index)
+  S.mapEditMode = "events"
+  if kind == "object" then
+    S.mapSection = "objects"; S.mapObjectIndex = index
+  elseif kind == "warp" then
+    S.mapSection = "warps"; S.mapWarpIndex = index
+  elseif kind == "sign" then
+    S.mapSection = "signs"; S.mapSignIndex = index
+  end
+end
+
+local function eventEntity(S, mapDef, kind, index)
+  if kind == "object" then return (mapDef.objects or {})[index] end
+  if kind == "warp" then return (mapDef.warps or {})[index] end
+  if kind == "sign" then
+    if Generation.isGen2(S) then return (mapDef.bgEvents or {})[index] end
+    return (mapDef.signs or {})[index]
+  end
+  return nil
+end
 
 local function syncMapEditMode(S, mode)
   S.mapEditMode = mode or S.mapEditMode or "map"
@@ -211,7 +600,8 @@ local function deepCloneMap(def)
       local b = {}
       for i = 1, #v do b[i] = v[i] end
       copy.blocks = b
-    elseif k == "warps" or k == "objects" or k == "signs" then
+    elseif k == "warps" or k == "objects" or k == "signs"
+        or k == "bgEvents" or k == "coordEvents" then
       copy[k] = cloneArrayOfTables(v)
     elseif k == "connections" then
       local c = {}
@@ -246,8 +636,21 @@ local function ensureOwned(S, mapId)
     S._vanillaMapBackup[mapId] = S.data.maps[mapId]
   end
   local copy = deepCloneMap(def)
-  if not copy.encounters and S.data and S.data.encounters and S.data.encounters[mapId] then
-    copy.encounters = cloneEncounters(S.data.encounters[mapId])
+  if not copy.encounters then
+    if Generation.isGen2(S) then
+      local root = S.data and (S.data.gen2Encounters or S.data.encounters)
+      if type(root) == "table" and (root.grass or root.water) then
+        local wrapped = {
+          grass = root.grass and root.grass[mapId],
+          water = root.water and root.water[mapId],
+        }
+        if wrapped.grass or wrapped.water then
+          copy.encounters = cloneEncounters(wrapped)
+        end
+      end
+    elseif S.data and S.data.encounters and S.data.encounters[mapId] then
+      copy.encounters = cloneEncounters(S.data.encounters[mapId])
+    end
   end
   if not copy.superRod and S.data and S.data.field and S.data.field.superRod
       and S.data.field.superRod[mapId] then
@@ -273,7 +676,7 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
   from.connections = from.connections or {}
   local opp = oppositeDir(dir)
   local prev = from.connections[dir]
-  local prevMap = prev and prev.map
+  local prevMap = connMapId(prev)
 
   local function clearBack(destId)
     if not destId or not opp then return end
@@ -281,7 +684,7 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
     if not backMap then return end
     backMap.connections = backMap.connections or {}
     local back = backMap.connections[opp]
-    if back and back.map == fromId then
+    if back and connMapId(back) == fromId then
       backMap.connections[opp] = nil
       if S.data and S.data.maps then S.data.maps[destId] = backMap end
       MapLoader.invalidate(destId)
@@ -294,11 +697,11 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
     from.connections[dir] = nil
   else
     if prevMap and prevMap ~= wantMap then clearBack(prevMap) end
-    from.connections[dir] = { map = wantMap, offset = wantOff }
+    from.connections[dir] = makeConnection(wantMap, wantOff, prev)
     local dest = ensureOwned(S, wantMap)
     if dest and opp then
       dest.connections = dest.connections or {}
-      dest.connections[opp] = { map = fromId, offset = -wantOff }
+      dest.connections[opp] = makeConnection(fromId, -wantOff, dest.connections[opp])
       if S.data and S.data.maps then S.data.maps[wantMap] = dest end
       MapLoader.invalidate(wantMap)
     end
@@ -380,8 +783,20 @@ local function cloneTilesetRecord(rec)
   local copy = {}
   for k, v in pairs(rec) do
     if k == "walkable" or k == "doorTiles" or k == "warpTiles"
-        or k == "counterTiles" or k == "waterTiles" or k == "shoreTiles" then
+        or k == "counterTiles" or k == "waterTiles" or k == "shoreTiles"
+        or k == "tilePalettes" then
       copy[k] = cloneNumList(v)
+    elseif k == "collision" and type(v) == "table" then
+      -- Gold COLL_* quads: deep-copy so Passage paint does not mutate vanilla.
+      local c = {}
+      for i, quad in ipairs(v) do
+        if type(quad) == "table" then
+          c[i] = { quad[1], quad[2], quad[3], quad[4] }
+        else
+          c[i] = quad
+        end
+      end
+      copy.collision = c
     elseif k == "blocks" and type(v) == "table" then
       local b = {}
       for i, row in ipairs(v) do
@@ -397,6 +812,85 @@ local function cloneTilesetRecord(rec)
   copy.waterTiles = copy.waterTiles or {}
   copy.shoreTiles = copy.shoreTiles or {}
   return copy
+end
+
+-- Gen2 Map helpers (COLL_* quads). Falls back to Gen1 Map when not Gold.
+local function mapApi(S)
+  if Generation.isGen2(S) then
+    local ok, Gen2Map = pcall(require, "src.world.gen2.Map")
+    if ok and Gen2Map then return Gen2Map end
+  end
+  return Map
+end
+
+-- Passage brush → COLL_* byte (Gold). Ledge uses hop direction.
+local COLL_PASSAGE = {
+  walk = 0x00,
+  solid = 0xff,
+  grass = 0x18,
+  water = 0x29, -- COLL_WATER (encounter / surf); 0x21 is also water-permission
+  door = 0x71,
+  warp = 0x7c,
+  none = 0xff,
+}
+local COLL_LEDGE = {
+  right = 0xa0, left = 0xa1, up = 0xa2, down = 0xa3,
+}
+
+local function ensureCollisionQuads(ts, blockCount)
+  ts.collision = ts.collision or {}
+  local n = math.max(blockCount or 0, #(ts.blocks or {}), #ts.collision)
+  for i = 1, n do
+    local q = ts.collision[i]
+    if type(q) ~= "table" then
+      ts.collision[i] = { 0xff, 0xff, 0xff, 0xff }
+    else
+      -- Own the quad so shared vanilla tables are not mutated in place.
+      ts.collision[i] = {
+        q[1] or 0xff, q[2] or 0xff, q[3] or 0xff, q[4] or 0xff,
+      }
+    end
+  end
+  return ts.collision
+end
+
+local function paintGen2Collision(S, mapDef, ts, cx, cy, App)
+  local bx, by = math.floor(cx / 2), math.floor(cy / 2)
+  if bx < 0 or by < 0 or bx >= (mapDef.width or 0) or by >= (mapDef.height or 0) then
+    S.status = "Passage: cell off map"
+    return
+  end
+  local blockId = mapDef.blocks[by * mapDef.width + bx + 1] or 0
+  if blockId == 0 then
+    S.status = "Passage: block 0 is the border sentinel (impassable)"
+    return
+  end
+  local mode = S.mapCollisionMode or "solid"
+  local value
+  if mode == "ledge" then
+    value = COLL_LEDGE[S.mapLedgeDir or "down"] or COLL_LEDGE.down
+  else
+    value = COLL_PASSAGE[mode]
+  end
+  if value == nil then return end
+  local maxBlock = 0
+  for _, id in ipairs(mapDef.blocks or {}) do
+    if type(id) == "number" and id > maxBlock then maxBlock = id end
+  end
+  ensureCollisionQuads(ts, maxBlock + 1)
+  local quad = ts.collision[blockId + 1]
+  local qi = (cy % 2) * 2 + (cx % 2) + 1
+  if quad[qi] == value then return end
+  quad[qi] = value
+  local tid = mapDef.tileset
+  if S.data and S.data.tilesets then S.data.tilesets[tid] = ts end
+  S._liveTilesets = nil
+  MapLoader.invalidateAll()
+  App.markDirty()
+  S.mapShowCollision = true
+  S.status = string.format(
+    "COLL block %d q%d → $%02X (%s) · tileset %s",
+    blockId, qi, value, mode, tostring(tid))
 end
 
 -- Clone vanilla tileset into the mod so collision / terrain flag edits persist.
@@ -519,6 +1013,105 @@ end
 local function cellInBlockSel(cx, cy, x0, y0, x1, y1)
   return cx >= x0 * 2 and cx <= x1 * 2 + 1
      and cy >= y0 * 2 and cy <= y1 * 2 + 1
+end
+
+local function deepCloneValue(v, seen)
+  if type(v) ~= "table" then return v end
+  seen = seen or {}
+  if seen[v] then return seen[v] end
+  local out = {}
+  seen[v] = out
+  for k, val in pairs(v) do
+    out[deepCloneValue(k, seen)] = deepCloneValue(val, seen)
+  end
+  return out
+end
+
+-- Event clipboard: Ctrl+C/V in Events mode copies object / warp / sign
+-- across maps (keeps Gen2 trainer{}, scriptKey, bgEvents, …).
+local function copySelectedMapEvent(S)
+  local map = resolveMapDef(S, S.mapId)
+  if not map then return false, "no map" end
+  local kind, idx, ent
+  local section = S.mapSection
+  if section == "objects" and S.mapObjectIndex then
+    kind, idx = "object", S.mapObjectIndex
+    ent = map.objects and map.objects[idx]
+  elseif section == "warps" and S.mapWarpIndex then
+    kind, idx = "warp", S.mapWarpIndex
+    ent = map.warps and map.warps[idx]
+  elseif section == "signs" and S.mapSignIndex then
+    kind, idx = "sign", S.mapSignIndex
+    if Generation.isGen2(S) then
+      ent = map.bgEvents and map.bgEvents[idx]
+    else
+      ent = map.signs and map.signs[idx]
+    end
+  end
+  if type(ent) ~= "table" then
+    return false, "select an object / warp / sign first (Events mode)"
+  end
+  S.mapEventClip = {
+    kind = kind,
+    entry = deepCloneValue(ent),
+    fromMap = map.id or S.mapId,
+    gen2 = Generation.isGen2(S) and true or false,
+  }
+  return true, string.format(
+    "Copied %s #%d — switch map, Ctrl+V to paste", kind, idx)
+end
+
+local function pasteMapEventClip(S, App)
+  local clip = S and S.mapEventClip
+  if not (clip and type(clip.entry) == "table" and clip.kind) then
+    return false, "clipboard empty — select an event, Ctrl+C"
+  end
+  local map = ensureOwned(S, S.mapId)
+  if not map then return false, "no map" end
+  local entry = deepCloneValue(clip.entry)
+  local cx = S._mapHoverCx
+  local cy = S._mapHoverCy
+  if cx == nil or cy == nil then
+    cx = tonumber(entry.x) or 0
+    cy = tonumber(entry.y) or 0
+  end
+  entry.x, entry.y = cx, cy
+  syncMapEditMode(S, "events")
+  if clip.kind == "object" then
+    map.objects = map.objects or {}
+    local n = #map.objects + 1
+    entry.index = n
+    map.objects[n] = entry
+    S.mapSection = "objects"
+    S.mapObjectIndex = n
+  elseif clip.kind == "warp" then
+    map.warps = map.warps or {}
+    local n = #map.warps + 1
+    map.warps[n] = entry
+    S.mapSection = "warps"
+    S.mapWarpIndex = n
+  elseif clip.kind == "sign" then
+    if Generation.isGen2(S) then
+      map.bgEvents = map.bgEvents or {}
+      local n = #map.bgEvents + 1
+      map.bgEvents[n] = entry
+      S.mapSection = "signs"
+      S.mapSignIndex = n
+    else
+      map.signs = map.signs or {}
+      local n = #map.signs + 1
+      map.signs[n] = entry
+      S.mapSection = "signs"
+      S.mapSignIndex = n
+    end
+  else
+    return false, "unknown clipboard kind"
+  end
+  if S.data and S.data.maps then S.data.maps[map.id or S.mapId] = map end
+  MapLoader.invalidate(map.id or S.mapId)
+  if App and App.markDirty then App.markDirty() end
+  return true, string.format("Pasted %s at (%d,%d) on %s",
+    clip.kind, cx, cy, tostring(map.id or S.mapId))
 end
 
 -- Block clipboard: RMB / Ctrl+C copy, Shift+RMB / Ctrl+V paste.
@@ -769,10 +1362,26 @@ local function removeBadgeGate(S, mapId)
 end
 
 -- Map locale for door SFX / wild rules / LAST_MAP (Outside / Inside / Cave).
-local function inferMapEnvironment(map)
-  if type(map) ~= "table" then return "outside" end
+-- Gold uses TOWN / ROUTE / INDOOR / CAVE / GATE / DUNGEON header enums.
+local function inferMapEnvironment(map, S)
+  if type(map) ~= "table" then
+    return (S and Generation.isGen2(S)) and "TOWN" or "outside"
+  end
   local env = map.environment
+  if S and Generation.isGen2(S) then
+    if type(env) == "string" and env ~= "" then
+      if env == "outside" then return "TOWN" end
+      if env == "inside" then return "INDOOR" end
+      if env == "cave" then return "CAVE" end
+      return env
+    end
+    if map.outdoor == true then return "TOWN" end
+    return "INDOOR"
+  end
   if env == "outside" or env == "inside" or env == "cave" then return env end
+  if env == "TOWN" or env == "ROUTE" then return "outside" end
+  if env == "CAVE" or env == "DUNGEON" then return "cave" end
+  if env == "INDOOR" or env == "GATE" then return "inside" end
   if map.outdoor == true then return "outside" end
   if map.outdoor == false then
     if map.tileset == "CAVERN" then return "cave" end
@@ -785,27 +1394,45 @@ local function inferMapEnvironment(map)
   return "inside"
 end
 
-local function setMapEnvironment(map, env)
+local function setMapEnvironment(map, env, S)
+  if S and Generation.isGen2(S) then
+    local ok = false
+    for _, id in ipairs(envOrder(S)) do
+      if id == env then ok = true; break end
+    end
+    if not ok then return end
+    map.environment = env
+    map.outdoor = (env == "TOWN" or env == "ROUTE")
+    return
+  end
   if env ~= "outside" and env ~= "inside" and env ~= "cave" then return end
   map.environment = env
   map.outdoor = (env == "outside")
 end
 
-local function defaultMap(id, index, tileset)
+local function defaultMap(id, index, tileset, S)
   local w, h = 10, 9
   local blocks = {}
   for i = 1, w * h do blocks[i] = 1 end
   local ts = tileset or "OVERWORLD"
-  local env = "outside"
-  if ts == "CAVERN" then env = "cave"
-  elseif ts ~= "OVERWORLD" and ts ~= "PLATEAU" then env = "inside" end
-  return {
+  local gen2 = S and Generation.isGen2(S)
+  local env
+  if gen2 then
+    env = "TOWN"
+    if ts == "CAVERN" then env = "CAVE"
+    elseif ts ~= "OVERWORLD" and ts ~= "PLATEAU" then env = "INDOOR" end
+  else
+    env = "outside"
+    if ts == "CAVERN" then env = "cave"
+    elseif ts ~= "OVERWORLD" and ts ~= "PLATEAU" then env = "inside" end
+  end
+  local def = {
     id = id,
     label = id,
     index = index,
     tileset = ts,
     environment = env,
-    outdoor = env == "outside",
+    outdoor = gen2 and (env == "TOWN" or env == "ROUTE") or (env == "outside"),
     width = w,
     height = h,
     blocks = blocks,
@@ -817,6 +1444,16 @@ local function defaultMap(id, index, tileset)
     encounters = nil,
     _isNew = true,
   }
+  if gen2 then
+    def.bgEvents = {}
+    def.generation = 2
+    def.group = 0
+    def.map = 0
+    def.music = 0
+    def.fishGroup = "FISHGROUP_NONE"
+    def.phoneService = true
+  end
+  return def
 end
 
 -- Optional 9th arg `suggest`: id list or function() -> list for autocomplete.
@@ -905,16 +1542,107 @@ local DEFAULT_MART = {
   "BURN_HEAL", "ICE_HEAL", "AWAKENING", "REPEL",
 }
 
-local function spriteDef(S, spriteId)
-  if not spriteId then return nil end
-  local proj = S.project and S.project.sprites and S.project.sprites[spriteId]
-  if proj then return proj end
-  return S.data and S.data.sprites and S.data.sprites[spriteId]
+-- Gold object_event sprite bytes: 1..N are OverworldSprites indices
+-- (constants.spriteOrder); $F0+ are wVariableSprites slots (SPRITE_CONSOLE…).
+local SPRITE_VARS = 0xF0
+local VAR_SPRITE_LABEL = {
+  [0] = "SPRITE_CONSOLE",
+  [1] = "SPRITE_DOLL_1",
+  [2] = "SPRITE_DOLL_2",
+  [3] = "SPRITE_BIG_DOLL",
+  [4] = "SPRITE_WEIRD_TREE",
+  [5] = "SPRITE_OLIVINE_RIVAL",
+  [6] = "SPRITE_AZALEA_ROCKET",
+  [7] = "SPRITE_FUCHSIA_GYM_1",
+  [8] = "SPRITE_FUCHSIA_GYM_2",
+  [9] = "SPRITE_FUCHSIA_GYM_3",
+  [10] = "SPRITE_FUCHSIA_GYM_4",
+  [11] = "SPRITE_COPYCAT",
+  [12] = "SPRITE_JANINE_IMPERSONATOR",
+}
+-- Editor preview when a VAR slot has no InitializeEvents / decoration byte yet.
+local VAR_SPRITE_PREVIEW = {
+  [0] = "SPRITE_N64",
+  [1] = "SPRITE_PIKACHU",
+  [2] = "SPRITE_CLEFAIRY",
+  [3] = "SPRITE_BIG_SNORLAX",
+  [4] = "SPRITE_SUDOWOODO",
+  [5] = "SPRITE_RIVAL",
+  [6] = "SPRITE_ROCKET",
+  [7] = "SPRITE_JANINE",
+  [8] = "SPRITE_JANINE",
+  [9] = "SPRITE_JANINE",
+  [10] = "SPRITE_JANINE",
+  [11] = "SPRITE_LASS",
+  [12] = "SPRITE_JANINE",
+}
+
+local function spriteOrderName(S, index)
+  local order = S and S.data and S.data.constants and S.data.constants.spriteOrder
+  if type(order) ~= "table" or type(index) ~= "number" then return nil end
+  local name = order[index]
+  if type(name) == "string" and name ~= "" and name ~= "UNUSED" then
+    return name
+  end
+  return nil
 end
 
--- nil = draw raw (trueColor); otherwise SGB palette id for Preview.draw.
+local function initialVarSpriteByte(S, slot)
+  local init = S and S.data
+    and (S.data.gen2InitialEvents or S.data.initial_events)
+  local sprites = init and init.sprites
+  if type(sprites) ~= "table" then return nil end
+  for _, row in ipairs(sprites) do
+    if type(row) == "table" and row.slot == slot then
+      return tonumber(row.sprite)
+    end
+  end
+  return nil
+end
+
+-- Resolve map object.sprite (string SPRITE_* or Gold numeric byte) → sheet id.
+local function resolveObjectSpriteId(S, sprite)
+  if type(sprite) == "string" and sprite ~= "" then return sprite end
+  if type(sprite) ~= "number" then return nil end
+  if sprite < SPRITE_VARS then
+    return spriteOrderName(S, sprite)
+  end
+  local slot = sprite - SPRITE_VARS
+  local byte = initialVarSpriteByte(S, slot)
+  if byte and byte ~= 0 then
+    return spriteOrderName(S, byte) or VAR_SPRITE_PREVIEW[slot]
+  end
+  return VAR_SPRITE_PREVIEW[slot]
+end
+
+local function spriteLabel(S, sprite)
+  if type(sprite) == "string" and sprite ~= "" then return sprite end
+  if type(sprite) == "number" and sprite >= SPRITE_VARS then
+    local slot = sprite - SPRITE_VARS
+    local varName = VAR_SPRITE_LABEL[slot]
+      or string.format("VAR_$%02X", sprite)
+    local resolved = resolveObjectSpriteId(S, sprite)
+    if resolved then return varName .. " → " .. resolved end
+    return varName
+  end
+  return resolveObjectSpriteId(S, sprite) or tostring(sprite or "?")
+end
+
+local function spriteDef(S, spriteId)
+  local id = resolveObjectSpriteId(S, spriteId) or spriteId
+  if not id or id == "" then return nil end
+  local proj = S.project and S.project.sprites and S.project.sprites[id]
+  if proj then return proj end
+  return S.data and S.data.sprites and S.data.sprites[id]
+end
+
+-- nil / colors table / SGB name for Preview.draw.
+-- Gen2: PAL_OW_* colors. Gen1: paletteSource or MEWMON.
 local function spritePreviewPal(S, def)
   if not def or def.trueColor then return nil end
+  if Generation.isGen2(S) then
+    return Preview.gen2ObjectPalette(S, def.palette or def.paletteId)
+  end
   local src = def.paletteSource
   if type(src) == "string" and src ~= "" and Preview.paletteColors(S, src) then
     return src
@@ -963,16 +1691,17 @@ end
 
 local function allItemIds(S)
   local seen, ids = {}, {}
-  for id in pairs((S.project and S.project.items) or {}) do
+  local function consider(id, rec)
+    if seen[id] or not State.isItemRecord(id, rec) then return end
     seen[id] = true
     ids[#ids + 1] = id
   end
+  for id, rec in pairs((S.project and S.project.items) or {}) do
+    consider(id, rec)
+  end
   if S.data and S.data.items then
-    for id in pairs(S.data.items) do
-      if not seen[id] then
-        seen[id] = true
-        ids[#ids + 1] = id
-      end
+    for id, rec in pairs(S.data.items) do
+      consider(id, rec)
     end
   end
   table.sort(ids)
@@ -1172,30 +1901,37 @@ local function mapUsesTrueColor(S, mapDef)
   return ts and ts.trueColor and true or false
 end
 
--- Palette id for SGB remap, or nil when TrueColor (skip remap).
+-- Palette id for SGB remap, or nil when TrueColor / Gold bake (skip remap).
 local function mapPreviewPalette(S, mapDef)
   mapDef = mapDef or resolveMapDef(S, S.mapId)
   if mapUsesTrueColor(S, mapDef) then return nil end
+  -- Gold atlases are baked true-color via tilePalettes × EnvironmentColors.
+  if Generation.isGen2(S) then return nil end
   return mapPaletteName(S, mapDef)
 end
 
--- Stamp tileset.trueColor so stock Gen1Recomp (tileset-only) matches the map flag.
-local function syncTilesetTrueColor(S, map, on, App)
-  if not map then return end
-  local ts
-  if on then
-    -- Prefer a map-local slot so enabling TrueColor does not recolor every
-    -- outdoor map that still shares OVERWORLD.
-    ts = ensureTerrainTileset(S, map, App)
-  else
-    local tid = map.tileset or ""
-    ts = S.project.tilesets and S.project.tilesets[tid]
-    if not ts then return end
-  end
-  if not ts then return end
-  ts.trueColor = on and true or nil
-  S._liveTilesets = nil
+local function invalidateMapPreview(S)
+  pcall(function() require("src.render.TileRenderer").invalidate() end)
   MapLoader.invalidateAll()
+  Preview.invalidate()
+end
+
+-- Maps TrueColor is per-map (`map.trueColor`). TileRenderer prefers that flag
+-- over the tileset sheet, so we must NOT fork via ensureTerrainTileset here —
+-- that created orphan MAP_TILESET copies and left the map pointing at a new
+-- blank-looking slot. Edit the shared tileset's TrueColor on the GFX tab.
+local function syncTilesetTrueColor(S, map, on)
+  if not map then return end
+  -- If this map already owns a project tileset slot (same id — GFX-style
+  -- patch, or a prior map-local fork), keep the flag in sync for preview.
+  -- Never clone / reassign map.tileset from this toggle.
+  local tid = map.tileset or ""
+  local ts = S.project.tilesets and S.project.tilesets[tid]
+  if ts then
+    ts.trueColor = on and true or nil
+    S._liveTilesets = nil
+    MapLoader.invalidateAll()
+  end
 end
 
 local function drawBlockThumb(S, tilesetId, blockId, x, y, size, mapDef)
@@ -1497,7 +2233,7 @@ local function buildWorldLayout(S)
 
   -- Outgoing neighbors from the current map.
   for dir, conn in pairs(rootDef.connections or {}) do
-    local dest = conn and conn.map
+    local dest = connMapId(conn)
     if dest then
       local destDef = resolveMapDef(S, dest)
       edges[#edges + 1] = {
@@ -1521,7 +2257,7 @@ local function buildWorldLayout(S)
       local def = resolveMapDef(S, id)
       if def then
         for dir, conn in pairs(def.connections or {}) do
-          if conn and conn.map == rootId then
+          if conn and connMapId(conn) == rootId then
             edges[#edges + 1] = {
               from = id, to = rootId, dir = dir,
               offset = conn.offset or 0, ok = true,
@@ -2033,7 +2769,8 @@ local function editorNeighbors(S, rootDef)
   local out = {}
   if not rootDef then return out end
   for dir, conn in pairs(rootDef.connections or {}) do
-    local dest = conn and conn.map
+    -- Gold stores the dest name in mapId; numeric map is the group index.
+    local dest = connMapId(conn)
     local destDef = dest and resolveMapDef(S, dest)
     if destDef and type(destDef.width) == "number"
         and type(destDef.height) == "number" then
@@ -2052,17 +2789,18 @@ local function facingFromRange(range)
 end
 
 local function getSpriteRenderer(S, spriteId)
-  if type(spriteId) ~= "string" or spriteId == "" then return nil end
-  if spriteCache[spriteId] ~= nil then
-    return spriteCache[spriteId] or nil
+  local id = resolveObjectSpriteId(S, spriteId)
+  if type(id) ~= "string" or id == "" then return nil end
+  if spriteCache[id] ~= nil then
+    return spriteCache[id] or nil
   end
-  local def = spriteDef(S, spriteId)
+  local def = spriteDef(S, id)
   if not def then
-    spriteCache[spriteId] = false
+    spriteCache[id] = false
     return nil
   end
-  local ok, sr = pcall(SpriteRenderer.new, def, spriteId)
-  spriteCache[spriteId] = (ok and sr) or false
+  local ok, sr = pcall(SpriteRenderer.new, def, id)
+  spriteCache[id] = (ok and sr) or false
   return ok and sr or nil
 end
 
@@ -2181,6 +2919,10 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       S.status = "No tileset for Passage paint (Import ROM / Link Recomp?)"
       return
     end
+    if Generation.isGen2(S) then
+      paintGen2Collision(S, mapDef, ts, cx, cy, App)
+      return
+    end
     local tile = Map.defCellTile(mapDef, ts, cx, cy)
     if tile == nil then
       S.status = "No tile at cell"
@@ -2277,6 +3019,13 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       end
       if not changed then return end
       label = "none"
+    elseif mode == "door" or mode == "warp" then
+      -- Gen1 uses doorTiles / warpTiles lists (Gold uses COLL_* above).
+      local key = (mode == "door") and "doorTiles" or "warpTiles"
+      ts[key] = ts[key] or {}
+      if listIndex(ts[key], tile) then return end
+      listSet(ts[key], tile, true)
+      label = mode
     else
       return
     end
@@ -2294,20 +3043,35 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     S.mapEditMode = "events"
     clearWarpDestPick(S)
     mapDef.warps = mapDef.warps or {}
+    local defaultDest = Generation.isGen2(S) and "NEW_BARK_TOWN" or "PALLET_TOWN"
     mapDef.warps[#mapDef.warps + 1] = {
-      x = cx, y = cy, destMap = "PALLET_TOWN", destWarp = 1,
+      x = cx, y = cy, destMap = defaultDest, destWarp = 1,
     }
     S.mapSection = "warps"
     S.mapWarpIndex = #mapDef.warps
     local ts = tilesetDef(S, mapDef.tileset)
-    local tile = ts and Map.defCellTile(mapDef, ts, cx, cy)
     local onWarpTile = false
-    if tile ~= nil and ts then
-      onWarpTile = listIndex(ts.doorTiles or {}, tile) ~= nil
-        or listIndex(ts.warpTiles or {}, tile) ~= nil
+    if Generation.isGen2(S) then
+      local Api = mapApi(S)
+      local coll = ts and Api.defCellTile(mapDef, ts, cx, cy)
+      if coll ~= nil then
+        local okP, Permissions = pcall(require, "src.world.gen2.Permissions")
+        onWarpTile = okP and Permissions and Permissions.isWarpCollision(coll)
+      end
+    elseif ts then
+      local tile = Map.defCellTile(mapDef, ts, cx, cy)
+      if tile ~= nil then
+        onWarpTile = listIndex(ts.doorTiles or {}, tile) ~= nil
+          or listIndex(ts.warpTiles or {}, tile) ~= nil
+      end
     end
     if onWarpTile then
       S.status = string.format("Warp at cell (%d,%d)", cx, cy)
+    elseif Generation.isGen2(S) then
+      S.status = string.format(
+        "Warp at (%d,%d) — cell is not COLL_DOOR / COLL_WARP_PANEL "
+          .. "(paint with Passage → Door/Warp)",
+        cx, cy)
     else
       S.status = string.format(
         "Warp at (%d,%d) — not a door/warp tile; Gen1 only fires at map edge / carpet",
@@ -2315,66 +3079,120 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
     end
   elseif tool == "sign" then
     S.mapEditMode = "events"
-    mapDef.signs = mapDef.signs or {}
-    local n = #mapDef.signs + 1
-    local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_SIGN" .. n
-    mapDef.signs[n] = { x = cx, y = cy, text = textId }
-    S.mapSection = "signs"
-    S.mapSignIndex = n
-    S.dialogMapId = mapDef.id
-    S.dialogTextId = textId
+    if Generation.isGen2(S) then
+      mapDef.bgEvents = mapDef.bgEvents or {}
+      local n = #mapDef.bgEvents + 1
+      local sk, tid = allocGen2Talk(S, mapDef.id or "MAP", "SIGN", n, false)
+      mapDef.bgEvents[n] = {
+        x = cx, y = cy, kind = 0, script = 0, scriptKey = sk,
+      }
+      S.mapSection = "signs"
+      S.mapSignIndex = n
+      S.dialogMapId = mapDef.id
+      S.dialogTextId = tid
+      S.dialogScriptKey = sk
+      S.status = string.format("Sign at (%d,%d) — edit Says in Objects/Dialog", cx, cy)
+    else
+      mapDef.signs = mapDef.signs or {}
+      local n = #mapDef.signs + 1
+      local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_SIGN" .. n
+      mapDef.signs[n] = { x = cx, y = cy, text = textId }
+      S.mapSection = "signs"
+      S.mapSignIndex = n
+      S.dialogMapId = mapDef.id
+      S.dialogTextId = textId
+    end
   elseif tool == "object" then
     S.mapEditMode = "events"
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
-    local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_OBJ" .. n
-    local spr = S.placeSprite or "SPRITE_RED"
-    mapDef.objects[n] = {
-      index = n, x = cx, y = cy,
-      sprite = spr, movement = "STAY", range = "DOWN", text = textId,
-    }
+    local spr = S.placeSprite or (Generation.isGen2(S) and "SPRITE_CHRIS" or "SPRITE_RED")
+    if Generation.isGen2(S) then
+      local sk, tid = allocGen2Talk(S, mapDef.id or "MAP", "OBJ", n, true)
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy, sprite = spr,
+        movement = 0, radius = { x = 0, y = 0 },
+        hours = { -1, -1 }, sight = 0, type = 0, palette = 0,
+        script = 0, scriptKey = sk, eventFlag = 0,
+      }
+      S.dialogMapId = mapDef.id
+      S.dialogTextId = tid
+      S.dialogScriptKey = sk
+    else
+      local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_OBJ" .. n
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy,
+        sprite = spr, movement = "STAY", range = "DOWN", text = textId,
+      }
+      S.dialogMapId = mapDef.id
+      S.dialogTextId = textId
+    end
     S.mapSection = "objects"
     S.mapObjectIndex = n
-    S.dialogMapId = mapDef.id
-    S.dialogTextId = textId
     S.status = "Placed " .. spr
+      .. (Generation.isGen2(S) and " — drag to move, edit Says below" or "")
   elseif tool == "trainer" then
     S.mapEditMode = "events"
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
-    local class = (S.trainerId and S.trainerId ~= "" and S.trainerId)
-      or "OPP_YOUNGSTER"
+    local class = normalizeTrainerClassId(S,
+      (S.trainerId and S.trainerId ~= "" and S.trainerId)
+        or (Generation.isGen2(S) and "YOUNGSTER" or "OPP_YOUNGSTER"))
     local party = math.max(1, tonumber(S.placeTrainerParty) or 1)
-    local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_TRAINER" .. n
-    local spr = S.placeSprite or "SPRITE_YOUNGSTER"
-    mapDef.objects[n] = {
-      index = n, x = cx, y = cy,
-      sprite = spr, movement = "STAY", range = "DOWN",
-      text = textId,
-      trainerClass = class, trainerParty = party,
-    }
-    State.ensureProjectFields(S.project)
-    local label = State.mapLabel(S, mapDef.id)
-    S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-    local beat = State.modFlag(S.project,
-      "BEAT_" .. (mapDef.id or "MAP") .. "_" .. n)
-    S.project.eventFlags = S.project.eventFlags or {}
-    S.project.eventFlags[beat] = true
-    S.project.trainer_headers[label][n] = {
-      range = 2,
-      battle = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Battle",
-      won = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Won",
-      after = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "After",
-      event = beat,
-      opponent = class,
-      party = party,
-    }
-    for _, key in ipairs({ "battle", "won", "after" }) do
-      local tid = S.project.trainer_headers[label][n][key]
-      S.project.text[tid] = S.project.text[tid]
-        or (key == "battle" and "Let's fight!")
-        or (key == "won" and "I lost...")
-        or "You're strong."
+    local spr = S.placeSprite
+      or (Generation.isGen2(S) and "SPRITE_YOUNGSTER" or "SPRITE_YOUNGSTER")
+    if Generation.isGen2(S) then
+      local classIdx = classIndexForId(S, class) or tonumber(class)
+      if not classIdx then
+        class = "YOUNGSTER"
+        classIdx = classIndexForId(S, class) or 1
+      end
+      S.trainerId = class
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy, sprite = spr,
+        movement = 0, radius = { x = 0, y = 0 },
+        hours = { -1, -1 }, sight = 2, type = 2, palette = 0,
+        script = 0, scriptKey = "", eventFlag = 65535,
+        trainer = {
+          class = classIdx,
+          member = party,
+          event = 0,
+          seenText = "",
+          winText = "",
+          scriptKey = "",
+        },
+      }
+    else
+      local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_TRAINER" .. n
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy,
+        sprite = spr, movement = "STAY", range = "DOWN",
+        text = textId,
+        trainerClass = class, trainerParty = party,
+      }
+      State.ensureProjectFields(S.project)
+      local label = State.mapLabel(S, mapDef.id)
+      S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
+      local beat = State.modFlag(S.project,
+        "BEAT_" .. (mapDef.id or "MAP") .. "_" .. n)
+      S.project.eventFlags = S.project.eventFlags or {}
+      S.project.eventFlags[beat] = true
+      S.project.trainer_headers[label][n] = {
+        range = 2,
+        battle = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Battle",
+        won = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "Won",
+        after = "_" .. (mapDef.id or "MAP") .. "Trainer" .. n .. "After",
+        event = beat,
+        opponent = class,
+        party = party,
+      }
+      for _, key in ipairs({ "battle", "won", "after" }) do
+        local tid = S.project.trainer_headers[label][n][key]
+        S.project.text[tid] = S.project.text[tid]
+          or (key == "battle" and "Let's fight!")
+          or (key == "won" and "I lost...")
+          or "You're strong."
+      end
     end
     S.mapSection = "objects"
     S.mapObjectIndex = n
@@ -2382,25 +3200,40 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       class, party, n)
   elseif tool == "wild" then
     S.mapEditMode = "events"
-    -- Fixed wild (object.pokemon + level): Articuno, Power Plant Voltorb, …
+    -- Fixed wild (object.pokemon + level): Gen1 birds / Power Plant; Gold
+    -- uses the same payload — World interact battles it on A-press.
     mapDef.objects = mapDef.objects or {}
     local n = #mapDef.objects + 1
+    local defaultSp = Generation.isGen2(S) and "SUDOWOODO" or "ARTICUNO"
     local species = (S.placeWildSpecies and S.placeWildSpecies ~= ""
-      and S.placeWildSpecies) or "ARTICUNO"
+      and S.placeWildSpecies) or defaultSp
     local level = math.max(1, math.min(100, tonumber(S.placeWildLevel) or 50))
-    local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_WILD" .. n
-    local spr = S.placeSprite or "SPRITE_BIRD"
-    mapDef.objects[n] = {
-      index = n, x = cx, y = cy,
-      sprite = spr, movement = "STAY", range = "DOWN",
-      text = textId,
-      pokemon = species, level = level,
-    }
-    State.ensureProjectFields(S.project)
-    local cry = "_" .. (mapDef.id or "MAP") .. "Wild" .. n
-    local entry = ensureTextPtr(S, mapDef.id, textId)
-    if entry then entry.text = cry end
-    S.project.text[cry] = S.project.text[cry] or "Gyaoo!"
+    local spr = S.placeSprite
+      or (Generation.isGen2(S) and "SPRITE_SUDOWOODO" or "SPRITE_BIRD")
+    if Generation.isGen2(S) then
+      -- SPRITEMOVEDATA_POKEMON ($16): still facing, fixed; eventFlag $FFFF
+      -- stays visible until win/catch stamps save.defeatedTrainers.
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy, sprite = spr,
+        movement = 0x16, radius = { x = 0, y = 0 },
+        hours = { -1, -1 }, sight = 0, type = 0, palette = 0,
+        script = 0, scriptKey = "", eventFlag = 65535,
+        pokemon = species, level = level,
+      }
+    else
+      local textId = "TEXT_" .. (mapDef.id or "MAP") .. "_WILD" .. n
+      mapDef.objects[n] = {
+        index = n, x = cx, y = cy,
+        sprite = spr, movement = "STAY", range = "DOWN",
+        text = textId,
+        pokemon = species, level = level,
+      }
+      State.ensureProjectFields(S.project)
+      local cry = "_" .. (mapDef.id or "MAP") .. "Wild" .. n
+      local entry = ensureTextPtr(S, mapDef.id, textId)
+      if entry then entry.text = cry end
+      S.project.text[cry] = S.project.text[cry] or "Gyaoo!"
+    end
     S.mapSection = "objects"
     S.mapObjectIndex = n
     S.status = string.format("Placed wild %s Lv%d as object #%d",
@@ -2416,7 +3249,9 @@ local function applyToolAtCell(S, mapDef, cx, cy, App)
       local d = math.abs(w.x - cx) + math.abs(w.y - cy)
       if d < bestD then best, bestD, kind = i, d, "warp" end
     end
-    for i, sign in ipairs(mapDef.signs or {}) do
+    local signList = Generation.isGen2(S) and (mapDef.bgEvents or {})
+      or (mapDef.signs or {})
+    for i, sign in ipairs(signList) do
       local d = math.abs(sign.x - cx) + math.abs(sign.y - cy)
       if d < bestD then best, bestD, kind = i, d, "sign" end
     end
@@ -2460,13 +3295,13 @@ local function drawObjectSprites(S, mapDef)
           px - camX + 2, py - camY + 2, CELL - 4, CELL - 4)
         love.graphics.setColor(1, 1, 1, 1)
       end
-      if obj.pokemon and obj.pokemon ~= "" then
+      if isFixedWildObject(obj, S) then
         -- Fixed wild marker (distinct from NPC / trainer outlines).
         love.graphics.setColor(0.95, 0.45, 0.2, 0.9)
         love.graphics.rectangle("line",
           px - camX, py - camY - 4, CELL, CELL)
         love.graphics.setColor(1, 1, 1, 1)
-      elseif obj.trainerClass and obj.trainerClass ~= "" then
+      elseif isTrainerObject(obj, S) then
         love.graphics.setColor(0.95, 0.25, 0.3, 0.9)
         love.graphics.rectangle("line",
           px - camX, py - camY - 4, CELL, CELL)
@@ -2511,7 +3346,8 @@ local function drawMapCoordLabels(S, mapDef, vx, vy, vw, vh)
       string.format("%d,%d", w.x or 0, w.y or 0),
       selected and PAL.blue or PAL.muted)
   end
-  for i, sign in ipairs(mapDef.signs or {}) do
+  local signList = Generation.isGen2(S) and (mapDef.bgEvents or {}) or (mapDef.signs or {})
+  for i, sign in ipairs(signList) do
     local selected = S.mapSignIndex == i and S.mapSection == "signs"
     labelAt(sign.x, sign.y,
       string.format("%d,%d", sign.x or 0, sign.y or 0),
@@ -2534,7 +3370,8 @@ local function drawMarkerOverlays(S, mapDef)
     end
   end
   love.graphics.setColor(1, 0.85, 0.15, 0.7)
-  for i, sign in ipairs(mapDef.signs or {}) do
+  local signList = Generation.isGen2(S) and (mapDef.bgEvents or {}) or (mapDef.signs or {})
+  for i, sign in ipairs(signList) do
     love.graphics.rectangle("line", cellRect(sign.x, sign.y))
     if S.mapSignIndex == i and S.mapSection == "signs" then
       love.graphics.setColor(1, 0.85, 0.15, 0.35)
@@ -2583,6 +3420,54 @@ local function drawCollisionOverlay(S, mapDef)
   local y0 = math.max(0, math.floor(camY / CELL) - 1)
   local x1 = math.min(mapDef.width * 2 - 1, math.ceil((camX + vw) / CELL) + 1)
   local y1 = math.min(mapDef.height * 2 - 1, math.ceil((camY + vh) / CELL) + 1)
+
+  if Generation.isGen2(S) then
+    local Api = mapApi(S)
+    local okP, Permissions = pcall(require, "src.world.gen2.Permissions")
+    if not (okP and Permissions and Api and Api.defCellTile) then return end
+    for cy = y0, y1 do
+      for cx = x0, x1 do
+        local coll = Api.defCellTile(mapDef, ts, cx, cy)
+        if coll ~= nil then
+          if Permissions.isWater(coll) then
+            love.graphics.setColor(0.15, 0.45, 1, 0.32)
+            love.graphics.rectangle("fill",
+              cx * CELL - camX, cy * CELL - camY, CELL, CELL)
+          elseif not Permissions.isWalkable(coll) then
+            love.graphics.setColor(1, 0.2, 0.2, 0.32)
+            love.graphics.rectangle("fill",
+              cx * CELL - camX, cy * CELL - camY, CELL, CELL)
+          end
+          if Permissions.isGrass(coll) then
+            love.graphics.setColor(0.95, 0.2, 0.85, 0.4)
+            love.graphics.rectangle("fill",
+              cx * CELL - camX, cy * CELL - camY, CELL, CELL)
+            love.graphics.setColor(1, 0.35, 0.95, 1)
+            love.graphics.rectangle("line",
+              cx * CELL - camX + 1, cy * CELL - camY + 1, CELL - 2, CELL - 2)
+          end
+          if Permissions.isLedge and Permissions.isLedge(coll) then
+            love.graphics.setColor(1, 0.55, 0.1, 0.4)
+            love.graphics.rectangle("fill",
+              cx * CELL - camX, cy * CELL - camY, CELL, CELL)
+            love.graphics.setColor(1, 0.65, 0.15, 1)
+            love.graphics.rectangle("line",
+              cx * CELL - camX + 1, cy * CELL - camY + 1, CELL - 2, CELL - 2)
+          elseif Permissions.isWarpCollision and Permissions.isWarpCollision(coll) then
+            love.graphics.setColor(0.95, 0.85, 0.15, 0.4)
+            love.graphics.rectangle("fill",
+              cx * CELL - camX, cy * CELL - camY, CELL, CELL)
+            love.graphics.setColor(1, 0.9, 0.2, 1)
+            love.graphics.rectangle("line",
+              cx * CELL - camX + 1, cy * CELL - camY + 1, CELL - 2, CELL - 2)
+          end
+        end
+      end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    return
+  end
+
   local shore = {}
   for _, t in ipairs(ts.shoreTiles or {}) do shore[t] = true end
   local grass = ts.grassTile
@@ -2657,6 +3542,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   end
 
   prepareLiveMap(S, S.mapId, mapDef)
+  if Generation.isGen2(S) and Preview.syncGen2Preview then
+    Preview.syncGen2Preview(S)
+  end
   local ok, map = pcall(MapLoader.load, S.data, S.mapId)
   if not ok then
     Kit.text("mono", "Failed to load map: " .. tostring(map),
@@ -2824,6 +3712,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         S._lastPaintCell = key
         applyToolAtCell(S, mapDef, cx, cy, App)
       end
+    elseif brush and S._mapDrag and S._mapDrag.brush then
+      -- Stroke left the canvas: keep the brush drag alive until mouse-up, but
+      -- do not fall through to pan (brush drag has no mx/my — that crashed).
     elseif selecting and over then
       local bx, by = mouseBlock()
       local d = S._mapDrag
@@ -2845,9 +3736,69 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
           x0 = d.bx0, y0 = d.by0, x1 = bx, y1 = by,
         }
       end
+    elseif EVENT_TOOLS[tool] and over then
+      -- Events: drag existing NPC/sign/warp to move; empty click places.
+      -- Shift+click always places a new event on the cell.
+      local cx, cy = mouseCell()
+      local d = S._mapDrag
+      local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+      if not d or not (d.eventMove or d.eventClick) then
+        local kind, idx = pickEventAt(S, mapDef, cx, cy)
+        if kind and not shift then
+          selectEvent(S, kind, idx)
+          local owned = ensureOwned(S, mapDef.id or S.mapId)
+          local live = owned or mapDef
+          S._mapDrag = {
+            eventMove = true, kind = kind, index = idx,
+            mapId = mapDef.id or S.mapId,
+            mx = Kit.mouseX, my = Kit.mouseY, moved = false,
+            lastCx = cx, lastCy = cy,
+          }
+          S.status = string.format("Selected %s #%d — drag to move",
+            kind, idx)
+          if live ~= mapDef and S.data and S.data.maps then
+            S.data.maps[mapDef.id] = live
+          end
+        else
+          S._mapDrag = {
+            eventClick = true,
+            mx = Kit.mouseX, my = Kit.mouseY,
+            camX = S.mapCamX or 0, camY = S.mapCamY or 0,
+            moved = false, cx = cx, cy = cy,
+          }
+        end
+      elseif d.eventMove then
+        local ncx, ncy = mouseCell()
+        if ncx ~= d.lastCx or ncy ~= d.lastCy then
+          d.moved = true
+          d.lastCx, d.lastCy = ncx, ncy
+          local live = ensureOwned(S, d.mapId or mapDef.id or S.mapId) or mapDef
+          local ent = eventEntity(S, live, d.kind, d.index)
+          if ent then
+            ent.x, ent.y = ncx, ncy
+            if S.data and S.data.maps then S.data.maps[live.id or d.mapId] = live end
+            MapLoader.invalidate(live.id or d.mapId)
+            App.markDirty()
+            S.status = string.format("Moved %s #%d → (%d,%d)",
+              d.kind, d.index, ncx, ncy)
+          end
+        end
+      elseif d.eventClick then
+        local dx = Kit.mouseX - d.mx
+        local dy = Kit.mouseY - d.my
+        if math.abs(dx) > 3 or math.abs(dy) > 3 then
+          d.moved = true
+          S.mapCamX = d.camX - dx / S.mapZoom
+          S.mapCamY = d.camY - dy / S.mapZoom
+          clampMapCam(S, mapDef)
+        end
+      end
     else
       local d = S._mapDrag
-      if not d then
+      -- Ignore incomplete drag payloads (e.g. brush-only) — no mx/my to pan.
+      if d and (d.brush or d.mx == nil or d.my == nil) then
+        -- no-op
+      elseif not d then
         S._mapDrag = {
           mx = Kit.mouseX, my = Kit.mouseY,
           camX = S.mapCamX or 0, camY = S.mapCamY or 0,
@@ -2881,7 +3832,12 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         applyToolAtCell(S, mapDef, cx, cy, App)
       end
       S._mapSelDraft = nil
-    elseif not S._mapDrag.brush and not S._mapDrag.pan and not S._mapDrag.moved then
+    elseif S._mapDrag.eventMove then
+      -- position already updated while dragging
+    elseif S._mapDrag.eventClick and not S._mapDrag.moved then
+      applyToolAtCell(S, mapDef, S._mapDrag.cx, S._mapDrag.cy, App)
+    elseif not S._mapDrag.brush and not S._mapDrag.pan and not S._mapDrag.moved
+        and not S._mapDrag.eventMove and not S._mapDrag.eventClick then
       local z = S.mapZoom or 2
       local wx = (S._mapDrag.mx - vx) / z + S._mapDrag.camX
       local wy = (S._mapDrag.my - vy) / z + S._mapDrag.camY
@@ -2894,7 +3850,25 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
 
   local swH = 12 * s
   local swX, swY = vx + 6 * s, vy + vh - 34 * s
-  if mapUsesTrueColor(S, mapDef) then
+  if Generation.isGen2(S) then
+    local bgSet, tod = Preview.gen2MapBgSet(S, mapDef)
+    local cell = 8 * s
+    if bgSet then
+      for gi = 1, 8 do
+        local g = bgSet[gi]
+        local c = (g and g[2]) or { 128, 128, 128 }
+        love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+          (c[3] or 0) / 255, 1)
+        love.graphics.rectangle("fill", swX + (gi - 1) * (cell + 2 * s),
+          swY, cell, swH, 2 * s, 2 * s)
+      end
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+    local palName = mapPaletteName(S, mapDef)
+    Kit.text("micro",
+      string.format("%s · %s", tostring(tod or "?"), palName),
+      swX + 8 * (cell + 2 * s) + 4 * s, swY + 1 * s, PAL.faint)
+  elseif mapUsesTrueColor(S, mapDef) then
     Kit.text("micro", "true color", swX, swY + 1 * s, PAL.yellow)
   elseif Preview.useGbcPalettes(S)
       and Preview.hasTilesetGbcGroups(S, mapDef.tileset) then
@@ -2971,11 +3945,19 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       "%.1fx  %s%s  click=set warp dest  Esc=cancel  MMB/Space=pan",
       S.mapZoom, ts, coord)
   elseif tool == "collision" then
-    hint = string.format(
-      "%.1fx  %s%s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge",
-      S.mapZoom, ts, coord, tostring(S.mapCollisionMode or "solid"),
-      (S.mapCollisionMode == "ledge"
-        and (" dir=" .. tostring(S.mapLedgeDir or "down")) or ""))
+    if Generation.isGen2(S) then
+      hint = string.format(
+        "%.1fx  %s%s  COLL=%s%s  red=wall blue=water magenta=grass yellow=warp orange=ledge",
+        S.mapZoom, ts, coord, tostring(S.mapCollisionMode or "solid"),
+        (S.mapCollisionMode == "ledge"
+          and (" dir=" .. tostring(S.mapLedgeDir or "down")) or ""))
+    else
+      hint = string.format(
+        "%.1fx  %s%s  paint=%s%s  red=solid blue=water magenta=grass orange=ledge",
+        S.mapZoom, ts, coord, tostring(S.mapCollisionMode or "solid"),
+        (S.mapCollisionMode == "ledge"
+          and (" dir=" .. tostring(S.mapLedgeDir or "down")) or ""))
+    end
   elseif brush then
     hint = string.format(
       "%.1fx  %s%s  blk=%s  drag=paint  RMB=copy Shift+RMB=paste",
@@ -3097,6 +4079,17 @@ function Maps.keypressed(S, key, App)
   local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
     or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
   if ctrl and (key == "c" or key == "v") and S.mapViewMode ~= "world" then
+    -- Events mode: copy/paste objects, warps, signs across maps.
+    if (S.mapEditMode or "map") == "events" then
+      if key == "c" then
+        local ok, msg = copySelectedMapEvent(S)
+        S.status = msg or (ok and "Copied" or "Copy failed")
+      else
+        local ok, msg = pasteMapEventClip(S, App)
+        S.status = msg or (ok and "Pasted" or "Paste failed")
+      end
+      return true
+    end
     local map = resolveMapDef(S, S.mapId)
     if not map then return true end
     if key == "c" then
@@ -3507,37 +4500,68 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if v ~= (map.label or "") then map = mutate(); map.label = v end
   end) then return py end
 
-  if prow("Locale", function(fx, fy, fw, fh_)
-    local cur = inferMapEnvironment(map)
-    local mx = fx
-    for _, opt in ipairs({
-      { id = "outside", label = "Outside", tip = "Towns / routes — grass & water wilds, Go Outside SFX" },
-      { id = "inside", label = "Inside", tip = "Buildings — indoor wilds (if any), Go Inside SFX" },
-      { id = "cave", label = "Cave", tip = "Caves / dungeons — indoor wilds on every tile when indexed indoor" },
-    }) do
+  if prow(Generation.isGen2(S) and "Environment" or "Locale", function(fx, fy, fw, fh_)
+    local cur = inferMapEnvironment(map, S)
+    local opts
+    if Generation.isGen2(S) then
+      opts = {}
+      for _, id in ipairs(envOrder(S)) do
+        opts[#opts + 1] = {
+          id = id,
+          label = id:gsub("^ENVIRONMENT_", "ENV"),
+          tip = "Gold map header environment (" .. id .. ")",
+        }
+      end
+    else
+      opts = {
+        { id = "outside", label = "Outside", tip = "Towns / routes — grass & water wilds, Go Outside SFX" },
+        { id = "inside", label = "Inside", tip = "Buildings — indoor wilds (if any), Go Inside SFX" },
+        { id = "cave", label = "Cave", tip = "Caves / dungeons — indoor wilds on every tile when indexed indoor" },
+      }
+    end
+    local mx, my = fx, fy
+    local rowH = fh_
+    for _, opt in ipairs(opts) do
       local on = cur == opt.id
       local bw = Kit.textWidth("micro", opt.label) + 16 * s
-      if Kit.chip(mx, fy, bw, fh_, opt.label, on, PAL.blue, nil, opt.tip) then
+      if mx + bw > fx + fw then
+        mx = fx
+        my = my + rowH + 4 * s
+      end
+        if Kit.chip(mx, my, bw, fh_, opt.label, on, PAL.blue, nil, opt.tip) then
         if cur ~= opt.id then
           map = mutate()
-          setMapEnvironment(map, opt.id)
-          MapLoader.invalidate(map.id)
+          setMapEnvironment(map, opt.id, S)
+          if Generation.isGen2(S) then invalidateMapPreview(S)
+          else MapLoader.invalidate(map.id) end
           App.markDirty()
-          S.status = "Map locale → " .. opt.label
+          S.status = "Map environment → " .. opt.label
         end
       end
       mx = mx + bw + 4 * s
     end
+    if Generation.isGen2(S) and my > fy then
+      -- prow advances one fh; extra chip rows need space before the next field.
+      py = py + (my - fy)
+    end
   end) then return py end
   do
-    local cur = inferMapEnvironment(map)
-    local hint = (cur == "outside" and "wilds in grass / water only")
-      or (cur == "cave" and "treated as indoors for wilds & exits")
-      or "interior (not an outside map)"
+    local cur = inferMapEnvironment(map, S)
+    local hint
+    if Generation.isGen2(S) then
+      hint = (cur == "TOWN" or cur == "ROUTE")
+        and "outdoor (ToD grass / water wilds)"
+        or "indoor / cave / gate (Gold header)"
+    else
+      hint = (cur == "outside" and "wilds in grass / water only")
+        or (cur == "cave" and "treated as indoors for wilds & exits")
+        or "interior (not an outside map)"
+    end
     Kit.text("micro", hint, px + 10 * s, py, PAL.faint)
     py = py + 14 * s
   end
 
+  if not Generation.isGen2(S) then
   if prow("Dark map", function(fx, fy, fw, fh_)
     -- field.darkMaps: needs FLASH until lit (Rock Tunnel, etc.)
     local function darkList()
@@ -3584,8 +4608,57 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
         or (map.id .. " added to darkMaps")
     end
   end) then return py end
+  end
 
-  if prow("Index", function(fx, fy, fw, fh_)
+  if Generation.isGen2(S) then
+    if prow("Group / Map #", function(fx, fy, fw, fh_)
+      local g = tonumber(field(App, "mp_grp", fx, fy, 50 * s, fh_,
+        tostring(map.group or 0), "0")) or 0
+      local m = tonumber(field(App, "mp_mapn", fx + 60 * s, fy, 50 * s, fh_,
+        tostring(map.map or 0), "0")) or 0
+      if g ~= (map.group or 0) or m ~= (map.map or 0) then
+        map = mutate(); map.group = g; map.map = m
+      end
+    end) then return py end
+    if prow("Fish group", function(fx, fy, fw, fh_)
+      local cur = map.fishGroup or "FISHGROUP_NONE"
+      if Kit.button(fx, fy, fw, fh_,
+          Kit.ellipsize("small", tostring(cur), fw - 8 * s), {
+            kind = "ghost",
+            tooltip = "Gold fishing table group for this map",
+          }) then
+        map = mutate()
+        map.fishGroup = cycle(fishGroupOrder(S), cur)
+        App.markDirty()
+      end
+    end) then return py end
+    if prow("Phone service", function(fx, fy, fw, fh_)
+      local on = map.phoneService ~= false
+      if Kit.chip(fx, fy, 120 * s, fh_, on and "Available" or "No service",
+          on, PAL.blue, nil, "Gold map header phoneService") then
+        map = mutate()
+        map.phoneService = not on
+        App.markDirty()
+      end
+    end) then return py end
+    if prow("Landmark", function(fx, fy, fw, fh_)
+      local cur = map.landmark
+      local shown = cur ~= nil and tostring(cur) or ""
+      local v = field(App, "mp_lmk", fx, fy, fw, fh_, shown, "0")
+      if v ~= shown then
+        map = mutate()
+        map.landmark = (v ~= "" and tonumber(v)) or nil
+      end
+    end) then return py end
+    if prow("Music (header)", function(fx, fy, fw, fh_)
+      local cur = map.music or 0
+      local v = tonumber(field(App, "mp_musb", fx, fy, 80 * s, fh_,
+        tostring(cur), "0")) or 0
+      if v ~= cur then map = mutate(); map.music = v end
+      Kit.text("micro", "byte id from map header",
+        fx + 88 * s, fy + 6 * s, PAL.faint)
+    end) then return py end
+  elseif prow("Index", function(fx, fy, fw, fh_)
     local cur = map.index or 0
     local v = tonumber(field(App, "mp_idx", fx, fy, 80 * s, fh_, tostring(cur), "0")) or 0
     if v ~= cur then map = mutate(); map.index = v end
@@ -3714,25 +4787,116 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end) then return py end
 
+  if Generation.isGen2(S) then
+    -- Gold: map.palette is PALETTE_AUTO / DAY / NITE / MORN / DARK (ToD pin).
+    if prow("Map palette", function(fx, fy, fw, fh_)
+      local cur = map.palette or "PALETTE_AUTO"
+      local mx, my = fx, fy
+      for _, id in ipairs(Preview.GEN2_MAP_PALETTES) do
+        local label = id:gsub("^PALETTE_", "")
+        local on = cur == id
+        local bw = Kit.textWidth("micro", label) + 14 * s
+        if mx + bw > fx + fw then
+          mx = fx
+          my = my + fh_ + 4 * s
+        end
+        if Kit.chip(mx, my, bw, fh_, label, on, PAL.blue, nil,
+            "Gold header " .. id .. " (forces time-of-day colors)") then
+          if cur ~= id then
+            map = mutate()
+            map.palette = id
+            invalidateMapPreview(S)
+            App.markDirty()
+            S.status = "Map palette → " .. id
+          end
+        end
+        mx = mx + bw + 4 * s
+      end
+      if my > fy then py = py + (my - fy) end
+    end) then return py end
+
+    Kit.text("micro", "Preview ToD", px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    do
+      local pin = S.mapPreviewTod or "AUTO"
+      local opts = { "AUTO", "MORN", "DAY", "NITE", "DARK" }
+      local mx = px + 10 * s
+      for _, id in ipairs(opts) do
+        local on = pin == id
+        local bw = Kit.textWidth("micro", id) + 14 * s
+        if Kit.chip(mx, py, bw, fh, id, on, PAL.yellow) then
+          S.mapPreviewTod = id
+          invalidateMapPreview(S)
+          S.status = "Preview ToD → " .. id
+        end
+        mx = mx + bw + 4 * s
+      end
+      py = py + fh + 8 * s
+    end
+
+    local bgSet, tod = Preview.gen2MapBgSet(S, map)
+    Kit.text("micro",
+      string.format("BG set · %s · env %s",
+        tostring(tod or "?"), tostring(map.environment or "?")),
+      px + 10 * s, py, PAL.caption)
+    py = py + 14 * s
+    if bgSet then
+      local names = Preview.GBC_GROUP_NAMES
+      local sw = 22 * s
+      local gap = 4 * s
+      local rowH = 22 * s
+      for gi = 1, 8 do
+        if py + rowH + 4 * s > listBottom then return true end
+        local label = names[gi] or ("G" .. gi)
+        Kit.text("micro", label, px + 10 * s, py + 4 * s, PAL.muted)
+        local g = bgSet[gi]
+        local bx = px + 10 * s + 52 * s
+        for ci = 1, 4 do
+          local c = (g and g[ci]) or { 40, 40, 40 }
+          local sx = bx + (ci - 1) * (sw + gap)
+          love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+            (c[3] or 0) / 255, 1)
+          love.graphics.rectangle("fill", sx, py + 2 * s, sw, rowH - 4 * s,
+            3 * s, 3 * s)
+          love.graphics.setColor(1, 1, 1, 0.35)
+          love.graphics.rectangle("line", sx, py + 2 * s, sw, rowH - 4 * s,
+            3 * s, 3 * s)
+          love.graphics.setColor(1, 1, 1, 1)
+        end
+        py = py + rowH + 2 * s
+      end
+      Kit.text("micro", "from EnvironmentColors + roofs (group "
+        .. tostring(map.group or "?") .. ")",
+        px + 10 * s, py, PAL.faint)
+      py = py + 14 * s
+    else
+      Kit.text("micro", "no Gold palettes.lua / environments for this map",
+        px + 10 * s, py, PAL.faint)
+      py = py + 14 * s
+    end
+  else
   if prow("TrueColor", function(fx, fy, fw, fh_)
     local on = mapUsesTrueColor(S, map)
-    if Kit.chip(fx, fy, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+    if Kit.chip(fx, fy, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow,
+        nil, "Per-map only — does not fork or replace the tileset id") then
       map = mutate()
       local newOn = not on
+      -- Per-map flag (stock TileRenderer). Keeps OVERWORLD / CAVERN linked.
       map.trueColor = newOn and true or nil
-      syncTilesetTrueColor(S, map, newOn, App)
-      Preview.invalidate()
+      syncTilesetTrueColor(S, map, newOn)
+      invalidateMapPreview(S)
       App.markDirty()
       S.status = newOn
-        and "TrueColor ON — raw tileset PNG (map palette ignored)"
+        and ("TrueColor ON for this map — tileset stays "
+          .. tostring(map.tileset or "?"))
         or "TrueColor OFF — palette remap"
     end
   end) then return py end
   do
     local on = mapUsesTrueColor(S, map)
     Kit.text("micro",
-      on and "full-color tileset — skips 4-shade palette remap"
-        or "OFF = grayscale tiles remapped through map palette colors",
+      on and "this map only — raw PNG (palette ignored); tileset id unchanged"
+        or "OFF = remap via map palette · GFX tab edits shared tileset TrueColor",
       px + 10 * s, py, PAL.faint)
     py = py + 14 * s
   end
@@ -3885,6 +5049,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       px + 10 * s, py, PAL.faint)
     py = py + 14 * s
   end
+  end
 
   if prow("Music", function(fx, fy, fw, fh_)
     local cur, ownedSong = mapSongFor(S, map.id)
@@ -3925,11 +5090,11 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   for _, dir in ipairs({ "north", "south", "east", "west" }) do
     if py + fh > listBottom then break end
     local cur = map.connections[dir]
-    local val = cur and cur.map or ""
+    local val = connMapId(cur) or ""
     local v = field(App, "mp_c_" .. dir, px + 10 * s, py, propW - 20 * s, fh,
       val, dir, function() return Autocomplete.mapIds(S) end)
     local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
-    local curMap = cur and cur.map or ""
+    local curMap = connMapId(cur) or ""
     local curOff = cur and (cur.offset or 0) or 0
     if (curMap or "") ~= (wantMap or "") then
       map = applyConnectionEdit(S, fromId, dir, wantMap, curOff, App) or mutate()
@@ -3944,7 +5109,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       Kit.text("micro", "offset", px + 78 * s, py + fh + 6 * s, PAL.faint)
       local dest = resolveMapDef(S, wantMap)
       local back = dest and dest.connections and dest.connections[oppositeDir(dir)]
-      local ok = back and back.map == fromId
+      local ok = back and connMapId(back) == fromId
         and (back.offset or 0) == -(map.connections[dir].offset or 0)
       Kit.text("micro", ok and "<-> linked" or (dest and "<-> pending" or "missing"),
         px + 120 * s, py + fh + 6 * s, ok and PAL.green or PAL.red)
@@ -4167,7 +5332,8 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     end
   end)
   row("Dest map", function(fx, fy, fw, fh_)
-    local v = field(App, "wp_dm", fx, fy, fw, fh_, w.destMap or "", "PALLET_TOWN")
+    local ph = Generation.isGen2(S) and "NEW_BARK_TOWN" or "PALLET_TOWN"
+    local v = field(App, "wp_dm", fx, fy, fw, fh_, w.destMap or "", ph)
     v = v:upper():gsub("%s+", "_")
     if v ~= (w.destMap or "") then map = mutate(); map.warps[i].destMap = v end
   end)
@@ -4176,6 +5342,19 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       tostring(w.destWarp or 1), "1")) or 1
     if v ~= (w.destWarp or 1) then map = mutate(); map.warps[i].destWarp = v end
   end)
+  if Generation.isGen2(S) then
+    row("Dest group / map #", function(fx, fy, fw, fh_)
+      local g = tonumber(field(App, "wp_dg", fx, fy, 50 * s, fh_,
+        tostring(w.destGroup or ""), ""))
+      local m = tonumber(field(App, "wp_dn", fx + 60 * s, fy, 50 * s, fh_,
+        tostring(w.destMapNum or ""), ""))
+      if g ~= w.destGroup or m ~= w.destMapNum then
+        map = mutate()
+        map.warps[i].destGroup = g
+        map.warps[i].destMapNum = m
+      end
+    end)
+  end
 
   local armedHere = pick and pick.sourceMapId == (map.id or S.mapId)
     and pick.sourceWarpIndex == i
@@ -4183,6 +5362,25 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Set destination",
         { kind = "primary" }) then
       armWarpDestPick(S, map.id or S.mapId, i)
+    end
+    py = py + 34 * s
+  end
+
+  if py + 32 * s <= listBottom then
+    local half = (propW - 28 * s) * 0.5
+    if Kit.button(px + 10 * s, py, half, 28 * s, "Copy event", {
+        kind = "accent",
+        tooltip = "Ctrl+C — paste onto another map with Ctrl+V",
+      }) then
+      local ok, msg = copySelectedMapEvent(S)
+      S.status = msg or (ok and "Copied" or "Copy failed")
+    end
+    if Kit.button(px + 18 * s + half, py, half, 28 * s, "Paste event", {
+        kind = "good",
+        tooltip = "Ctrl+V — paste at hover cell",
+      }) then
+      local ok, msg = pasteMapEventClip(S, App)
+      S.status = msg or (ok and "Pasted" or "Paste failed")
     end
     py = py + 34 * s
   end
@@ -4210,9 +5408,10 @@ local function drawWarps(S, map, mutate, App, px, py, propW, listBottom, fh, s)
 end
 
 local function armPlaceSprite(S, id)
-  S.placeSprite = id
+  local resolved = resolveObjectSpriteId(S, id)
+  S.placeSprite = (type(resolved) == "string" and resolved) or id
   S.mapTool = "object"
-  S.status = "OBJECT tool: " .. tostring(id)
+  S.status = "OBJECT tool: " .. tostring(S.placeSprite)
 end
 
 local function assignObjectSprite(S, map, mutate, App, objIndex, id)
@@ -4287,6 +5486,27 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
 
   -- Top of form so Delete is never clipped under the footer / scroll.
   if py + 32 * s <= listBottom then
+    local half = (propW - 28 * s) * 0.5
+    if Kit.button(px + 10 * s, py, half, 28 * s, "Copy event", {
+        kind = "accent",
+        tooltip = "Ctrl+C — paste onto another map with Ctrl+V (Events mode)",
+      }) then
+      local ok, msg = copySelectedMapEvent(S)
+      S.status = msg or (ok and "Copied" or "Copy failed")
+    end
+    if Kit.button(px + 18 * s + half, py, half, 28 * s, "Paste event", {
+        kind = "good",
+        tooltip = "Ctrl+V — paste at hover cell (or original x,y)",
+      }) then
+      local ok, msg = pasteMapEventClip(S, App)
+      S.status = msg or (ok and "Pasted" or "Paste failed")
+      map = resolveMapDef(S, S.mapId) or map
+      obj = map.objects and map.objects[S.mapObjectIndex or i] or obj
+      i = S.mapObjectIndex or i
+    end
+    py = py + 34 * s
+  end
+  if py + 32 * s <= listBottom then
     if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete object",
         { kind = "danger" }) then
       map = mutate()
@@ -4314,7 +5534,9 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       love.graphics.rectangle("fill", px + 10 * s, py, 48 * s, 48 * s, 6 * s, 6 * s)
       Kit.text("micro", "?", px + 28 * s, py + 18 * s, PAL.faint)
     end
-    Kit.text("micro", obj.sprite or "?", px + 66 * s, py + 8 * s, PAL.muted)
+    Kit.text("micro",
+      Kit.ellipsize("micro", spriteLabel(S, obj.sprite), propW - 80 * s),
+      px + 66 * s, py + 8 * s, PAL.muted)
     if Kit.button(px + 66 * s, py + 24 * s, 120 * s, 22 * s, "Use to place",
         { kind = "ghost" }) then
       armPlaceSprite(S, obj.sprite)
@@ -4453,7 +5675,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
           Theme.col(PAL.rowBg, 1)
           love.graphics.rectangle("fill", bx, py, thumb, thumb, 3, 3)
         end
-        if obj.sprite == id then
+        if obj.sprite == id or resolveObjectSpriteId(S, obj.sprite) == id then
           love.graphics.setColor(0.24, 0.88, 0.54, 1)
           love.graphics.rectangle("line", bx - 1, py - 1, thumb + 2, thumb + 2)
           love.graphics.setColor(1, 1, 1, 1)
@@ -4509,6 +5731,109 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       map = mutate(); map.objects[i].x = x; map.objects[i].y = y
     end
   end)
+  if Generation.isGen2(S) then
+    row("Movement (byte)", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.movement) or 0
+      local v = tonumber(field(App, "ob_mov", fx, fy, 60 * s, fh_,
+        tostring(cur), "0")) or 0
+      if v ~= cur then map = mutate(); map.objects[i].movement = v end
+    end)
+    row("Radius X / Y", function(fx, fy, fw, fh_)
+      local rad = type(obj.radius) == "table" and obj.radius or {}
+      local rx = tonumber(field(App, "ob_rx", fx, fy, 50 * s, fh_,
+        tostring(rad.x or 0), "0")) or 0
+      local ry = tonumber(field(App, "ob_ry", fx + 60 * s, fy, 50 * s, fh_,
+        tostring(rad.y or 0), "0")) or 0
+      if rx ~= (rad.x or 0) or ry ~= (rad.y or 0) then
+        map = mutate(); map.objects[i].radius = { x = rx, y = ry }
+      end
+    end)
+    row("Sight", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.sight) or 0
+      local v = tonumber(field(App, "ob_sight", fx, fy, 60 * s, fh_,
+        tostring(cur), "0")) or 0
+      if v ~= cur then map = mutate(); map.objects[i].sight = v end
+    end)
+    -- Primary: what the NPC says (text body). Script key is advanced.
+    do
+      local sk = obj.scriptKey
+      local tid = gen2TalkTextKey(S, sk)
+      if (not sk or sk == "") or not tid then
+        row("Says", function(fx, fy, fw, fh_)
+          if Kit.button(fx, fy, math.min(fw, 160 * s), fh_, "Add talk script", {
+              kind = "good",
+              tooltip = "Create a simple face-player talk script + text",
+            }) then
+            map = mutate()
+            local nsk, ntid = allocGen2Talk(S, map.id or S.mapId, "OBJ", i, true)
+            map.objects[i].scriptKey = nsk
+            S.dialogMapId = map.id
+            S.dialogTextId = ntid
+            S.dialogScriptKey = nsk
+            App.markDirty()
+            S.status = "Talk script ready — edit Says below"
+          end
+        end)
+      else
+        row("Says", function(fx, fy, fw, fh_)
+          State.ensureProjectFields(S.project)
+          S.project.text = S.project.text or {}
+          local body = S.project.text[tid]
+          if body == nil and S.data and S.data.text then body = S.data.text[tid] end
+          body = tostring(body or "")
+          local v = field(App, "ob_says", fx, fy, fw - 140 * s, fh_, body, "...")
+          if v ~= body then
+            S.project.text[tid] = v
+            if S.data and S.data.text then S.data.text[tid] = v end
+            App.markDirty()
+          end
+          if Kit.button(fx + fw - 134 * s, fy, 64 * s, fh_, "Dialog", {
+              kind = "ghost", tooltip = "Open this line on the Dialog tab",
+            }) then
+            S.tab = "dialog"
+            S.dialogMapId = map.id
+            S.dialogTextId = tid
+            S.dialogScriptKey = sk
+          end
+          if Kit.button(fx + fw - 66 * s, fy, 64 * s, fh_, "Events", {
+              kind = "ghost", tooltip = "Open this scriptKey on the Events tab",
+            }) then
+            S.tab = "events"
+            S.eventsMode = "scripts"
+            S.eventMapId = map.id
+            S.eventScriptKey = map.id .. "/" .. sk
+          end
+        end)
+      end
+    end
+    row("Script key (advanced)", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.script) or 0
+      local v = tonumber(field(App, "ob_scr", fx, fy, 70 * s, fh_,
+        tostring(cur), "0")) or 0
+      local key = field(App, "ob_sck", fx + 78 * s, fy, fw - 78 * s, fh_,
+        obj.scriptKey or "", "bank:addr")
+      if v ~= cur or key ~= (obj.scriptKey or "") then
+        map = mutate()
+        map.objects[i].script = v
+        map.objects[i].scriptKey = (key ~= "" and key) or nil
+      end
+    end)
+    row("Event flag", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.eventFlag) or 0
+      local v = tonumber(field(App, "ob_ef", fx, fy, 80 * s, fh_,
+        tostring(cur), "0")) or 0
+      if v ~= cur then map = mutate(); map.objects[i].eventFlag = v end
+    end)
+    row("Type / palette", function(fx, fy, fw, fh_)
+      local t = tonumber(field(App, "ob_typ", fx, fy, 50 * s, fh_,
+        tostring(obj.type or 0), "0")) or 0
+      local p = tonumber(field(App, "ob_pal", fx + 60 * s, fy, 50 * s, fh_,
+        tostring(obj.palette or 0), "0")) or 0
+      if t ~= (obj.type or 0) or p ~= (obj.palette or 0) then
+        map = mutate(); map.objects[i].type = t; map.objects[i].palette = p
+      end
+    end)
+  else
   row("Movement", function(fx, fy, fw, fh_)
     if Kit.button(fx, fy, fw, fh_, tostring(obj.movement or "STAY"), { kind = "ghost" }) then
       map = mutate()
@@ -4523,24 +5848,37 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
       App.markDirty()
     end
   end)
-  row("Text id", function(fx, fy, fw, fh_)
+  row("Says (TEXT id)", function(fx, fy, fw, fh_)
     local mid = map.id or S.mapId
-    local v = field(App, "ob_text", fx, fy, fw - 70 * s, fh_, obj.text or "", "TEXT_",
+    local btnW = 64 * s
+    local v = field(App, "ob_text", fx, fy, fw - 2 * btnW - 6 * s, fh_,
+      obj.text or "", "TEXT_",
       function() return Autocomplete.textIds(S, mid) end)
     if v ~= (obj.text or "") then map = mutate(); map.objects[i].text = v end
-    if obj.text and obj.text ~= ""
-        and Kit.button(fx + fw - 64 * s, fy, 64 * s, fh_, "Event",
-          { kind = "ghost", tooltip = "Open this object's talk script in Events" }) then
-      S.tab = "events"
-      S.eventsMode = "scripts"
-      S.eventMapId = map.id
-      S.eventScriptKey = map.id .. "/" .. obj.text
+    if obj.text and obj.text ~= "" then
+      if Kit.button(fx + fw - 2 * btnW - 2 * s, fy, btnW, fh_, "Dialog", {
+          kind = "ghost", tooltip = "Edit what they say on the Dialog tab",
+        }) then
+        S.tab = "dialog"
+        S.dialogMapId = map.id
+        S.dialogTextId = obj.text
+      end
+      if Kit.button(fx + fw - btnW, fy, btnW, fh_, "Events", {
+          kind = "ghost", tooltip = "Open this object's talk script in Events",
+        }) then
+        S.tab = "events"
+        S.eventsMode = "scripts"
+        S.eventMapId = map.id
+        S.eventScriptKey = map.id .. "/" .. obj.text
+      end
     end
   end)
+  end
 
   -- Talk role / shop stock (text_pointers markers on this object's TEXT_*)
   local textId = obj.text
-  local ptrEntry = textId and select(1, resolveTextPtr(S, map.id, textId))
+  local ptrEntry = (not Generation.isGen2(S)) and textId
+    and select(1, resolveTextPtr(S, map.id, textId)) or nil
   local role = ptrRole(ptrEntry)
   local ROLES = {
     { id = "talk", label = "Talk" },
@@ -4549,7 +5887,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     { id = "pc", label = "PC" },
     { id = "cable", label = "Cable" },
   }
-  if py + fh + 20 * s <= listBottom then
+  if not Generation.isGen2(S) and py + fh + 20 * s <= listBottom then
     Kit.text("micro", "Talk role", px + 10 * s, py, PAL.caption)
     py = py + 14 * s
     local rx = px + 10 * s
@@ -4584,7 +5922,7 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     py = py + fh + 6 * s
   end
 
-  if role == "shop" and textId and textId ~= "" then
+  if (not Generation.isGen2(S)) and role == "shop" and textId and textId ~= "" then
     local mart = (ptrEntry and ptrEntry.mart) or {}
     if py + 14 * s <= listBottom then
       Kit.text("micro",
@@ -4635,49 +5973,78 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
     end
   end)
 
-  -- Fixed wild: object.pokemon + level → OverworldState static wild battle
+  -- Fixed wild: object.pokemon + level, or Gen2 scripted loadwildmon
   if py + fh + 20 * s <= listBottom then
     Kit.text("micro", "Fixed wild (cell)", px + 10 * s, py, PAL.caption)
     py = py + 14 * s
-    local isWild = obj.pokemon and obj.pokemon ~= ""
-    if Kit.chip(px + 10 * s, py, 100 * s, fh, isWild and "ON" or "OFF",
-        isWild, PAL.yellow) then
-      map = mutate()
-      if isWild then
-        map.objects[i].pokemon = nil
-        map.objects[i].level = nil
+    local scriptedWild = scriptedWildInfo(S, obj)
+    local isStructWild = obj.pokemon and obj.pokemon ~= ""
+    local isWild = isFixedWildObject(obj, S)
+    local chipLabel = (scriptedWild and not isStructWild) and "SCRIPT"
+      or (isWild and "ON" or "OFF")
+    if Kit.chip(px + 10 * s, py, 100 * s, fh, chipLabel, isWild, PAL.yellow) then
+      if scriptedWild and not isStructWild then
+        S.status = "Scripted static wild (loadwildmon in scriptKey) — edit species/level "
+          .. "below; do not convert to object.pokemon or the story script breaks"
       else
-        -- Mutually exclusive with trainer battle on the same object.
-        map.objects[i].trainerClass = nil
-        map.objects[i].trainerParty = nil
-        map.objects[i].pokemon = S.placeWildSpecies or "ARTICUNO"
-        map.objects[i].level = tonumber(S.placeWildLevel) or 50
-        local tid = map.objects[i].text
-        if not tid or tid == "" then
-          tid = string.format("TEXT_%s_WILD%d", map.id, i)
-          map.objects[i].text = tid
+        map = mutate()
+        if isStructWild then
+          map.objects[i].pokemon = nil
+          map.objects[i].level = nil
+        else
+          -- Mutually exclusive with trainer battle on the same object.
+          map.objects[i].trainerClass = nil
+          map.objects[i].trainerParty = nil
+          map.objects[i].trainer = nil
+          local defaultSp = Generation.isGen2(S) and "SUDOWOODO" or "ARTICUNO"
+          map.objects[i].pokemon = S.placeWildSpecies or defaultSp
+          map.objects[i].level = tonumber(S.placeWildLevel) or 50
+          if Generation.isGen2(S) then
+            if map.objects[i].movement == nil or map.objects[i].movement == "" then
+              map.objects[i].movement = 0x16
+            end
+            if map.objects[i].eventFlag == nil then
+              map.objects[i].eventFlag = 65535
+            end
+            map.objects[i].scriptKey = map.objects[i].scriptKey or ""
+          else
+            local tid = map.objects[i].text
+            if not tid or tid == "" then
+              tid = string.format("TEXT_%s_WILD%d", map.id, i)
+              map.objects[i].text = tid
+            end
+            local cry = "_" .. (map.id or "MAP") .. "Wild" .. i
+            local entry = ensureTextPtr(S, map.id, tid)
+            if entry and (not entry.text or entry.text == "") then
+              entry.text = cry
+            end
+            State.ensureProjectFields(S.project)
+            local key = (entry and entry.text) or cry
+            S.project.text[key] = S.project.text[key] or "Gyaoo!"
+          end
         end
-        local cry = "_" .. (map.id or "MAP") .. "Wild" .. i
-        local entry = ensureTextPtr(S, map.id, tid)
-        if entry and (not entry.text or entry.text == "") then
-          entry.text = cry
-        end
-        State.ensureProjectFields(S.project)
-        local key = (entry and entry.text) or cry
-        S.project.text[key] = S.project.text[key] or "Gyaoo!"
+        App.markDirty()
+        obj = map.objects[i]
+        isWild = isFixedWildObject(obj, S)
       end
-      App.markDirty()
-      obj = map.objects[i]
-      isWild = obj.pokemon and obj.pokemon ~= ""
     end
     py = py + fh + 6 * s
+    if scriptedWild and not isStructWild and py + 14 * s <= listBottom then
+      Kit.text("micro",
+        string.format("Scripted %s Lv%d — keeps cry / disappear / items",
+          tostring(scriptedWild.species or scriptedWild.speciesIndex or "?"),
+          tonumber(scriptedWild.level) or 1),
+        px + 10 * s, py, PAL.faint)
+      py = py + 16 * s
+    end
   end
 
   if obj.pokemon and obj.pokemon ~= "" then
+    local defaultSp = Generation.isGen2(S) and "SUDOWOODO" or "ARTICUNO"
     row("Species", function(fx, fy, fw, fh_)
       SpeciesPicker.field(S, {
         x = fx, y = fy, w = fw, h = fh_,
-        current = obj.pokemon or "ARTICUNO",
+        current = obj.pokemon or defaultSp,
         title = "FIXED WILD SPECIES",
         onPick = function(id)
           map = mutate()
@@ -4698,66 +6065,287 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
         S.placeWildLevel = v
       end
     end)
+    if Generation.isGen2(S) and py + fh + 6 * s <= listBottom then
+      row("Force shiny", function(fx, fy, fw, fh_)
+        local on = obj.forceShiny and true or false
+        if Kit.chip(fx, fy, 100 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+          map = mutate()
+          map.objects[i].forceShiny = (not on) or nil
+          App.markDirty()
+          obj = map.objects[i]
+        end
+      end)
+    end
     if py + 14 * s <= listBottom then
-      Kit.text("micro", "Talk cry uses this object's Text id (Dialog tab).",
+      Kit.text("micro",
+        Generation.isGen2(S)
+          and "A-press starts a wild battle; win/catch hides this object."
+          or "Talk cry uses this object's Text id (Dialog tab).",
+        px + 10 * s, py, PAL.faint)
+      py = py + 16 * s
+    end
+  elseif Generation.isGen2(S) and scriptedWildInfo(S, obj) then
+    local scriptedWild = scriptedWildInfo(S, obj)
+    local defaultSp = scriptedWild.species or "GYARADOS"
+    row("Species", function(fx, fy, fw, fh_)
+      SpeciesPicker.field(S, {
+        x = fx, y = fy, w = fw, h = fh_,
+        current = scriptedWild.species or defaultSp,
+        title = "SCRIPTED WILD SPECIES",
+        onPick = function(id)
+          local idx = speciesIndexForId(S, id)
+          if not idx then
+            S.status = "Unknown species index for " .. tostring(id)
+            return
+          end
+          if mutateScriptLoadwildmon(S, scriptedWild.scriptKey, function(cmd)
+                cmd.species = idx
+              end) then
+            S.placeWildSpecies = id
+            App.markDirty()
+          end
+        end,
+      })
+    end)
+    row("Level", function(fx, fy, fw, fh_)
+      local cur = tonumber(scriptedWild.level) or 30
+      local v = tonumber(field(App, "ob_wild_lv", fx, fy, 70 * s, fh_,
+        tostring(cur), "30")) or cur
+      v = math.max(1, math.min(100, v))
+      if v ~= cur then
+        if mutateScriptLoadwildmon(S, scriptedWild.scriptKey, function(cmd)
+              cmd.level = v
+            end) then
+          S.placeWildLevel = v
+          App.markDirty()
+        end
+      end
+    end)
+    if py + fh + 6 * s <= listBottom then
+      row("Force shiny", function(fx, fy, fw, fh_)
+        local on = scriptedWild.forceShiny and true or false
+        if Kit.chip(fx, fy, 100 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+          if setScriptForceShiny(S, scriptedWild.scriptKey, not on) then
+            App.markDirty()
+          else
+            S.status = "Could not arm FORCESHINY on " .. tostring(scriptedWild.scriptKey)
+          end
+        end
+      end)
+    end
+    if py + 14 * s <= listBottom then
+      Kit.text("micro",
+        "Battle runs via scriptKey (loadwildmon); edit Says / Events for dialog.",
         px + 10 * s, py, PAL.faint)
       py = py + 16 * s
     end
   end
 
-  -- Trainer battle: object.trainerClass engages OverworldState:engageTrainer
+  -- Trainer battle: Gen1 trainerClass / Gen2 object.trainer / scripted loadtrainer
   if py + fh + 20 * s <= listBottom then
     Kit.text("micro", "Trainer battle", px + 10 * s, py, PAL.caption)
     py = py + 14 * s
-    local isTrainer = obj.trainerClass and obj.trainerClass ~= ""
-    if Kit.chip(px + 10 * s, py, 100 * s, fh, isTrainer and "ON" or "OFF",
-        isTrainer, PAL.red) then
-      map = mutate()
-      if isTrainer then
-        map.objects[i].trainerClass = nil
-        map.objects[i].trainerParty = nil
+    local scripted = scriptedTrainerInfo(S, obj)
+    local isStruct = (type(obj.trainer) == "table" and obj.trainer.class ~= nil)
+      or (obj.trainerClass and obj.trainerClass ~= "")
+    local isTrainer = isTrainerObject(obj, S)
+    local chipLabel = (scripted and not isStruct) and "SCRIPT"
+      or (isTrainer and "ON" or "OFF")
+    local chipOn = isTrainer
+    local chipPal = (scripted and not isStruct) and PAL.yellow or PAL.red
+    if Kit.chip(px + 10 * s, py, 100 * s, fh, chipLabel, chipOn, chipPal) then
+      if scripted and not isStruct then
+        S.status = "Gym/story battle via scriptKey (loadtrainer) — use Edit parties; "
+          .. "do not convert to type=2 or badges/TM script break"
       else
-        map.objects[i].pokemon = nil
-        map.objects[i].level = nil
-        map.objects[i].trainerClass = S.trainerId or "OPP_YOUNGSTER"
-        map.objects[i].trainerParty = tonumber(S.placeTrainerParty) or 1
-        State.ensureProjectFields(S.project)
-        local label = State.mapLabel(S, map.id)
-        local idx = map.objects[i].index or i
-        S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
-        if not S.project.trainer_headers[label][idx] then
-          local base = "_" .. (map.id or "MAP") .. "Trainer" .. idx
-          local beat = State.modFlag(S.project,
-            "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
-          S.project.eventFlags = S.project.eventFlags or {}
-          S.project.eventFlags[beat] = true
-          S.project.trainer_headers[label][idx] = {
-            range = 2,
-            battle = base .. "Battle",
-            won = base .. "Won",
-            after = base .. "After",
-            event = beat,
-            opponent = map.objects[i].trainerClass,
-            party = map.objects[i].trainerParty or 1,
-          }
-          S.project.text[base .. "Battle"] = "Let's fight!"
-          S.project.text[base .. "Won"] = "I lost..."
-          S.project.text[base .. "After"] = "You're strong."
+        map = mutate()
+        if isStruct then
+          map.objects[i].trainerClass = nil
+          map.objects[i].trainerParty = nil
+          map.objects[i].trainer = nil
+          if Generation.isGen2(S) then
+            map.objects[i].type = 0
+          end
+        else
+          map.objects[i].pokemon = nil
+          map.objects[i].level = nil
+          if Generation.isGen2(S) then
+            local classId = normalizeTrainerClassId(S, S.trainerId)
+              or "YOUNGSTER"
+            local classIdx = classIndexForId(S, classId) or 1
+            local member = math.max(1, tonumber(S.placeTrainerParty) or 1)
+            map.objects[i].type = 2
+            map.objects[i].sight = map.objects[i].sight or 2
+            map.objects[i].trainer = {
+              class = classIdx,
+              member = member,
+              event = 0,
+              seenText = "",
+              winText = "",
+              scriptKey = map.objects[i].scriptKey or "",
+            }
+            S.trainerId = classId
+          else
+            map.objects[i].trainerClass = S.trainerId or "OPP_YOUNGSTER"
+            map.objects[i].trainerParty = tonumber(S.placeTrainerParty) or 1
+            State.ensureProjectFields(S.project)
+            local label = State.mapLabel(S, map.id)
+            local idx = map.objects[i].index or i
+            S.project.trainer_headers[label] = S.project.trainer_headers[label] or {}
+            if not S.project.trainer_headers[label][idx] then
+              local base = "_" .. (map.id or "MAP") .. "Trainer" .. idx
+              local beat = State.modFlag(S.project,
+                "BEAT_" .. (map.id or "MAP") .. "_" .. idx)
+              S.project.eventFlags = S.project.eventFlags or {}
+              S.project.eventFlags[beat] = true
+              S.project.trainer_headers[label][idx] = {
+                range = 2,
+                battle = base .. "Battle",
+                won = base .. "Won",
+                after = base .. "After",
+                event = beat,
+                opponent = map.objects[i].trainerClass,
+                party = map.objects[i].trainerParty or 1,
+              }
+              S.project.text[base .. "Battle"] = "Let's fight!"
+              S.project.text[base .. "Won"] = "I lost..."
+              S.project.text[base .. "After"] = "You're strong."
+            end
+          end
         end
+        App.markDirty()
+        obj = map.objects[i]
+        isTrainer = isTrainerObject(obj, S)
       end
-      App.markDirty()
-      obj = map.objects[i]
-      isTrainer = obj.trainerClass and obj.trainerClass ~= ""
     end
     if Kit.button(px + 120 * s, py, 110 * s, fh, "Edit parties",
         { kind = "ghost" }) then
-      if obj.trainerClass then S.trainerId = obj.trainerClass end
+      if Generation.isGen2(S) and type(obj.trainer) == "table" then
+        local cid = classIdForIndex(S, obj.trainer.class)
+        if cid then S.trainerId = cid end
+        S.trainerPartyIndex = tonumber(obj.trainer.member) or 1
+      elseif scripted then
+        local cid = classIdForIndex(S, scripted.class)
+        if cid then S.trainerId = cid end
+        S.trainerPartyIndex = tonumber(scripted.member) or 1
+      elseif obj.trainerClass then
+        S.trainerId = obj.trainerClass
+      end
       S.tab = "trainers"
+      S.trainerSection = "parties"
     end
     py = py + fh + 6 * s
+    if scripted and not isStruct and py + 14 * s <= listBottom then
+      local cid = classIdForIndex(S, scripted.class) or tostring(scripted.class)
+      Kit.text("micro",
+        string.format("Scripted %s #%d — keeps gym badge/TM script",
+          tostring(cid), tonumber(scripted.member) or 1),
+        px + 10 * s, py, PAL.faint)
+      py = py + 16 * s
+    end
   end
 
-  if obj.trainerClass and obj.trainerClass ~= "" then
+  if Generation.isGen2(S) and type(obj.trainer) == "table" then
+    local t = obj.trainer
+    row("Class", function(fx, fy, fw, fh_)
+      local curId = classIdForIndex(S, t.class) or ""
+      local v = field(App, "ob_tc", fx, fy, fw, fh_, curId, "YOUNGSTER",
+        function() return Autocomplete.trainerIds(S) end)
+      v = v ~= "" and normalizeTrainerClassId(S, v) or nil
+      if v ~= (curId ~= "" and curId or nil) then
+        map = mutate()
+        local cidx = classIndexForId(S, v)
+        map.objects[i].trainer = map.objects[i].trainer or {}
+        map.objects[i].trainer.class = cidx or t.class
+        if v then S.trainerId = v end
+      end
+    end)
+    row("Member #", function(fx, fy, fw, fh_)
+      local cur = tonumber(t.member) or 1
+      local v = tonumber(field(App, "ob_tp", fx, fy, 60 * s, fh_, tostring(cur), "1")) or 1
+      v = math.max(1, v)
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].trainer = map.objects[i].trainer or {}
+        map.objects[i].trainer.member = v
+        S.placeTrainerParty = v
+      end
+    end)
+    row("Sight", function(fx, fy, fw, fh_)
+      local cur = tonumber(obj.sight) or 0
+      local v = tonumber(field(App, "ob_tr", fx, fy, 50 * s, fh_, tostring(cur), "2")) or 0
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].sight = v
+      end
+    end)
+    row("Event #", function(fx, fy, fw, fh_)
+      local cur = tonumber(t.event) or 0
+      local v = tonumber(field(App, "ob_tev", fx, fy, 70 * s, fh_, tostring(cur), "0")) or 0
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].trainer = map.objects[i].trainer or {}
+        map.objects[i].trainer.event = v
+      end
+    end)
+    row("seenText", function(fx, fy, fw, fh_)
+      local cur = t.seenText or ""
+      local v = field(App, "ob_seen", fx, fy, fw, fh_, cur, "bank:addr")
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].trainer = map.objects[i].trainer or {}
+        map.objects[i].trainer.seenText = v
+      end
+    end)
+    row("winText", function(fx, fy, fw, fh_)
+      local cur = t.winText or ""
+      local v = field(App, "ob_win", fx, fy, fw, fh_, cur, "bank:addr")
+      if v ~= cur then
+        map = mutate()
+        map.objects[i].trainer = map.objects[i].trainer or {}
+        map.objects[i].trainer.winText = v
+      end
+    end)
+    if py + fh + 8 * s <= listBottom then
+      if Kit.button(px + 10 * s, py, 140 * s, fh, "Edit seen dialog",
+          { kind = "ghost" }) and t.seenText and t.seenText ~= "" then
+        local Dialog = require("Dialog")
+        Dialog.openMap(S, map.id, t.seenText)
+      end
+      py = py + fh + 6 * s
+    end
+  elseif Generation.isGen2(S) and scriptedTrainerInfo(S, obj) then
+    local scripted = scriptedTrainerInfo(S, obj)
+    row("Class", function(fx, fy, fw, fh_)
+      local curId = classIdForIndex(S, scripted.class) or ""
+      local v = field(App, "ob_tc", fx, fy, fw, fh_, curId, "BUGSY",
+        function() return Autocomplete.trainerIds(S) end)
+      v = v ~= "" and normalizeTrainerClassId(S, v) or nil
+      if v ~= (curId ~= "" and curId or nil) then
+        local cidx = classIndexForId(S, v)
+        if cidx and mutateScriptLoadtrainer(S, scripted.scriptKey, function(cmd)
+              cmd.class = cidx
+            end) then
+          if v then S.trainerId = v end
+          App.markDirty()
+        end
+      end
+    end)
+    row("Member #", function(fx, fy, fw, fh_)
+      local cur = tonumber(scripted.member) or 1
+      local v = tonumber(field(App, "ob_tp", fx, fy, 60 * s, fh_, tostring(cur), "1"))
+        or 1
+      v = math.max(1, v)
+      if v ~= cur then
+        if mutateScriptLoadtrainer(S, scripted.scriptKey, function(cmd)
+              cmd.member = v
+            end) then
+          S.placeTrainerParty = v
+          App.markDirty()
+        end
+      end
+    end)
+  elseif obj.trainerClass and obj.trainerClass ~= "" then
     row("Class (OPP_*)", function(fx, fy, fw, fh_)
       local v = field(App, "ob_tc", fx, fy, fw, fh_, obj.trainerClass or "", "OPP_",
         function() return Autocomplete.trainerIds(S) end)
@@ -4928,6 +6516,164 @@ local function drawObjects(S, map, mutate, App, px, py, propW, listBottom, fh, s
 end
 
 local function drawSigns(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  if Generation.isGen2(S) then
+    map.bgEvents = map.bgEvents or {}
+    Kit.text("micro", "BG events (signs / hidden items)", px + 10 * s, py, PAL.muted)
+    py = py + 16 * s
+    py, S.mapSignIndex = drawListPicker(S, "mapSignIndex", #map.bgEvents,
+      px, py, propW, fh, s, PAL.yellow)
+    local i = S.mapSignIndex
+    local ev = i and map.bgEvents[i]
+    if not ev then return py end
+    local function row(label, body)
+      if py + fh + 20 * s > listBottom then return true end
+      Kit.text("micro", label, px + 10 * s, py, PAL.caption)
+      py = py + 14 * s
+      body(px + 10 * s, py, propW - 20 * s, fh)
+      py = py + fh + 6 * s
+    end
+    row("Cell X / Y", function(fx, fy, fw, fh_)
+      local x = tonumber(field(App, "bg_x", fx, fy, 50 * s, fh_,
+        tostring(ev.x or 0), "0")) or 0
+      local y = tonumber(field(App, "bg_y", fx + 60 * s, fy, 50 * s, fh_,
+        tostring(ev.y or 0), "0")) or 0
+      if x ~= (ev.x or 0) or y ~= (ev.y or 0) then
+        map = mutate(); map.bgEvents[i].x = x; map.bgEvents[i].y = y
+      end
+    end)
+    row("Kind", function(fx, fy, fw, fh_)
+      local cur = tonumber(ev.kind) or 0
+      local label = tostring(cur)
+      for _, k in ipairs(BGEVENT_KINDS) do
+        if k.id == cur then label = k.label .. " (" .. cur .. ")"; break end
+      end
+      if Kit.button(fx, fy, fw, fh_, label, { kind = "ghost" }) then
+        map = mutate()
+        local idx = 1
+        for j, k in ipairs(BGEVENT_KINDS) do
+          if k.id == cur then idx = j; break end
+        end
+        map.bgEvents[i].kind = BGEVENT_KINDS[(idx % #BGEVENT_KINDS) + 1].id
+        App.markDirty()
+      end
+    end)
+    do
+      local sk = ev.scriptKey
+      local tid = gen2TalkTextKey(S, sk)
+      if (not sk or sk == "") or not tid then
+        row("Says", function(fx, fy, fw, fh_)
+          if Kit.button(fx, fy, math.min(fw, 160 * s), fh_, "Add talk script", {
+              kind = "good",
+              tooltip = "Create a simple jumptext script + text for this sign",
+            }) then
+            map = mutate()
+            local nsk, ntid = allocGen2Talk(S, map.id or S.mapId, "SIGN", i, false)
+            map.bgEvents[i].scriptKey = nsk
+            S.dialogMapId = map.id
+            S.dialogTextId = ntid
+            S.dialogScriptKey = nsk
+            App.markDirty()
+            S.status = "Sign talk ready — edit Says below"
+          end
+        end)
+      else
+        row("Says", function(fx, fy, fw, fh_)
+          State.ensureProjectFields(S.project)
+          S.project.text = S.project.text or {}
+          local body = S.project.text[tid]
+          if body == nil and S.data and S.data.text then body = S.data.text[tid] end
+          body = tostring(body or "")
+          local v = field(App, "bg_says", fx, fy, fw - 140 * s, fh_, body, "...")
+          if v ~= body then
+            S.project.text[tid] = v
+            if S.data and S.data.text then S.data.text[tid] = v end
+            App.markDirty()
+          end
+          if Kit.button(fx + fw - 134 * s, fy, 64 * s, fh_, "Dialog", {
+              kind = "ghost", tooltip = "Open this line on the Dialog tab",
+            }) then
+            S.tab = "dialog"
+            S.dialogMapId = map.id
+            S.dialogTextId = tid
+            S.dialogScriptKey = sk
+          end
+          if Kit.button(fx + fw - 66 * s, fy, 64 * s, fh_, "Events", {
+              kind = "ghost", tooltip = "Open this scriptKey on the Events tab",
+            }) then
+            S.tab = "events"
+            S.eventsMode = "scripts"
+            S.eventMapId = map.id
+            S.eventScriptKey = map.id .. "/" .. sk
+          end
+        end)
+      end
+    end
+    row("Script key (advanced)", function(fx, fy, fw, fh_)
+      local cur = tonumber(ev.script) or 0
+      local v = tonumber(field(App, "bg_scr", fx, fy, 70 * s, fh_,
+        tostring(cur), "0")) or 0
+      local key = field(App, "bg_sck", fx + 78 * s, fy, fw - 78 * s, fh_,
+        ev.scriptKey or "", "bank:addr")
+      if v ~= cur or key ~= (ev.scriptKey or "") then
+        map = mutate()
+        map.bgEvents[i].script = v
+        map.bgEvents[i].scriptKey = (key ~= "" and key) or nil
+      end
+    end)
+    if (tonumber(ev.kind) or 0) == 7 then
+      local hi = type(ev.hiddenItem) == "table" and ev.hiddenItem or {}
+      row("Hidden item", function(fx, fy, fw, fh_)
+        local item = field(App, "bg_item", fx, fy, fw, fh_,
+          hi.item or "", "ITEM"):upper():gsub("%s+", "_")
+        if item ~= (hi.item or "") then
+          map = mutate()
+          map.bgEvents[i].hiddenItem = map.bgEvents[i].hiddenItem or {}
+          map.bgEvents[i].hiddenItem.item = (item ~= "" and item) or nil
+        end
+      end)
+      row("Hidden flag", function(fx, fy, fw, fh_)
+        local cur = hi.event
+        local shown = cur ~= nil and tostring(cur) or ""
+        local v = field(App, "bg_hif", fx, fy, fw, fh_, shown, "0")
+        if v ~= shown then
+          map = mutate()
+          map.bgEvents[i].hiddenItem = map.bgEvents[i].hiddenItem or {}
+          map.bgEvents[i].hiddenItem.event = (v ~= "" and tonumber(v)) or nil
+        end
+      end)
+    end
+    if py + 32 * s <= listBottom then
+      local half = (propW - 28 * s) * 0.5
+      if Kit.button(px + 10 * s, py, half, 28 * s, "Copy event", {
+          kind = "accent",
+          tooltip = "Ctrl+C — paste onto another map with Ctrl+V",
+        }) then
+        local ok, msg = copySelectedMapEvent(S)
+        S.status = msg or (ok and "Copied" or "Copy failed")
+      end
+      if Kit.button(px + 18 * s + half, py, half, 28 * s, "Paste event", {
+          kind = "good",
+          tooltip = "Ctrl+V — paste at hover cell",
+        }) then
+        local ok, msg = pasteMapEventClip(S, App)
+        S.status = msg or (ok and "Pasted" or "Paste failed")
+      end
+      py = py + 34 * s
+    end
+    if py + 32 * s <= listBottom then
+      if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete BG event",
+          { kind = "danger" }) then
+        map = mutate()
+        table.remove(map.bgEvents, i)
+        S.mapSignIndex = math.min(i, #map.bgEvents)
+        MapLoader.invalidate(map.id)
+        App.markDirty()
+      end
+      py = py + 34 * s
+    end
+    return py
+  end
+
   map.signs = map.signs or {}
   py, S.mapSignIndex = drawListPicker(S, "mapSignIndex", #map.signs, px, py, propW, fh, s, PAL.yellow)
   local i = S.mapSignIndex
@@ -4956,6 +6702,24 @@ local function drawSigns(S, map, mutate, App, px, py, propW, listBottom, fh, s)
     if v ~= (sign.text or "") then map = mutate(); map.signs[i].text = v end
   end)
   if py + 32 * s <= listBottom then
+    local half = (propW - 28 * s) * 0.5
+    if Kit.button(px + 10 * s, py, half, 28 * s, "Copy event", {
+        kind = "accent",
+        tooltip = "Ctrl+C — paste onto another map with Ctrl+V",
+      }) then
+      local ok, msg = copySelectedMapEvent(S)
+      S.status = msg or (ok and "Copied" or "Copy failed")
+    end
+    if Kit.button(px + 18 * s + half, py, half, 28 * s, "Paste event", {
+        kind = "good",
+        tooltip = "Ctrl+V — paste at hover cell",
+      }) then
+      local ok, msg = pasteMapEventClip(S, App)
+      S.status = msg or (ok and "Pasted" or "Paste failed")
+    end
+    py = py + 34 * s
+  end
+  if py + 32 * s <= listBottom then
     if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Delete sign",
         { kind = "danger" }) then
       map = mutate()
@@ -4970,6 +6734,28 @@ local function drawSigns(S, map, mutate, App, px, py, propW, listBottom, fh, s)
 end
 
 local function drawHiddenItems(S, map, mutate, App, px, py, propW, listBottom, fh, s)
+  if Generation.isGen2(S) then
+    Kit.text("micro", "Gold hidden items are BG events (kind ITEM).",
+      px + 10 * s, py, PAL.muted)
+    py = py + 18 * s
+    Kit.text("micro", "Edit them under the BG Events section.",
+      px + 10 * s, py, PAL.faint)
+    py = py + 18 * s
+    local count = 0
+    for _, ev in ipairs(map.bgEvents or {}) do
+      if tonumber(ev.kind) == 7 then count = count + 1 end
+    end
+    Kit.text("micro", string.format("%d ITEM event(s) on this map", count),
+      px + 10 * s, py, PAL.caption)
+    py = py + 20 * s
+    if Kit.button(px + 10 * s, py, propW - 20 * s, 28 * s, "Open BG Events",
+        { kind = "primary" }) then
+      S.mapEditMode = "events"
+      S.mapSection = "signs"
+    end
+    return py + 36 * s
+  end
+
   State.ensureProjectFields(S.project)
   local mapId = map.id or S.mapId
   local items, owned = resolveHiddenItems(S, mapId)
@@ -5307,7 +7093,7 @@ function Maps.draw(S, x, y, w, h, App)
     local idx = S.project.nextMapIndex or 1000
     S.project.nextMapIndex = idx + 1
     local ts = tilesetIds(S)[1] or "OVERWORLD"
-    S.project.maps[nid] = defaultMap(nid, idx, ts)
+    S.project.maps[nid] = defaultMap(nid, idx, ts, S)
     S.mapId = nid
     S.mapPaletteTileset = ts
     S._mapPaletteFor = nid
@@ -5361,9 +7147,12 @@ function Maps.draw(S, x, y, w, h, App)
   local tools
   if (S.mapEditMode or "map") == "events" then
     tools = {
-      { id = "object", label = "Event", tip = "Place / select NPC events" },
-      { id = "warp", label = "Transfer", tip = "Place map transfers (warps)" },
-      { id = "sign", label = "Sign", tip = "Place signs" },
+      { id = "object", label = "Event",
+        tip = "Click empty cell to place · drag NPC to move · Shift+click to place on occupied cell" },
+      { id = "warp", label = "Transfer",
+        tip = "Click empty cell to place · drag to move · Shift+click to place on occupied cell" },
+      { id = "sign", label = "Sign",
+        tip = "Click empty cell to place · drag to move · Shift+click to place on occupied cell" },
       { id = "trainer", label = "Trainer", tip = "Place a trainer event" },
       { id = "wild", label = "Wild", tip = "Place a fixed wild encounter" },
     }
@@ -5374,7 +7163,9 @@ function Maps.draw(S, x, y, w, h, App)
       { id = "pick", label = "Pick", tip = "Sample a block from the map" },
       { id = "select", label = "Select", tip = "Marquee select blocks (copy/paste/shift)" },
       { id = "collision", label = "Passage",
-        tip = "Walk/solid/water/grass on this map's tileset slot" },
+        tip = Generation.isGen2(S)
+          and "Paint COLL_* on metatile quads (Land/Wall/Grass/Water/Door/Warp)"
+          or "Walk/solid/water/grass on this map's tileset slot" },
     }
   end
   local tx = mainX
@@ -5395,21 +7186,26 @@ function Maps.draw(S, x, y, w, h, App)
       if tool.id == "collision" then
         S.mapShowCollision = true
         S.mapCollisionMode = S.mapCollisionMode or "solid"
-        S.status = "Passage: paints this map's tileset slot (auto-clones if shared)"
+        S.status = Generation.isGen2(S)
+          and "Passage: paints COLL_* quads on this map's tileset (auto-clones)"
+          or "Passage: paints this map's tileset slot (auto-clones if shared)"
       elseif tool.id == "paint" then
         S.status = "Pencil: paint blocks from the tileset palette"
       elseif tool.id == "object" then
-        S.status = "Event: click the map to place an NPC"
+        S.status = "Event: place on empty cell · drag to move · Shift+click places"
       elseif tool.id == "warp" then
-        S.status = "Transfer: click the map to place a warp"
+        S.status = "Transfer: place / drag to move · Shift+click places"
       elseif tool.id == "wild" then
-        S.placeWildSpecies = S.placeWildSpecies or "ARTICUNO"
+        S.placeWildSpecies = S.placeWildSpecies
+          or (Generation.isGen2(S) and "SUDOWOODO" or "ARTICUNO")
         S.placeWildLevel = S.placeWildLevel or 50
-        S.placeSprite = S.placeSprite or "SPRITE_BIRD"
+        S.placeSprite = S.placeSprite
+          or (Generation.isGen2(S) and "SPRITE_SUDOWOODO" or "SPRITE_BIRD")
         S.status = string.format("Wild: %s Lv%d — click a cell",
           tostring(S.placeWildSpecies), tonumber(S.placeWildLevel) or 50)
       elseif tool.id == "trainer" then
-        S.trainerId = S.trainerId or "OPP_YOUNGSTER"
+        S.trainerId = normalizeTrainerClassId(S, S.trainerId)
+          or (Generation.isGen2(S) and "YOUNGSTER" or "OPP_YOUNGSTER")
         S.placeTrainerParty = S.placeTrainerParty or 1
         S.placeSprite = S.placeSprite or "SPRITE_YOUNGSTER"
         S.status = string.format("Trainer: %s party %d — click a cell",
@@ -5419,18 +7215,35 @@ function Maps.draw(S, x, y, w, h, App)
     tx = tx + bw + 4 * s
   end
   if (S.mapTool or "paint") == "collision" then
-    for _, mode in ipairs({
-      { id = "solid", label = "Solid", tip = "Blocked / not walkable", accent = PAL.red },
-      { id = "walk", label = "Walk", tip = "Passable (walkable list)", accent = PAL.green },
-      { id = "water", label = "Water", tip = "Surf water", accent = PAL.blue },
-      { id = "grass", label = "Grass", tip = "Tall grass (wild encounters)",
-        accent = { 240, 70, 220 } },
-      { id = "shore", label = "Shore", tip = "Shore / beach edge", accent = PAL.blue },
-      { id = "ledge", label = "Ledge", tip = "Click ledge cell; hop dir below",
-        accent = { 255, 140, 40 } },
-      { id = "none", label = "None", tip = "Clear grass / water / shore / ledge",
-        accent = PAL.steel },
-    }) do
+    local modes
+    if Generation.isGen2(S) then
+      modes = {
+        { id = "solid", label = "Wall", tip = "COLL wall ($FF)", accent = PAL.red },
+        { id = "walk", label = "Land", tip = "COLL land ($00)", accent = PAL.green },
+        { id = "water", label = "Water", tip = "COLL water ($29)", accent = PAL.blue },
+        { id = "grass", label = "Grass", tip = "COLL_TALL_GRASS ($18)",
+          accent = { 240, 70, 220 } },
+        { id = "door", label = "Door", tip = "COLL_DOOR ($71)", accent = PAL.yellow },
+        { id = "warp", label = "Warp", tip = "COLL_WARP_PANEL ($7C)",
+          accent = { 255, 140, 40 } },
+        { id = "ledge", label = "Ledge", tip = "COLL_HOP_* — pick hop dir",
+          accent = { 255, 140, 40 } },
+      }
+    else
+      modes = {
+        { id = "solid", label = "Solid", tip = "Blocked / not walkable", accent = PAL.red },
+        { id = "walk", label = "Walk", tip = "Passable (walkable list)", accent = PAL.green },
+        { id = "water", label = "Water", tip = "Surf water", accent = PAL.blue },
+        { id = "grass", label = "Grass", tip = "Tall grass (wild encounters)",
+          accent = { 240, 70, 220 } },
+        { id = "shore", label = "Shore", tip = "Shore / beach edge", accent = PAL.blue },
+        { id = "ledge", label = "Ledge", tip = "Click ledge cell; hop dir below",
+          accent = { 255, 140, 40 } },
+        { id = "none", label = "None", tip = "Clear grass / water / shore / ledge",
+          accent = PAL.steel },
+      }
+    end
+    for _, mode in ipairs(modes) do
       local on = (S.mapCollisionMode or "solid") == mode.id
       local mw = Kit.textWidth("micro", mode.label) + 14 * s
       if Kit.chip(tx, y, mw, 26 * s, mode.label, on, mode.accent, nil, mode.tip) then
@@ -5459,10 +7272,26 @@ function Maps.draw(S, x, y, w, h, App)
     end
   end
   if Kit.button(tx + 4 * s, y, 64 * s, 26 * s, "Dialog", {
-      kind = "ghost", tooltip = "Edit this map's NPC / sign text",
+      kind = "ghost",
+      tooltip = Generation.isGen2(S)
+        and "Edit this map's NPC / BG event text (script writetext)"
+        or "Edit this map's NPC / sign text",
     }) then
-    S.tab = "dialog"
-    S.dialogMapId = S.mapId
+    local Dialog = require("Dialog")
+    local textId = nil
+    if Generation.isGen2(S) then
+      local m = resolveMapDef(S, S.mapId)
+      local sk
+      if (S.mapSection or "") == "objects" and m and S.mapObjectIndex then
+        local o = m.objects and m.objects[S.mapObjectIndex]
+        sk = o and o.scriptKey
+      elseif (S.mapSection or "") == "signs" and m and S.mapSignIndex then
+        local e = m.bgEvents and m.bgEvents[S.mapSignIndex]
+        sk = e and e.scriptKey
+      end
+      textId = Dialog.firstTextForScript(S, sk)
+    end
+    Dialog.openMap(S, S.mapId, textId)
   end
   tx = tx + 72 * s
   if Kit.stepper(tx, y, 26 * s, 26 * s, "-", {
@@ -5594,11 +7423,12 @@ function Maps.draw(S, x, y, w, h, App)
   elseif map and (S.mapTool or "paint") == "wild" then
     barH = 38 * s
     local bx = mainX
+    local defaultSp = Generation.isGen2(S) and "SUDOWOODO" or "ARTICUNO"
     Kit.text("micro", "Species", bx, barY + 2 * s, PAL.caption)
     Kit.text("micro", "Lv", bx + 200 * s, barY + 2 * s, PAL.caption)
     SpeciesPicker.field(S, {
       x = bx, y = barY + 14 * s, w = 190 * s, h = 22 * s,
-      current = S.placeWildSpecies or "ARTICUNO",
+      current = S.placeWildSpecies or defaultSp,
       title = "PLACE WILD SPECIES",
       onPick = function(id)
         S.placeWildSpecies = id
@@ -5610,13 +7440,18 @@ function Maps.draw(S, x, y, w, h, App)
   elseif map and (S.mapTool or "paint") == "trainer" then
     barH = 38 * s
     local bx = mainX
-    Kit.text("micro", "Class (OPP_*)", bx, barY + 2 * s, PAL.caption)
+    local classPh = Generation.isGen2(S) and "YOUNGSTER" or "OPP_YOUNGSTER"
+    Kit.text("micro",
+      Generation.isGen2(S) and "Class" or "Class (OPP_*)",
+      bx, barY + 2 * s, PAL.caption)
     Kit.text("micro", "Party", bx + 170 * s, barY + 2 * s, PAL.caption)
     local cls = field(App, "mp_tr_cls", bx, barY + 14 * s, 160 * s, 22 * s,
-      S.trainerId or "OPP_YOUNGSTER", "OPP_YOUNGSTER",
+      S.trainerId or classPh, classPh,
       function() return Autocomplete.trainerIds(S) end)
       :upper():gsub("%s+", "_")
-    if cls ~= "" then S.trainerId = cls end
+    if cls ~= "" then
+      S.trainerId = normalizeTrainerClassId(S, cls) or cls
+    end
     local pty = tonumber(field(App, "mp_tr_pty", bx + 170 * s, barY + 14 * s,
       48 * s, 22 * s, tostring(S.placeTrainerParty or 1), "1")) or 1
     S.placeTrainerParty = math.max(1, pty)
@@ -5631,13 +7466,18 @@ function Maps.draw(S, x, y, w, h, App)
     local bx = mainX + thumb + 140 * s
     if Kit.chip(bx, barY + 2 * s, 90 * s, barH - 4 * s, "Terrain",
         S.mapShowCollision, PAL.red, nil,
-        "Overlay: red=solid blue=water magenta=grass orange=ledge") then
+        Generation.isGen2(S)
+          and "Overlay: red=wall blue=water magenta=grass yellow=warp orange=ledge"
+          or "Overlay: red=solid blue=water magenta=grass orange=ledge") then
       S.mapShowCollision = not S.mapShowCollision
     end
     bx = bx + 98 * s
     local showNb = S.mapShowNeighbors ~= false
     if Kit.chip(bx, barY + 2 * s, 96 * s, barH - 4 * s, "Neighbors",
-        showNb, PAL.blue, nil, "Draw connected maps at seams") then
+        showNb, PAL.blue, nil,
+        Generation.isGen2(S)
+          and "Draw connected maps at seams (uses connection mapId)"
+          or "Draw connected maps at seams") then
       S.mapShowNeighbors = not showNb
     end
   end
@@ -5713,15 +7553,18 @@ function Maps.draw(S, x, y, w, h, App)
   local sx = px + 8 * s
   local secY = canvasY + 34 * s
   local allow = (S.mapEditMode == "events") and EVENT_MODE_SECTIONS or MAP_MODE_SECTIONS
+  local gen2 = Generation.isGen2(S)
   for _, sec in ipairs(SECTIONS) do
-    if allow[sec.id] then
+    -- Gold has no field.badgeGates (Gen1-only field registry; see ModWriter).
+    if allow[sec.id] and not (gen2 and sec.id == "gates") then
       local on = S.mapSection == sec.id
-      local bw = Kit.textWidth("micro", sec.label) + 14 * s
+      local label = sectionLabel(S, sec)
+      local bw = Kit.textWidth("micro", label) + 14 * s
       if sx + bw > px + propW - 8 * s then
         sx = px + 8 * s
         secY = secY + 28 * s
       end
-      if Kit.chip(sx, secY, bw, 24 * s, sec.label, on, PAL.green) then
+      if Kit.chip(sx, secY, bw, 24 * s, label, on, PAL.green) then
         S.mapSection = sec.id
       end
       sx = sx + bw + 3 * s
@@ -5761,8 +7604,13 @@ function Maps.draw(S, x, y, w, h, App)
     contentY = drawHiddenItems(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
       or contentY
   elseif S.mapSection == "gates" then
-    contentY = drawBadgeGates(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
-      or contentY
+    if Generation.isGen2(S) then
+      Kit.text("micro", "Gold: no field.badgeGates.", formX + 10 * s, contentY, PAL.faint)
+      contentY = contentY + 20 * s
+    else
+      contentY = drawBadgeGates(S, map, mutate, App, formX, contentY, formW, listBottom, fh, s)
+        or contentY
+    end
   end
   FormPane.finish(S, "mapFormScroll", contentTop, contentY, view)
 
@@ -5775,6 +7623,7 @@ function Maps.draw(S, x, y, w, h, App)
     end
     map = mutate()
     map.warps, map.objects, map.signs = {}, {}, {}
+    if Generation.isGen2(S) then map.bgEvents = {} end
     if S.project.layeredMaps and S.project.layeredMaps[mid] then
       local okLayered, LayeredMap = pcall(require, "LayeredMap")
       if okLayered then

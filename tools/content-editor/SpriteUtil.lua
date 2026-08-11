@@ -1,8 +1,18 @@
 -- Shared overworld sprite helpers for GFX + MAPS Objects.
 
 local State = require("State")
+local Generation = require("Generation")
 
 local SpriteUtil = {}
+
+SpriteUtil.OW_PALETTES = {
+  "PAL_OW_RED", "PAL_OW_BLUE", "PAL_OW_GREEN", "PAL_OW_BROWN",
+  "PAL_OW_PINK", "PAL_OW_EMOTE", "PAL_OW_TREE", "PAL_OW_ROCK",
+}
+
+SpriteUtil.SPRITE_TYPES = {
+  "WALKING_SPRITE", "STANDING_SPRITE", "STILL_SPRITE", "POKEMON_SPRITE",
+}
 
 function SpriteUtil.invalidateIdCache(S)
   if not S then return end
@@ -25,15 +35,21 @@ function SpriteUtil.createNew(S, opts)
     n = n + 1
     nid = "SPRITE_MOD_" .. n
   end
+  local gen2 = Generation.isGen2(S)
   local rec = {
     id = nid,
     image = opts.image or ("assets/" .. nid:lower() .. ".png"),
-    frames = opts.frames or 1,
+    frames = opts.frames or (gen2 and 6 or 1),
     walker = opts.walker and true or false,
     _isNew = true,
   }
   if opts.trueColor then rec.trueColor = true end
-  if type(opts.paletteSource) == "string" and opts.paletteSource ~= "" then
+  if gen2 then
+    rec.palette = opts.palette or "PAL_OW_RED"
+    rec.paletteId = opts.paletteId or 0
+    rec.spriteType = opts.spriteType or "WALKING_SPRITE"
+    if opts.walker == nil then rec.walker = true end
+  elseif type(opts.paletteSource) == "string" and opts.paletteSource ~= "" then
     rec.paletteSource = opts.paletteSource
   end
   proj[nid] = rec

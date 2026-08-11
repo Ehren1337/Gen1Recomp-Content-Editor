@@ -30,17 +30,46 @@ local function touch(mapId)
   lru[mapId] = accessSeq
 end
 
+local function mapModule()
+  local ok, GameVersion = pcall(require, "src.core.GameVersion")
+  if ok and GameVersion and GameVersion.generation
+      and GameVersion.generation() == 2 then
+    local ok2, Gen2Map = pcall(require, "src.world.gen2.Map")
+    if ok2 and Gen2Map and Gen2Map.new then return Gen2Map end
+  end
+  return Map
+end
+
+local function resolveTables(data)
+  local maps = data.maps
+  local tilesets = data.tilesets
+  if data.gen2Maps and (not maps or not next(maps)) then maps = data.gen2Maps end
+  if data.gen2Tilesets and (not tilesets or not next(tilesets)) then
+    tilesets = data.gen2Tilesets
+  end
+  -- Prefer Gen2 tables when the process is on Gold even if Gen1 keys exist
+  -- (Game2 aliases both names onto the same tables).
+  local ok, GameVersion = pcall(require, "src.core.GameVersion")
+  if ok and GameVersion and GameVersion.generation
+      and GameVersion.generation() == 2 then
+    maps = data.gen2Maps or maps
+    tilesets = data.gen2Tilesets or tilesets
+  end
+  return maps, tilesets
+end
+
 local function build(data, mapId)
-  local def = data.maps[mapId]
+  local maps, tilesets = resolveTables(data)
+  local def = maps and maps[mapId]
   assert(def, "unknown map: " .. tostring(mapId) ..
          " (not in the maps registry)")
-  local tilesetDef = data.tilesets[def.tileset]
+  local tilesetDef = tilesets and tilesets[def.tileset]
   assert(tilesetDef, ("map %s wants unknown tileset: %s (not in the " ..
          "tilesets registry)"):format(tostring(mapId), tostring(def.tileset)))
 
   -- warp tiles are stored per tileset macro name; the generated tilesets
   -- module carries them in the tileset entry itself
-  local map = Map.new(def, tilesetDef)
+  local map = mapModule().new(def, tilesetDef)
   map.renderer = TileRenderer.new(map, data)
   cache[mapId] = map
   touch(mapId)

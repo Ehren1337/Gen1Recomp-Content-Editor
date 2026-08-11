@@ -1,8 +1,10 @@
--- In-editor battle move animation preview (AnimPlayer @ 160×144, scaled).
+-- In-editor battle move animation preview.
+-- Gen1: AnimPlayer + moveAnims.seq.  Gen2: AnimRunner + BattleAnimView.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local BattleAnimPreview = {}
@@ -26,10 +28,51 @@ local function copyMap(t)
   return out
 end
 
--- Merge vanilla battle_anims with project.battle_anims overrides.
+local function cloneValue(v)
+  if type(v) ~= "table" then return v end
+  local out = {}
+  local n = #v
+  if n > 0 then
+    for i = 1, n do out[i] = cloneValue(v[i]) end
+  end
+  for k, child in pairs(v) do
+    if type(k) ~= "number" or k < 1 or k > n or out[k] == nil then
+      out[k] = cloneValue(child)
+    end
+  end
+  return out
+end
+
+local function mergeBucket(base, overlay)
+  local out = cloneValue(base) or {}
+  if type(overlay) ~= "table" then return out end
+  for k, v in pairs(overlay) do
+    if type(k) == "string" and k:sub(1, 1) == "_" then
+      -- skip editor marks
+    else
+      out[k] = cloneValue(v)
+    end
+  end
+  return out
+end
+
+local function isGen2(S)
+  if Generation.isGen2(S) then return true end
+  local root = S and S.data and (S.data.gen2BattleAnims or S.data.battle_anims)
+  return type(root) == "table" and type(root.moves) == "table"
+end
+
+local function baRoot(S)
+  return S and S.data and (S.data.gen2BattleAnims or S.data.battle_anims) or nil
+end
+
+-- Merge vanilla battle_anims with project.battle_anims overrides (Gen1 flat ids).
 function BattleAnimPreview.buildData(S)
   local root = S and S.data and S.data.battle_anims
   if type(root) ~= "table" then return nil end
+  if type(root.moves) == "table" then
+    return BattleAnimPreview.buildDataGen2(S)
+  end
   local data = {
     moveAnims = copyMap(root.moveAnims),
     subanims = copyMap(root.subanims),
@@ -46,7 +89,10 @@ function BattleAnimPreview.buildData(S)
         data.subanims[tonumber(index)] = clean
       elseif kind == "tilesheet" then
         data.tilesheets[tonumber(index)] = clean
-      else
+      elseif type(id) == "string"
+          and id ~= "moves" and id ~= "scripts" and id ~= "gfx"
+          and id ~= "objects" and id ~= "ids" and id ~= "framesets"
+          and id ~= "oamsets" then
         data.moveAnims[id] = clean
       end
     end
@@ -54,8 +100,45 @@ function BattleAnimPreview.buildData(S)
   return data
 end
 
+-- Gold: nested moves / scripts / gfx / objects / …
+function BattleAnimPreview.buildDataGen2(S)
+  local root = baRoot(S)
+  if type(root) ~= "table" then return nil end
+  State.ensureProjectFields(S.project)
+  local proj = S.project.battle_anims or {}
+  local data = {
+    moves = mergeBucket(root.moves, proj.moves),
+    scripts = mergeBucket(root.scripts, proj.scripts),
+    ids = mergeBucket(root.ids, proj.ids),
+    objects = mergeBucket(root.objects, proj.objects),
+    framesets = mergeBucket(root.framesets, proj.framesets),
+    oamsets = mergeBucket(root.oamsets, proj.oamsets),
+    gfx = mergeBucket(root.gfx, proj.gfx),
+    scriptOrder = root.scriptOrder,
+    generation = 2,
+  }
+  return data
+end
+
+local function resolveGen2ScriptKey(data, id)
+  if not (data and id) then return nil end
+  if type(data.scripts) == "table" and data.scripts[id] then
+    return id
+  end
+  local ptr = data.moves and data.moves[id]
+  if type(ptr) == "string" and ptr ~= ""
+      and type(data.scripts) == "table" and data.scripts[ptr] then
+    return ptr
+  end
+  return nil
+end
+
 function BattleAnimPreview.hasAnim(S, moveId)
   if not moveId then return false end
+  if isGen2(S) then
+    local data = BattleAnimPreview.buildDataGen2(S)
+    return resolveGen2ScriptKey(data, moveId) ~= nil
+  end
   local data = BattleAnimPreview.buildData(S)
   local anim = data and data.moveAnims and data.moveAnims[moveId]
   return type(anim) == "table" and type(anim.seq) == "table"
@@ -72,12 +155,75 @@ end
 
 function BattleAnimPreview.isPlaying(S)
   local p = S and S.battleAnimPreview
-  return p and p.playing and p.player and not p.player:isDone()
+  if not (p and p.playing) then return false end
+  if p.gen2 then
+    return p.runner and not p.runner:done()
+  end
+  return p.player and not p.player:isDone()
+end
+
+local function startGen2(S, moveId, opts)
+  opts = opts or {}
+  local data = BattleAnimPreview.buildDataGen2(S)
+  local scriptKey = resolveGen2ScriptKey(data, moveId)
+  if not scriptKey then
+    S.status = "No battle anim script for " .. tostring(moveId)
+    return false
+  end
+  local okR, AnimRunner = pcall(require, "src.battle.gen2.AnimRunner")
+  if not okR then
+    S.status = "AnimRunner unavailable"
+    return false
+  end
+  local okV, BattleAnimView = pcall(require, "src.ui.gen2.BattleAnimView")
+  if not okV then
+    S.status = "BattleAnimView unavailable"
+    return false
+  end
+  BattleAnimPreview.stop(S)
+  local attackerIsPlayer = not S.battleAnimPreviewEnemy
+  if opts.enemy == true then attackerIsPlayer = false end
+  if opts.enemy == false then attackerIsPlayer = true end
+  local constants = S.data and (S.data.constants or S.data.gen2Constants) or {}
+  local palettes = S.data and (S.data.palettes or S.data.gen2Palettes) or nil
+  local runner = AnimRunner.new({
+    data = data,
+    constants = constants,
+    battleTurn = attackerIsPlayer and 0 or 1,
+    animId = moveId,
+    hooks = {},
+  })
+  runner:start(scriptKey)
+  local rows = data.scripts and data.scripts[scriptKey]
+  if type(rows) ~= "table" or #rows == 0 then
+    S.status = "Empty anim script " .. tostring(scriptKey)
+    return false
+  end
+  local view = BattleAnimView.new(data, palettes)
+  S.battleAnimPreview = {
+    gen2 = true,
+    runner = runner,
+    view = view,
+    moveId = moveId,
+    scriptKey = scriptKey,
+    data = data,
+    accum = 0,
+    playing = true,
+    loop = S.battleAnimPreviewLoop ~= false,
+    attackerIsPlayer = attackerIsPlayer,
+    flash = 0,
+  }
+  S.status = "Previewing " .. tostring(moveId)
+    .. " → " .. tostring(scriptKey)
+  return true
 end
 
 function BattleAnimPreview.start(S, moveId, opts)
   opts = opts or {}
   if not (S and moveId) then return false end
+  if isGen2(S) then
+    return startGen2(S, moveId, opts)
+  end
   local data = BattleAnimPreview.buildData(S)
   if not data or not data.moveAnims[moveId] then
     S.status = "No battle anim for " .. tostring(moveId)
@@ -115,7 +261,30 @@ end
 
 function BattleAnimPreview.update(S, dt)
   local p = S and S.battleAnimPreview
-  if not p or not p.playing or not p.player then return end
+  if not p or not p.playing then return end
+  if p.gen2 then
+    if not p.runner then return end
+    p.accum = (p.accum or 0) + (dt or 0)
+    local frames = math.floor(p.accum * 60)
+    if frames < 1 then return end
+    p.accum = p.accum - frames / 60
+    if frames > 5 then frames = 5 end
+    for _ = 1, frames do
+      if (p.flash or 0) > 0 then p.flash = p.flash - 1 end
+      pcall(p.runner.step, p.runner)
+      if p.runner:done() then
+        local loop = S.battleAnimPreviewLoop ~= false
+        if loop then
+          pcall(p.runner.start, p.runner, p.scriptKey)
+        else
+          p.playing = false
+          break
+        end
+      end
+    end
+    return
+  end
+  if not p.player then return end
   p.accum = (p.accum or 0) + (dt or 0)
   local frames = math.floor(p.accum * 60)
   if frames < 1 then return end
@@ -149,6 +318,17 @@ function BattleAnimPreview.update(S, dt)
   end
 end
 
+local function drawStage()
+  love.graphics.setColor(0.18, 0.28, 0.22, 1)
+  love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+  love.graphics.setColor(0.22, 0.38, 0.28, 1)
+  love.graphics.rectangle("fill", 0, 88, GB_W, 56)
+  love.graphics.setColor(0.75, 0.35, 0.32, 1)
+  love.graphics.rectangle("fill", 96, 8, 56, 56)
+  love.graphics.setColor(0.32, 0.42, 0.78, 1)
+  love.graphics.rectangle("fill", 8, 64, 56, 56)
+end
+
 -- Draw controls + scaled GB viewport. Returns y below the widget.
 function BattleAnimPreview.draw(S, moveId, x, y, w, s)
   s = s or Kit.scale
@@ -163,6 +343,7 @@ function BattleAnimPreview.draw(S, moveId, x, y, w, s)
   end
   local active = p and p.moveId == moveId
   local playing = active and p.playing
+  local gen2 = isGen2(S)
 
   if Kit.chip(x, y, 72 * s, fh, playing and "STOP" or "PLAY",
       playing, PAL.green) then
@@ -186,7 +367,9 @@ function BattleAnimPreview.draw(S, moveId, x, y, w, s)
 
   local enemy = S.battleAnimPreviewEnemy and true or false
   if Kit.chip(x + 160 * s, y, 100 * s, fh, enemy and "ENEMY" or "PLAYER",
-      enemy, PAL.yellow, nil, "Attacker side (transforms subanims)") then
+      enemy, PAL.yellow, nil,
+      gen2 and "hBattleTurn — player=0 / enemy=1"
+        or "Attacker side (transforms subanims)") then
     S.battleAnimPreviewEnemy = not enemy
     if active and playing then
       BattleAnimPreview.start(S, moveId)
@@ -210,26 +393,31 @@ function BattleAnimPreview.draw(S, moveId, x, y, w, s)
   love.graphics.translate(vx, vy)
   love.graphics.scale(scale, scale)
 
-  -- Simple battle stage (not full HUD — just anchors for OAM).
-  love.graphics.setColor(0.18, 0.28, 0.22, 1)
-  love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
-  love.graphics.setColor(0.22, 0.38, 0.28, 1)
-  love.graphics.rectangle("fill", 0, 88, GB_W, 56)
-  -- Enemy / player pic stand-ins
-  love.graphics.setColor(0.75, 0.35, 0.32, 1)
-  love.graphics.rectangle("fill", 96, 8, 56, 56)
-  love.graphics.setColor(0.32, 0.42, 0.78, 1)
-  love.graphics.rectangle("fill", 8, 64, 56, 56)
-
-  if active and p and p.player then
+  if active and p and p.gen2 and p.runner and p.view then
+    local function drawBg()
+      drawStage()
+    end
     love.graphics.setColor(1, 1, 1, 1)
-    pcall(p.player.draw, p.player)
+    pcall(function()
+      p.view:present(p.runner, drawBg)
+      p.view:drawObjects(p.runner, nil)
+    end)
     if (p.flash or 0) > 0 then
       love.graphics.setColor(1, 1, 1, 0.55)
       love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
     end
   else
-    love.graphics.setColor(1, 1, 1, 0.35)
+    drawStage()
+    if active and p and p.player then
+      love.graphics.setColor(1, 1, 1, 1)
+      pcall(p.player.draw, p.player)
+      if (p.flash or 0) > 0 then
+        love.graphics.setColor(1, 1, 1, 0.55)
+        love.graphics.rectangle("fill", 0, 0, GB_W, GB_H)
+      end
+    else
+      love.graphics.setColor(1, 1, 1, 0.35)
+    end
   end
 
   love.graphics.pop()
@@ -237,14 +425,23 @@ function BattleAnimPreview.draw(S, moveId, x, y, w, s)
 
   local info
   if not BattleAnimPreview.hasAnim(S, moveId) then
-    info = "no anim data for this move"
+    info = gen2
+      and "no Gold script for this move / pointer"
+      or "no anim data for this move"
+  elseif active and p and p.gen2 then
+    info = string.format("%s → %s · frame %d%s",
+      tostring(moveId), tostring(p.scriptKey or "?"),
+      tonumber(p.runner and p.runner.frames) or 0,
+      playing and "" or " · done")
   elseif active and p then
     local step = p.player and p.player.stepIndex or 0
     local total = p.player and p.player.steps and #p.player.steps or 0
     info = string.format("%s · step %d/%d%s",
       tostring(moveId), step, total, playing and "" or " · done")
   else
-    info = "Press PLAY · needs ROM battle_anims + tilesheets"
+    info = gen2
+      and "Press PLAY · Gold AnimRunner + battle_anims.gfx"
+      or "Press PLAY · needs ROM battle_anims + tilesheets"
   end
   Kit.text("micro", Kit.ellipsize("micro", info, w), x, y + vh + 12 * s, PAL.muted)
 

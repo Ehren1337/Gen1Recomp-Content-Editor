@@ -9,18 +9,44 @@ local TypeIds = require("TypeIds")
 local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local PaletteEdit = require("PaletteEdit")
+local ItemPicker = require("ItemPicker")
+local ColorWheel = require("ColorWheel")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
 local Autocomplete = require("Autocomplete")
+local Generation = require("Generation")
 local PAL = Theme.PAL
 
 local Pokemon = {}
 
 local GROWTH = { "MEDIUM_FAST", "MEDIUM_SLOW", "FAST", "SLOW" }
+local GROWTH_GEN2 = {
+  "GROWTH_MEDIUM_FAST", "GROWTH_MEDIUM_SLOW", "GROWTH_FAST", "GROWTH_SLOW",
+  "GROWTH_SLIGHTLY_FAST", "GROWTH_SLIGHTLY_SLOW",
+}
+local GROWTH_IDS = {
+  GROWTH_MEDIUM_FAST = 0, GROWTH_SLIGHTLY_FAST = 1, GROWTH_SLIGHTLY_SLOW = 2,
+  GROWTH_MEDIUM_SLOW = 3, GROWTH_FAST = 4, GROWTH_SLOW = 5,
+}
 local EVO_METHODS = { "LEVEL", "ITEM", "TRADE" }
+local EVO_METHODS_GEN2 = {
+  "EVOLVE_LEVEL", "EVOLVE_ITEM", "EVOLVE_TRADE", "EVOLVE_HAPPINESS", "EVOLVE_STAT",
+}
+local EVO_TIME = { "ANYTIME", "MORNDAY", "NITE" }
+local EVO_COMPARISON = { "ATK_LT_DEF", "ATK_GT_DEF", "ATK_EQ_DEF" }
+local EGG_GROUPS = {
+  "EGG_MONSTER", "EGG_WATER_1", "EGG_BUG", "EGG_FLYING", "EGG_GROUND",
+  "EGG_FAIRY", "EGG_PLANT", "EGG_HUMANSHAPE", "EGG_WATER_3", "EGG_MINERAL",
+  "EGG_INDETERMINATE", "EGG_WATER_2", "EGG_DITTO", "EGG_DRAGON", "EGG_NONE",
+}
 local ICON_NAMES = {
   "", "MON", "BALL", "HELIX", "FAIRY", "BIRD", "WATER",
   "BUG", "GRASS", "SNAKE", "QUADRUPED", "PIKACHU",
+}
+local ICON_NAMES_GEN2 = {
+  "", "ICON_MONSTER", "ICON_BALL", "ICON_BIRD", "ICON_BUG", "ICON_FISH",
+  "ICON_FOX", "ICON_PIKACHU", "ICON_ODDISH", "ICON_HUMANSHAPE", "ICON_EQUINE",
+  "ICON_SERPENT", "ICON_UNOWN", "ICON_EGG",
 }
 local SECTIONS = {
   { id = "basics", label = "Basics" },
@@ -44,18 +70,89 @@ local function iconNameOf(mon)
   return ""
 end
 
+local function growthList(S)
+  return Generation.isGen2(S) and GROWTH_GEN2 or GROWTH
+end
+
+local function iconList(S)
+  if not Generation.isGen2(S) then return ICON_NAMES end
+  local icons = S.data and (S.data.gen2Icons or S.data.icons)
+  if type(icons) == "table" and type(icons.icons) == "table" then
+    local names = { "" }
+    for id in pairs(icons.icons) do names[#names + 1] = id end
+    table.sort(names, function(a, b)
+      if a == "" then return true end
+      if b == "" then return false end
+      return a < b
+    end)
+    return names
+  end
+  return ICON_NAMES_GEN2
+end
+
+local function normalizeGrowth(rate)
+  if type(rate) ~= "string" or rate == "" then return "GROWTH_MEDIUM_FAST" end
+  if rate:sub(1, 7) == "GROWTH_" then return rate end
+  local map = {
+    MEDIUM_FAST = "GROWTH_MEDIUM_FAST", MEDIUM_SLOW = "GROWTH_MEDIUM_SLOW",
+    FAST = "GROWTH_FAST", SLOW = "GROWTH_SLOW",
+    SLIGHTLY_FAST = "GROWTH_SLIGHTLY_FAST", SLIGHTLY_SLOW = "GROWTH_SLIGHTLY_SLOW",
+  }
+  return map[rate] or ("GROWTH_" .. rate)
+end
+
+local function normalizeEvoMethod(method)
+  if type(method) ~= "string" or method == "" then return "EVOLVE_LEVEL" end
+  if method:sub(1, 7) == "EVOLVE_" then return method end
+  local map = {
+    LEVEL = "EVOLVE_LEVEL", ITEM = "EVOLVE_ITEM", TRADE = "EVOLVE_TRADE",
+    HAPPINESS = "EVOLVE_HAPPINESS", HAPPINESS_DAY = "EVOLVE_HAPPINESS",
+    HAPPINESS_NITE = "EVOLVE_HAPPINESS", STAT = "EVOLVE_STAT",
+  }
+  return map[method] or method
+end
+
+local function copyStringList(v)
+  local a = {}
+  for i = 1, #(v or {}) do a[i] = v[i] end
+  return a
+end
+
+-- Gold wild held items: rare = [1], common = [2]; common-only is sparse {[2]=…}.
+local function copyItemsList(v)
+  if type(v) ~= "table" then return {} end
+  local a = {}
+  if type(v[1]) == "string" and v[1] ~= "" then a[1] = v[1] end
+  if type(v[2]) == "string" and v[2] ~= "" then a[2] = v[2] end
+  return a
+end
+
+local function setWildItem(mon, slot, id)
+  local items = copyItemsList(mon.items)
+  if type(id) == "string" and id ~= "" and id ~= "NO_ITEM" then
+    items[slot] = id
+  else
+    items[slot] = nil
+  end
+  if items[1] == nil and items[2] == nil then
+    mon.items = {}
+  else
+    mon.items = items
+  end
+end
+
 local function allSpeciesIds(S)
   local seen, ids = {}, {}
   local deleted = (S.project and S.project.deleted and S.project.deleted.pokemon) or {}
-  for id in pairs((S.project and S.project.pokemon) or {}) do
-    if not deleted[id] then
+  for id, rec in pairs((S.project and S.project.pokemon) or {}) do
+    if not deleted[id] and State.isPokemonRecord(id, rec) then
       seen[id] = true
       ids[#ids + 1] = id
     end
   end
   if S.data and S.data.pokemon then
-    for id in pairs(S.data.pokemon) do
-      if not seen[id] and not deleted[id] then
+    for id, rec in pairs(S.data.pokemon) do
+      if not seen[id] and not deleted[id] and State.isPokemonRecord(id, rec) then
         seen[id] = true
         ids[#ids + 1] = id
       end
@@ -65,18 +162,58 @@ local function allSpeciesIds(S)
   return ids
 end
 
+local function cloneRgbPair(row)
+  local out = {}
+  for i = 1, 2 do
+    local c = (type(row) == "table" and row[i]) or { 128, 128, 128 }
+    if c.r then
+      out[i] = { c.r, c.g, c.b }
+    else
+      out[i] = { c[1] or 0, c[2] or 0, c[3] or 0 }
+    end
+  end
+  return out
+end
+
+-- Clone vanilla palettes.pokemon[species] into the mod for editing.
+local function ensureGen2MonPalette(S, speciesId, App)
+  if not speciesId or speciesId == "" then return nil end
+  State.ensureProjectFields(S.project)
+  S.project.palettes = S.project.palettes or {}
+  S.project.palettes.pokemon = S.project.palettes.pokemon or {}
+  local owned = S.project.palettes.pokemon[speciesId]
+  if type(owned) == "table" and owned.normal and owned.shiny then
+    return owned
+  end
+  local base = Preview.gen2MonPaletteEntry(S, speciesId)
+  local copy = {
+    normal = cloneRgbPair(base and base.normal),
+    shiny = cloneRgbPair(base and base.shiny),
+  }
+  -- Keep a partial project override's colors when only one form was patched.
+  if type(owned) == "table" then
+    if owned.normal then copy.normal = cloneRgbPair(owned.normal) end
+    if owned.shiny then copy.shiny = cloneRgbPair(owned.shiny) end
+  end
+  S.project.palettes.pokemon[speciesId] = copy
+  if App and App.markDirty then App.markDirty() end
+  return copy
+end
+
 local function deepCloneMon(def)
   local copy = {}
   for k, v in pairs(def) do
-    if k == "types" or k == "level1Moves" or k == "tmhm" then
-      local a = {}
-      for i = 1, #(v or {}) do a[i] = v[i] end
-      copy[k] = a
+    if k == "items" then
+      copy[k] = copyItemsList(v)
+    elseif k == "types" or k == "level1Moves" or k == "tmhm"
+        or k == "eggGroups" or k == "eggMoves"
+        or k == "tmhmRaw" then
+      copy[k] = copyStringList(v)
     elseif k == "baseStats" and type(v) == "table" then
       local s = {}
       for sk, sv in pairs(v) do s[sk] = sv end
       copy.baseStats = s
-    elseif k == "learnset" and type(v) == "table" then
+    elseif (k == "learnset" or k == "levelMoves") and type(v) == "table" then
       local a = {}
       for i, row in ipairs(v) do
         if type(row) == "table" then
@@ -87,7 +224,7 @@ local function deepCloneMon(def)
           a[i] = row
         end
       end
-      copy.learnset = a
+      copy[k] = a
     elseif k == "evolutions" and type(v) == "table" then
       local a = {}
       for i, row in ipairs(v) do
@@ -100,10 +237,22 @@ local function deepCloneMon(def)
         end
       end
       copy.evolutions = a
-    elseif k == "dexEntry" and type(v) == "table" then
+    elseif (k == "dexEntry" or k == "letters") and type(v) == "table" then
       local d = {}
-      for dk, dv in pairs(v) do d[dk] = dv end
-      copy.dexEntry = d
+      for dk, dv in pairs(v) do
+        if type(dv) == "table" then
+          local sub = {}
+          for sk, sv in pairs(dv) do sub[sk] = sv end
+          d[dk] = sub
+        else
+          d[dk] = dv
+        end
+      end
+      copy[k] = d
+    elseif k == "icon" and type(v) == "table" then
+      local ic = {}
+      for ik, iv in pairs(v) do ic[ik] = iv end
+      copy.icon = ic
     else
       copy[k] = v
     end
@@ -130,7 +279,35 @@ local function ensureOwned(S, id)
   return copy
 end
 
-local function defaultMon(id)
+local function defaultMon(id, S)
+  if Generation.isGen2(S) then
+    return {
+      id = id,
+      name = id,
+      dex = 1,
+      types = { "NORMAL" },
+      baseStats = {
+        hp = 50, attack = 50, defense = 50, speed = 50,
+        specialAttack = 50, specialDefense = 50,
+      },
+      catchRate = 190,
+      baseExp = 64,
+      growthRate = "GROWTH_MEDIUM_FAST",
+      growthRateId = 0,
+      levelMoves = { { level = 1, move = "TACKLE" } },
+      evolutions = {},
+      tmhm = {},
+      eggGroups = { "EGG_GROUND", "EGG_GROUND" },
+      eggMoves = {},
+      eggSteps = 20,
+      genderRatio = 31,
+      items = {},
+      spriteFront = "",
+      spriteBack = "",
+      picSize = 5,
+      _isNew = true,
+    }
+  end
   return {
     id = id,
     name = id,
@@ -193,15 +370,27 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   local gap = 10 * s
   local previewBottom = fy + prevSize + 30 * s
   local iconX = formX + formW - prevSize * 2 - gap - iconSize - gap
-  local palName = Preview.monPaletteName(S, mon, S.pokemonId)
-  -- false = skip SGB remap. Avoid `x and false or y` (always yields y in Lua).
-  local drawPal = palName
-  if mon.trueColor then drawPal = false end
-  local iconPal = palName
-  if Preview.pokemonIconTrueColor(S, mon, S.pokemonId) then iconPal = false end
+  local gen2 = Generation.isGen2(S)
+  local sid = S.pokemonId or mon.id
+  local palName = Preview.monPaletteName(S, mon, sid)
+  local shinyPrev = gen2 and S.pokemonShinyPreview and true or false
+  -- false = skip SGB remap. Gold uses GBC species palettes (normal/shiny).
+  local drawPal = false
+  local iconPal = false
+  local gen2Colors = nil
+  if gen2 then
+    gen2Colors = Preview.gen2MonColors(S, sid, shinyPrev)
+    drawPal = gen2Colors or false
+    iconPal = gen2Colors or false
+  else
+    drawPal = palName
+    if mon.trueColor then drawPal = false end
+    iconPal = palName
+    if Preview.pokemonIconTrueColor(S, mon, sid) then iconPal = false end
+  end
   local function openMonPal()
-    if mon.trueColor then return end
-    local eid = S.pokemonId or mon.id
+    if gen2 or mon.trueColor then return end
+    local eid = sid
     PalettePicker.open(S, {
       current = mon.palette,
       allowClear = true,
@@ -226,17 +415,45 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
       },
     })
   end
-  Preview.drawPokemonIcon(S, mon, iconX, fy, iconSize, iconSize, S.pokemonId, iconPal)
-  if Kit.press(iconX, fy, iconSize, iconSize) then openMonPal() end
+  Preview.drawPokemonIcon(S, mon, iconX, fy, iconSize, iconSize, sid, iconPal)
+  if not gen2 and Kit.press(iconX, fy, iconSize, iconSize) then openMonPal() end
   local frontX = formX + formW - prevSize * 2 - gap
   local frontPath = monSpritePath(S, mon, "spriteFront")
   local backPath = monSpritePath(S, mon, "spriteBack")
-  -- drawPal false = skip SGB remap (trueColor).
   Preview.draw(S, frontPath, frontX, fy, prevSize, prevSize, drawPal)
   Preview.draw(S, backPath, formX + formW - prevSize, fy, prevSize, prevSize,
     drawPal)
-  if Kit.press(frontX, fy, prevSize * 2 + gap, prevSize) then openMonPal() end
-  if mon.trueColor then
+  if not gen2 and Kit.press(frontX, fy, prevSize * 2 + gap, prevSize) then
+    openMonPal()
+  end
+  if gen2 then
+    local chipY = fy + prevSize + 2 * s
+    local nw = Kit.textWidth("micro", "Normal") + 12 * s
+    local sw = Kit.textWidth("micro", "Shiny") + 12 * s
+    if Kit.chip(frontX, chipY, nw, 16 * s, "Normal", not shinyPrev, PAL.blue) then
+      S.pokemonShinyPreview = false
+    end
+    if Kit.chip(frontX + nw + 4 * s, chipY, sw, 16 * s, "Shiny", shinyPrev, PAL.yellow) then
+      S.pokemonShinyPreview = true
+    end
+    if Kit.button(frontX + nw + sw + 12 * s, chipY, 70 * s, 16 * s, "GFX", {
+        kind = "ghost", font = "micro",
+        tooltip = "Edit normal/shiny colors on GFX → Palettes → Pokemon",
+      }) then
+      S.tab = "gfx"
+      S.gfxMode = "palettes"
+      S.gfxPalContext = "pokemon"
+      S.paletteId = sid
+    end
+    if gen2Colors then
+      Preview.drawSwatches(gen2Colors, frontX, chipY + 18 * s,
+        prevSize * 2 + gap, 10 * s)
+    else
+      Kit.text("micro", "missing palettes.lua (re-import Gold ROM)",
+        frontX, chipY + 18 * s, PAL.danger or PAL.yellow)
+    end
+    previewBottom = fy + prevSize + 48 * s
+  elseif mon.trueColor then
     Kit.text("micro", "true color", frontX, fy + prevSize + 2 * s, PAL.yellow)
   else
     Preview.drawNamedSwatches(S, palName, frontX, fy + prevSize + 2 * s,
@@ -246,9 +463,10 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     end
   end
   Kit.text("micro", "icon", iconX + 4 * s, fy + iconSize + 2 * s, PAL.faint)
-  Kit.text("micro", "front", frontX + 4 * s, fy + prevSize + 14 * s, PAL.faint)
+  Kit.text("micro", "front", frontX + 4 * s,
+    fy + prevSize + (gen2 and 34 * s or 14 * s), PAL.faint)
   Kit.text("micro", "back", formX + formW - prevSize + 4 * s,
-    fy + prevSize + 14 * s, PAL.faint)
+    fy + prevSize + (gen2 and 34 * s or 14 * s), PAL.faint)
 
   local fieldW = formW - labelW - prevSize * 2 - gap - iconSize - gap - 24 * s
   if fieldW < 160 * s then fieldW = formW - labelW - 20 * s end
@@ -309,15 +527,28 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   Kit.text("small", "Stats", formX, fy + 6 * s, PAL.caption)
   mon.baseStats = mon.baseStats or {}
   local sx = formX + labelW
-  for _, key in ipairs({ "hp", "attack", "defense", "speed", "special" }) do
-    local sw = 70 * s
-    Kit.text("micro", key:sub(1, 3):upper(), sx, fy - 2 * s, PAL.faint)
-    local cur = mon.baseStats[key] or 50
+  local statKeys = Generation.isGen2(S)
+    and { "hp", "attack", "defense", "speed", "specialAttack", "specialDefense" }
+    or { "hp", "attack", "defense", "speed", "special" }
+  local sw = Generation.isGen2(S) and (58 * s) or (70 * s)
+  for _, key in ipairs(statKeys) do
+    local lab = key == "specialAttack" and "SPA"
+      or key == "specialDefense" and "SPD"
+      or key:sub(1, 3):upper()
+    Kit.text("micro", lab, sx, fy - 2 * s, PAL.faint)
+    local cur = mon.baseStats[key]
+    if cur == nil and key == "specialAttack" then
+      cur = mon.baseStats.special or 50
+    elseif cur == nil and key == "specialDefense" then
+      cur = mon.baseStats.special or 50
+    end
+    cur = cur or 50
     local v = numField(S, App, "pk_st_" .. key, sx, fy + 12 * s, sw, fh, cur)
     if v ~= cur then
       mon = mutate()
       mon.baseStats = mon.baseStats or {}
       mon.baseStats[key] = math.max(1, math.min(255, v))
+      if Generation.isGen2(S) then mon.baseStats.special = nil end
     end
     sx = sx + sw + 6 * s
   end
@@ -332,22 +563,37 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     if v ~= mon.baseExp then mon = mutate(); mon.baseExp = v end
   end)
   row("Growth", function(fx, fy_, fw, fh_)
-    if Kit.button(fx, fy_, 160 * s, fh_, mon.growthRate or "MEDIUM_FAST",
-        { kind = "accent" }) then
+    local rates = growthList(S)
+    local cur = mon.growthRate or rates[1]
+    if Generation.isGen2(S) then cur = normalizeGrowth(cur) end
+    if Kit.button(fx, fy_, 180 * s, fh_, cur, { kind = "accent" }) then
       mon = mutate()
       local idx = 1
-      for i, g in ipairs(GROWTH) do
-        if g == mon.growthRate then idx = i; break end
+      for i, g in ipairs(rates) do
+        if g == cur then idx = i; break end
       end
-      mon.growthRate = GROWTH[(idx % #GROWTH) + 1]
+      mon.growthRate = rates[(idx % #rates) + 1]
+      if Generation.isGen2(S) then
+        mon.growthRateId = GROWTH_IDS[mon.growthRate]
+      end
       App.markDirty()
     end
   end)
-  row("Front size", function(fx, fy_, fw, fh_)
-    local cur = mon.frontSize or 5
+  row(Generation.isGen2(S) and "Pic size" or "Front size", function(fx, fy_, fw, fh_)
+    local cur = Generation.isGen2(S)
+      and (mon.picSize or mon.frontSize or 5)
+      or (mon.frontSize or 5)
     local v = numField(S, App, "pk_fs", fx, fy_, 60 * s, fh_, cur)
     v = math.max(1, math.min(7, v))
-    if v ~= cur then mon = mutate(); mon.frontSize = v end
+    if v ~= cur then
+      mon = mutate()
+      if Generation.isGen2(S) then
+        mon.picSize = v
+        mon.frontSize = nil
+      else
+        mon.frontSize = v
+      end
+    end
   end)
   row("Scale front", function(fx, fy_, fw, fh_)
     local cur = mon.battleScaleFront
@@ -375,21 +621,111 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
       end
     end
   end)
-  row("TrueColor", function(fx, fy_, fw, fh_)
-    local on = mon.trueColor and true or false
-    if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
-      mon = mutate()
-      mon.trueColor = not on
-      if not mon.trueColor then mon.trueColor = nil end
-      Preview.invalidate()
-      App.markDirty()
-    end
-  end)
-  row("L1 moves", function(fx, fy_, fw, fh_)
-    local joined = table.concat(mon.level1Moves or {}, ",")
-    local v = field(S, App, "pk_l1", fx, fy_, fw, fh_, joined, "TACKLE,GROWL")
-    if v ~= joined then mon = mutate(); mon.level1Moves = parseMoveList(v) end
-  end)
+  if not gen2 then
+    row("TrueColor", function(fx, fy_, fw, fh_)
+      local on = mon.trueColor and true or false
+      if Kit.chip(fx, fy_, 80 * s, fh_, on and "YES" or "NO", on, PAL.yellow) then
+        mon = mutate()
+        mon.trueColor = not on
+        if not mon.trueColor then mon.trueColor = nil end
+        Preview.invalidate()
+        App.markDirty()
+      end
+    end)
+    row("L1 moves", function(fx, fy_, fw, fh_)
+      local joined = table.concat(mon.level1Moves or {}, ",")
+      local v = field(S, App, "pk_l1", fx, fy_, fw, fh_, joined, "TACKLE,GROWL")
+      if v ~= joined then mon = mutate(); mon.level1Moves = parseMoveList(v) end
+    end)
+  else
+    row("Gender %", function(fx, fy_, fw, fh_)
+      -- genderRatio byte: 0 = always male, 254 = always female, 255 = genderless,
+      -- 31 ~= 12.5% female (starter default).
+      local cur = mon.genderRatio
+      if cur == nil then cur = 31 end
+      local v = numField(S, App, "pk_gender", fx, fy_, 80 * s, fh_, cur)
+      v = math.max(0, math.min(255, v))
+      if v ~= cur then mon = mutate(); mon.genderRatio = v end
+    end)
+    row("Egg steps", function(fx, fy_, fw, fh_)
+      local cur = mon.eggSteps or 20
+      local v = numField(S, App, "pk_eggs", fx, fy_, 80 * s, fh_, cur)
+      if v ~= cur then mon = mutate(); mon.eggSteps = v end
+    end)
+    row("Egg groups", function(fx, fy_, fw, fh_)
+      mon.eggGroups = mon.eggGroups or { "EGG_GROUND", "EGG_GROUND" }
+      local g1 = mon.eggGroups[1] or "EGG_GROUND"
+      local g2 = mon.eggGroups[2] or g1
+      if Kit.button(fx, fy_, 120 * s, fh_, g1, { kind = "accent" }) then
+        mon = mutate()
+        mon.eggGroups = mon.eggGroups or {}
+        mon.eggGroups[1] = cycle(EGG_GROUPS, g1)
+        App.markDirty()
+      end
+      if Kit.button(fx + 128 * s, fy_, 120 * s, fh_, g2, { kind = "accent" }) then
+        mon = mutate()
+        mon.eggGroups = mon.eggGroups or {}
+        mon.eggGroups[2] = cycle(EGG_GROUPS, g2)
+        App.markDirty()
+      end
+    end)
+    row("Egg moves", function(fx, fy_, fw, fh_)
+      local joined = table.concat(mon.eggMoves or {}, ",")
+      local v = field(S, App, "pk_eggm", fx, fy_, fw, fh_, joined, "CHARM,FLAIL")
+      if v ~= joined then mon = mutate(); mon.eggMoves = parseMoveList(v) end
+    end)
+    -- BaseData Item1 / Item2: rare then common (25% / 8% wild rolls in-cart).
+    row("Rare item", function(fx, fy_, fw, fh_)
+      local cur = (mon.items and mon.items[1]) or nil
+      ItemPicker.field(S, {
+        x = fx, y = fy_, w = fw - 70 * s, h = fh_,
+        current = cur or "",
+        emptyLabel = "(none)",
+        title = "WILD RARE HELD ITEM (Item1)",
+        tooltip = "Rare wild held item — BaseData Item1",
+        onPick = function(id)
+          mon = mutate()
+          setWildItem(mon, 1, id)
+          App.markDirty()
+        end,
+      })
+      if Kit.button(fx + fw - 64 * s, fy_, 60 * s, fh_, "None", {
+          kind = "ghost", font = "small",
+          tooltip = "Clear rare slot (NO_ITEM)",
+        }) then
+        mon = mutate()
+        setWildItem(mon, 1, nil)
+        App.markDirty()
+      end
+    end)
+    row("Common item", function(fx, fy_, fw, fh_)
+      local cur = (mon.items and mon.items[2]) or nil
+      ItemPicker.field(S, {
+        x = fx, y = fy_, w = fw - 70 * s, h = fh_,
+        current = cur or "",
+        emptyLabel = "(none)",
+        title = "WILD COMMON HELD ITEM (Item2)",
+        tooltip = "Common wild held item — BaseData Item2",
+        onPick = function(id)
+          mon = mutate()
+          setWildItem(mon, 2, id)
+          App.markDirty()
+        end,
+      })
+      if Kit.button(fx + fw - 64 * s, fy_, 60 * s, fh_, "None", {
+          kind = "ghost", font = "small",
+          tooltip = "Clear common slot (NO_ITEM)",
+        }) then
+        mon = mutate()
+        setWildItem(mon, 2, nil)
+        App.markDirty()
+      end
+    end)
+    Kit.text("micro",
+      "Wild held items for battle (rare 25% / common 8%). Trainer party items: Trainers tab.",
+      formX, fy, PAL.faint)
+    fy = fy + 16 * s
+  end
   row("Cry", function(fx, fy_, fw, fh_)
     -- Prefer a custom file under audio.cries[species]; else mon.cry alias.
     local sid = S.pokemonId or mon.id
@@ -462,7 +798,109 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
         end)
     end
   end)
-  if mon.trueColor then
+  if gen2 then
+    -- Gold: palettes.pokemon[species] = { normal = {c1,c2}, shiny = {c1,c2} }
+    local eid = S.pokemonId or mon.id
+    local function livePalEntry()
+      local proj = S.project.palettes and S.project.palettes.pokemon
+        and S.project.palettes.pokemon[eid]
+      if type(proj) == "table" then return proj end
+      return Preview.gen2MonPaletteEntry(S, eid)
+    end
+    local entry = livePalEntry()
+    Kit.text("micro",
+      "GBC battle colors (white/black fixed). Edits go to mod palettes.pokemon.",
+      formX, fy, PAL.faint)
+    fy = fy + 16 * s
+    if not entry then
+      Kit.text("micro",
+        "No palettes.pokemon row — Import / Link a Gold ROM cache with palettes.lua",
+        formX, fy, PAL.danger or PAL.yellow)
+      fy = fy + 18 * s
+    else
+      local function drawMidSlots(label, which, prefix)
+        Kit.text("small", label, formX, fy + 6 * s, PAL.caption)
+        local live = livePalEntry() or entry
+        local pair = (which == "shiny") and (live.shiny or live.normal)
+          or (live.normal or live.shiny)
+        pair = cloneRgbPair(pair)
+        local x0 = formX + labelW
+        for i = 1, 2 do
+          local c = pair[i]
+          local sw = 28 * s
+          love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
+            (c[3] or 0) / 255, 1)
+          love.graphics.rectangle("fill", x0, fy + 2 * s, sw, 24 * s, 4 * s, 4 * s)
+          love.graphics.setColor(1, 1, 1, 0.35)
+          love.graphics.rectangle("line", x0, fy + 2 * s, sw, 24 * s, 4 * s, 4 * s)
+          love.graphics.setColor(1, 1, 1, 1)
+          if Kit.press(x0, fy + 2 * s, sw, 24 * s) then
+            local slot = i
+            ColorWheel.open(S, {
+              title = label .. " C" .. slot,
+              color = c,
+              onChange = function(rgb)
+                local e = ensureGen2MonPalette(S, eid, App)
+                e[which] = e[which] or cloneRgbPair(pair)
+                e[which][slot] = {
+                  math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+                }
+                Preview.invalidate()
+                App.markDirty()
+              end,
+              onApply = function(rgb)
+                local e = ensureGen2MonPalette(S, eid, App)
+                e[which] = e[which] or cloneRgbPair(pair)
+                e[which][slot] = {
+                  math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
+                  math.max(0, math.min(255, tonumber(rgb[3]) or 0)),
+                }
+                Preview.invalidate()
+                App.markDirty()
+              end,
+            })
+          end
+          local cur = string.format("%d,%d,%d", c[1] or 0, c[2] or 0, c[3] or 0)
+          local v = RegList.field(App, "pk_g2" .. prefix .. i,
+            x0 + sw + 6 * s, fy, math.min(120 * s, fieldW - sw - 10 * s), fh,
+            cur, "r,g,b")
+          if v ~= cur then
+            local r, g, b = v:match("^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
+            if r then
+              local e = ensureGen2MonPalette(S, eid, App)
+              e[which] = e[which] or cloneRgbPair(pair)
+              e[which][i] = {
+                math.max(0, math.min(255, tonumber(r))),
+                math.max(0, math.min(255, tonumber(g))),
+                math.max(0, math.min(255, tonumber(b))),
+              }
+              Preview.invalidate()
+              App.markDirty()
+            end
+          end
+          x0 = x0 + sw + 6 * s + math.min(120 * s, fieldW - sw - 10 * s) + 8 * s
+        end
+        fy = fy + fh + 8 * s
+      end
+      drawMidSlots("Normal", "normal", "n")
+      drawMidSlots("Shiny", "shiny", "s")
+      if S.project.palettes and S.project.palettes.pokemon
+          and S.project.palettes.pokemon[eid] then
+        if Kit.button(formX + labelW, fy, 120 * s, fh, "Revert colors", {
+            kind = "ghost", font = "small",
+            tooltip = "Drop mod palette override for this species",
+          }) then
+          S.project.palettes.pokemon[eid] = nil
+          Preview.invalidate()
+          App.markDirty()
+        end
+        fy = fy + fh + 8 * s
+      end
+    end
+  elseif mon.trueColor then
     row("Palette", function(fx, fy_, fw, fh_)
       Kit.text("small", "(ignored — TrueColor)", fx, fy_ + 6 * s, PAL.faint)
     end)
@@ -519,6 +957,13 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   row("Icon", function(fx, fy_, fw, fh_)
     local _, resolvedName = Preview.pokemonIcon(S, mon, S.pokemonId)
     local cur = iconNameOf(mon)
+    if cur == "" and Generation.isGen2(S) then
+      local icons = S.data and (S.data.gen2Icons or S.data.icons)
+      local sid = S.pokemonId or mon.id
+      if icons and icons.species and icons.species[sid] then
+        cur = icons.species[sid]
+      end
+    end
     local label
     if type(mon.icon) == "table" and mon.icon.image then
       label = "custom"
@@ -527,9 +972,10 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     else
       label = (resolvedName and (resolvedName .. " (dex)") or "(default)")
     end
+    local names = iconList(S)
     if Kit.button(fx, fy_, math.max(80 * s, fw - 100 * s), fh_,
         Kit.ellipsize("small", label, fw - 108 * s), { kind = "ghost" }) then
-      local nextName = cycle(ICON_NAMES, cur)
+      local nextName = cycle(names, cur)
       mon = mutate()
       if nextName == "" then
         mon.icon = nil
@@ -556,7 +1002,9 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   end)
   do
     -- Custom PNG icons can opt out of SGB remap independently of battle TrueColor.
-    local customIcon = type(mon.icon) == "table" and type(mon.icon.image) == "string"
+    -- Gold skips SGB remap for icons, so this toggle is Gen1-only.
+    local customIcon = (not gen2)
+      and type(mon.icon) == "table" and type(mon.icon.image) == "string"
     if customIcon then
       row("Icon TrueColor", function(fx, fy_, fw, fh_)
         local on = mon.icon.trueColor and true or false
@@ -623,11 +1071,18 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
 end
 
 local function drawLearnset(S, mon, mutate, App, formX, fy, formW, fh, s)
-  Kit.text("micro", "Level-up moves (level, move id). Add rows below.",
+  local gen2 = Generation.isGen2(S)
+  local key = gen2 and "levelMoves" or "learnset"
+  Kit.text("micro",
+    gen2 and "Level-up moves (levelMoves). Add rows below."
+      or "Level-up moves (level, move id). Add rows below.",
     formX, fy, PAL.muted)
   fy = fy + 20 * s
-  mon.learnset = mon.learnset or {}
-  for i, row in ipairs(mon.learnset) do
+  if gen2 and not mon.levelMoves and mon.learnset then
+    mon.levelMoves = mon.learnset
+  end
+  mon[key] = mon[key] or {}
+  for i, row in ipairs(mon[key]) do
     local lvl = row.level or 1
     local mv = row.move or "TACKLE"
     local vLvl = numField(S, App, "pk_ls_l_" .. i, formX, fy, 60 * s, fh, lvl)
@@ -637,12 +1092,12 @@ local function drawLearnset(S, mon, mutate, App, formX, fy, formW, fh, s)
     vMv = vMv:upper():gsub("%s+", "_")
     if vLvl ~= lvl or vMv ~= mv then
       mon = mutate()
-      mon.learnset[i] = { level = math.max(1, math.min(100, vLvl)), move = vMv }
+      mon[key][i] = { level = math.max(1, math.min(100, vLvl)), move = vMv }
     end
     if Kit.button(formX + formW - 70 * s, fy, 60 * s, fh, "Del",
         { kind = "danger" }) then
       mon = mutate()
-      table.remove(mon.learnset, i)
+      table.remove(mon[key], i)
       App.markDirty()
       break
     end
@@ -650,47 +1105,104 @@ local function drawLearnset(S, mon, mutate, App, formX, fy, formW, fh, s)
   end
   if Kit.button(formX, fy, 140 * s, fh, "+ Learn row", { kind = "good" }) then
     mon = mutate()
-    mon.learnset = mon.learnset or {}
-    mon.learnset[#mon.learnset + 1] = { level = 10, move = "TACKLE" }
+    mon[key] = mon[key] or {}
+    mon[key][#mon[key] + 1] = { level = 10, move = "TACKLE" }
     App.markDirty()
   end
   return fy + fh + 8 * s, mon
 end
 
 local function drawEvolutions(S, mon, mutate, App, formX, fy, formW, fh, s)
-  Kit.text("micro", "Methods: LEVEL (needs level), ITEM (needs item id), TRADE.",
+  local gen2 = Generation.isGen2(S)
+  local methods = gen2 and EVO_METHODS_GEN2 or EVO_METHODS
+  local intoKey = gen2 and "into" or "species"
+  Kit.text("micro",
+    gen2
+      and "EVOLVE_LEVEL / ITEM / TRADE / HAPPINESS (+time) / STAT (+comparison). Target: into."
+      or "Methods: LEVEL (needs level), ITEM (needs item id), TRADE.",
     formX, fy, PAL.muted)
   fy = fy + 20 * s
   mon.evolutions = mon.evolutions or {}
   for i, evo in ipairs(mon.evolutions) do
-    if Kit.button(formX, fy, 90 * s, fh, evo.method or "LEVEL",
-        { kind = "accent" }) then
+    local method = evo.method or (gen2 and "EVOLVE_LEVEL" or "LEVEL")
+    if gen2 then method = normalizeEvoMethod(method) end
+    local methodW = gen2 and 150 * s or 100 * s
+    if Kit.button(formX, fy, methodW, fh, method, { kind = "accent" }) then
       mon = mutate()
       local idx = 1
-      for mi, m in ipairs(EVO_METHODS) do
-        if m == evo.method then idx = mi; break end
+      for mi, m in ipairs(methods) do
+        if m == method then idx = mi; break end
       end
-      mon.evolutions[i].method = EVO_METHODS[(idx % #EVO_METHODS) + 1]
+      mon.evolutions[i].method = methods[(idx % #methods) + 1]
+      if gen2 then
+        local next = mon.evolutions[i].method
+        if next == "EVOLVE_HAPPINESS" then
+          mon.evolutions[i].time = mon.evolutions[i].time or "ANYTIME"
+          mon.evolutions[i].level = nil
+          mon.evolutions[i].item = nil
+          mon.evolutions[i].comparison = nil
+        elseif next == "EVOLVE_STAT" then
+          mon.evolutions[i].comparison = mon.evolutions[i].comparison or "ATK_LT_DEF"
+          mon.evolutions[i].level = mon.evolutions[i].level or 20
+          mon.evolutions[i].time = nil
+          mon.evolutions[i].item = nil
+        elseif next == "EVOLVE_ITEM" then
+          mon.evolutions[i].item = mon.evolutions[i].item or "MOON_STONE"
+          mon.evolutions[i].level = nil
+          mon.evolutions[i].time = nil
+          mon.evolutions[i].comparison = nil
+        elseif next == "EVOLVE_TRADE" then
+          mon.evolutions[i].level = nil
+          mon.evolutions[i].time = nil
+          mon.evolutions[i].comparison = nil
+        else
+          mon.evolutions[i].level = mon.evolutions[i].level or 16
+          mon.evolutions[i].item = nil
+          mon.evolutions[i].time = nil
+          mon.evolutions[i].comparison = nil
+        end
+      end
       App.markDirty()
     end
-    local species = field(S, App, "pk_ev_sp_" .. i, formX + 100 * s, fy,
-      140 * s, fh, evo.species or "", "SPECIES")
+    local curInto = evo[intoKey] or evo.into or evo.species or ""
+    local species = field(S, App, "pk_ev_sp_" .. i, formX + methodW + 10 * s, fy,
+      130 * s, fh, curInto, "SPECIES")
     species = species:upper():gsub("%s+", "_")
-    if species ~= (evo.species or "") then
-      mon = mutate(); mon.evolutions[i].species = species
+    if species ~= curInto then
+      mon = mutate()
+      mon.evolutions[i][intoKey] = species
+      if gen2 then mon.evolutions[i].species = nil
+      else mon.evolutions[i].into = nil end
     end
-    if (evo.method or "LEVEL") == "LEVEL" then
-      local lvl = numField(S, App, "pk_ev_lv_" .. i, formX + 250 * s, fy,
+    local paramX = formX + methodW + 150 * s
+    if method == "LEVEL" or method == "EVOLVE_LEVEL"
+        or method == "STAT" or method == "EVOLVE_STAT" then
+      local lvl = numField(S, App, "pk_ev_lv_" .. i, paramX, fy,
         60 * s, fh, evo.level or 16)
       if lvl ~= (evo.level or 16) then
         mon = mutate(); mon.evolutions[i].level = lvl
       end
-    elseif evo.method == "ITEM" then
-      local item = field(S, App, "pk_ev_it_" .. i, formX + 250 * s, fy,
+      if gen2 and method == "EVOLVE_STAT" then
+        local cur = evo.comparison or "ATK_LT_DEF"
+        if Kit.button(paramX + 70 * s, fy, 120 * s, fh, cur, { kind = "ghost" }) then
+          mon = mutate()
+          mon.evolutions[i].comparison = cycle(EVO_COMPARISON, cur)
+          App.markDirty()
+        end
+      end
+    elseif method == "ITEM" or method == "EVOLVE_ITEM" then
+      local item = field(S, App, "pk_ev_it_" .. i, paramX, fy,
         120 * s, fh, evo.item or "", "STONE")
       item = item:upper():gsub("%s+", "_")
       if item ~= (evo.item or "") then
         mon = mutate(); mon.evolutions[i].item = item
+      end
+    elseif gen2 and method == "EVOLVE_HAPPINESS" then
+      local cur = evo.time or "ANYTIME"
+      if Kit.button(paramX, fy, 110 * s, fh, cur, { kind = "ghost" }) then
+        mon = mutate()
+        mon.evolutions[i].time = cycle(EVO_TIME, cur)
+        App.markDirty()
       end
     end
     if Kit.button(formX + formW - 70 * s, fy, 60 * s, fh, "Del",
@@ -705,9 +1217,10 @@ local function drawEvolutions(S, mon, mutate, App, formX, fy, formW, fh, s)
   if Kit.button(formX, fy, 140 * s, fh, "+ Evolution", { kind = "good" }) then
     mon = mutate()
     mon.evolutions = mon.evolutions or {}
-    mon.evolutions[#mon.evolutions + 1] = {
-      method = "LEVEL", level = 16, species = "ABRA",
-    }
+    local row = gen2
+      and { method = "EVOLVE_LEVEL", level = 16, into = "BAYLEEF" }
+      or { method = "LEVEL", level = 16, species = "ABRA" }
+    mon.evolutions[#mon.evolutions + 1] = row
     App.markDirty()
   end
   return fy + fh + 8 * s, mon
@@ -739,15 +1252,83 @@ local function drawTmhm(S, mon, mutate, App, formX, fy, formW, fh, s)
   return fy + 24 * s, mon
 end
 
+local function dexDataEntry(S, id)
+  local dex = S.data and (S.data.gen2Pokedex or S.data.pokedex)
+  local entries = dex and dex.entries
+  return (entries and entries[id]) or {}
+end
+
+local function ensureDexOwned(S, id, App)
+  State.ensureProjectFields(S.project)
+  S.project.pokedex = S.project.pokedex or {}
+  if not S.project.pokedex[id] then
+    local src = dexDataEntry(S, id)
+    local copy = {}
+    for k, v in pairs(src) do copy[k] = v end
+    copy.id = copy.id or id
+    S.project.pokedex[id] = copy
+    if App then App.markDirty() end
+  end
+  return S.project.pokedex[id]
+end
+
 local function drawDex(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
-  mon.dexEntry = mon.dexEntry or {}
-  local de = mon.dexEntry
   local fieldW = formW - labelW - 20 * s
   local function row(label, body)
     Kit.text("small", label, formX, fy + 6 * s, PAL.caption)
     body(formX + labelW, fy, fieldW, fh)
     fy = fy + fh + 8 * s
   end
+
+  if Generation.isGen2(S) then
+    Kit.text("micro", "Gold dex lives in gen2Pokedex.entries (not on the species record).",
+      formX, fy, PAL.muted)
+    fy = fy + 20 * s
+    local id = mon.id
+    local owned = S.project.pokedex and S.project.pokedex[id] ~= nil
+    local de = owned and S.project.pokedex[id] or dexDataEntry(S, id)
+    local function mutateDex()
+      return ensureDexOwned(S, id, App)
+    end
+    row("Kind", function(fx, fy_, fw, fh_)
+      local v = field(S, App, "pk_dk", fx, fy_, fw, fh_, de.kind or "", "LEAF")
+      if v ~= (de.kind or "") then de = mutateDex(); de.kind = v end
+    end)
+    row("Height", function(fx, fy_, fw, fh_)
+      local cur = de.height or 0
+      local v = numField(S, App, "pk_dht", fx, fy_, 80 * s, fh_, cur)
+      if v ~= cur then de = mutateDex(); de.height = v end
+      Kit.text("micro", "packed ft/in int", fx + 90 * s, fy_ + 8 * s, PAL.faint)
+    end)
+    row("Weight", function(fx, fy_, fw, fh_)
+      local cur = de.weight or 0
+      local v = numField(S, App, "pk_dw", fx, fy_, 80 * s, fh_, cur)
+      if v ~= cur then de = mutateDex(); de.weight = v end
+    end)
+    row("Text", function(fx, fy_, fw, fh_)
+      local cur = tostring(de.text or "")
+      local shown = cur:gsub("\n", "\\n"):gsub("<NEXT>", "\\n")
+      local v = field(S, App, "pk_dbody", fx, fy_, fw, fh_, shown, "Dex text…")
+      local decoded = v:gsub("\\n", "<NEXT>")
+      if decoded ~= cur then de = mutateDex(); de.text = decoded end
+    end)
+    row("Text 2", function(fx, fy_, fw, fh_)
+      local cur = tostring(de.text2 or "")
+      local shown = cur:gsub("\n", "\\n"):gsub("<NEXT>", "\\n")
+      local v = field(S, App, "pk_dbody2", fx, fy_, fw, fh_, shown, "Dex text 2…")
+      local decoded = v:gsub("\\n", "<NEXT>")
+      if decoded ~= cur then de = mutateDex(); de.text2 = decoded end
+    end)
+    if owned and Kit.button(formX, fy, 120 * s, fh, "Revert dex", { kind = "danger" }) then
+      S.project.pokedex[id] = nil
+      App.markDirty()
+    end
+    fy = fy + fh + 8 * s
+    return fy, mon
+  end
+
+  mon.dexEntry = mon.dexEntry or {}
+  local de = mon.dexEntry
   row("Kind", function(fx, fy_, fw, fh_)
     local v = field(S, App, "pk_dk", fx, fy_, fw, fh_, de.kind or "", "MOUSE")
     if v ~= (de.kind or "") then mon = mutate(); mon.dexEntry.kind = v end
@@ -774,7 +1355,6 @@ local function drawDex(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     end
   end)
   row("Dex body", function(fx, fy_, fw, fh_)
-    -- editable override stored on project.text when text id is set
     local tid = de.text
     local body = ""
     if tid and S.project.text and S.project.text[tid] then
@@ -874,7 +1454,7 @@ function Pokemon.draw(S, x, y, w, h, App)
       n = n + 1
       nid = "NEW_MON_" .. n
     end
-    S.project.pokemon[nid] = defaultMon(nid)
+    S.project.pokemon[nid] = defaultMon(nid, S)
     S.pokemonId = nid
     App.markDirty()
   end
