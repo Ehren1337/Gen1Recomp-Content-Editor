@@ -20,8 +20,8 @@ local Moves = require("Moves")
 local MoveEffects = require("MoveEffects")
 local Types = require("Types")
 local LayeredMap = require("LayeredMap")
-local MapBuilder = require("MapBuilder")
 local Maps = require("Maps")
+local MapsWorkspace = require("MapsWorkspace")
 local Encounters = require("Encounters")
 local Dialog = require("Dialog")
 local Trainers = require("Trainers")
@@ -60,10 +60,8 @@ local TABS = {
     tip = "Edit mods/<id>/manifest.json" },
   { id = "code",     label = "CODE",
     tip = "Browse and edit Lua files under mods/" },
-  { id = "mapbuilder", label = "MAP BUILDER",
-    tip = "Build 16x16 layered maps, custom tilesets, collision, and linked warps" },
   { id = "maps",     label = "MAPS",
-    tip = "Classic block and event editor for maps, objects, and encounters" },
+    tip = "Unified 16x16 terrain, events, encounters, and map settings" },
   { id = "encounters", label = "ENCOUNTERS",
     tip = "Wild tables and Special gifts/battles (DVs, moves)" },
   { id = "dialog",   label = "DIALOG",
@@ -113,8 +111,7 @@ local PANELS = {
   anims = BattleAnims,
   effects = MoveEffects,
   types = Types,
-  mapbuilder = MapBuilder,
-  maps = Maps,
+  maps = MapsWorkspace,
   encounters = Encounters,
   dialog = Dialog,
   shops = Shops,
@@ -213,6 +210,7 @@ end
 -- while S.data is Gold (or the reverse).
 function App.resetCatalogSelection()
   if not S or not S.data then return end
+  local previousMapId = S.mapId or S.builderMapId
   S._liveTilesets = nil
   S._vanillaMapBackup = nil
   S._mapCenteredFor = nil
@@ -239,7 +237,11 @@ function App.resetCatalogSelection()
     table.sort(ids)
     S.moveId = ids[1]
   end
-  S.mapId = firstSortedId(S.data.maps)
+  local mapStillExists = previousMapId and (
+    (S.project and S.project.maps and S.project.maps[previousMapId])
+    or (S.data.maps and S.data.maps[previousMapId]))
+  S.mapId = mapStillExists and previousMapId or firstSortedId(S.data.maps)
+  S.builderMapId = S.mapId
   S.dialogMapId = S.mapId
   S.dialogTextId = nil
   local trainers = S.data.trainers
@@ -337,6 +339,18 @@ function App.useFixturesData()
   DataSource.useFixtures()
   App.reloadData()
   say("Using fixture stub data (no ROM cache)")
+  return true
+end
+
+function App.useImportedData()
+  local version = S and S.version or App.dataVersion or "red"
+  if not DataSource.hasImportedCache(version) then
+    say("No imported ROM cache for " .. tostring(version))
+    return false
+  end
+  DataSource.setMode("imported")
+  App.reloadData()
+  say("Using imported ROM cache for " .. tostring(version))
   return true
 end
 
@@ -466,13 +480,17 @@ function App.openMod(path)
       S.typeId = ids[1]
     end
   end
-  S.mapId = next(project.maps)
+  local projectMapIds = {}
+  for id in pairs(project.maps or {}) do projectMapIds[#projectMapIds + 1] = id end
+  table.sort(projectMapIds)
+  S.mapId = projectMapIds[1]
   if not S.mapId and S.data and S.data.maps then
     local ids = {}
     for id in pairs(S.data.maps) do ids[#ids + 1] = id end
     table.sort(ids)
     S.mapId = ids[1]
   end
+  S.builderMapId = S.mapId
   S.dialogMapId = S.mapId
   S._mapCenteredFor = nil
   S.trainerId = next(project.trainers)
@@ -490,7 +508,7 @@ end
 
 function App.createMod(id)
   id = id or S.newModId
-  local path, projectOrErr = ModIO.create(id)
+  local path, projectOrErr = ModIO.create(id, nil, S and S.version)
   if not path then
     say("Create failed: " .. tostring(projectOrErr))
     return false
@@ -1011,8 +1029,8 @@ function App.update(dt)
   if S.uiPreview or S.tab == "ui" then
     pcall(function() UiPreview.update(S, dt or 0) end)
   end
-  if S.tab == "maps" and Maps.update then
-    pcall(function() Maps.update(S, dt or 0) end)
+  if S.tab == "maps" and MapsWorkspace.update then
+    pcall(function() MapsWorkspace.update(S, dt or 0) end)
   end
   -- Arrow-key list nav (hold-to-repeat) for every panel that bindNav'd.
   pcall(function() RegList.update(S, dt or 0) end)
@@ -1370,8 +1388,8 @@ function App.keypressed(key)
       S.status = "Set destination cancelled"
       return
     end
-    if S.tab == "mapbuilder" and MapBuilder.keypressed
-        and MapBuilder.keypressed(S, key, App) then
+    if S.tab == "maps" and MapsWorkspace.keypressed
+        and MapsWorkspace.keypressed(S, key, App) then
       return
     end
     return App.close()
@@ -1391,10 +1409,8 @@ function App.keypressed(key)
   -- Hovered scrollbar first; otherwise list selection / panel keys.
   if Kit.scrollKeypressed and Kit.scrollKeypressed(key) then return end
   if RegList.keypressed(S, key) then return end
-  if S.tab == "mapbuilder" and MapBuilder.keypressed then
-    return MapBuilder.keypressed(S, key, App)
-  elseif S.tab == "maps" and Maps.keypressed then
-    Maps.keypressed(S, key, App)
+  if S.tab == "maps" and MapsWorkspace.keypressed then
+    MapsWorkspace.keypressed(S, key, App)
   elseif S.tab == "events" and Events.keypressed then
     Events.keypressed(S, key, App)
   elseif S.tab == "code" and Code.keypressed then
@@ -1430,8 +1446,8 @@ function App.wheelmoved(x, y)
     wheelY = wheelY + (y or 0)
     return
   end
-  if S and S.tab == "maps" and Maps.wheelmoved
-      and Maps.wheelmoved(S, y, x) then
+  if S and S.tab == "maps" and MapsWorkspace.wheelmoved
+      and MapsWorkspace.wheelmoved(S, y, x) then
     return
   end
   wheelY = wheelY + (y or 0)
@@ -1443,6 +1459,7 @@ function App.filedropped(file)
   if not path then return end
   if path:lower():match("%.tmx$") then
     S.tab = "maps"
+    S.builderPane = "details"
     if Maps.importTmx then Maps.importTmx(S, path, App) end
     return
   end

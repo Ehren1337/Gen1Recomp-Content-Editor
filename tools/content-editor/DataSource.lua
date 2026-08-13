@@ -234,6 +234,10 @@ local function hasImportedCache(version)
   return false
 end
 
+function DataSource.hasImportedCache(version)
+  return hasImportedCache(version)
+end
+
 local mountedVersion = nil
 
 local function remountVersion(version)

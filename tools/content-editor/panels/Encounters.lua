@@ -105,6 +105,7 @@ local function drawWild(S, App, x, y, w, h)
 
   if Kit.button(viewX, fy, 140 * s, 26 * s, "Open in Maps", { kind = "ghost" }) then
     S.tab = "maps"
+    S.builderPane = "details"
     S.mapId = mapId
     S.mapSection = "encounters"
   end

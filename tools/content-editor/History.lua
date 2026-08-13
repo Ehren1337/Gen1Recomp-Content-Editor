@@ -314,6 +314,16 @@ function History.endBatch(S)
   return true
 end
 
+-- Replace the baseline after an internal, non-user edit.
+function History.resetBaseline(S)
+  if not (S and S.project) then return false end
+  S._histBaseline = deepCopy(S.project)
+  S._histDirtyFrame = false
+  S._histBatch = nil
+  S._histLastPush = nil
+  return true
+end
+
 function History.canUndo(S)
   return S and S.undoStack and #S.undoStack > 0
 end
