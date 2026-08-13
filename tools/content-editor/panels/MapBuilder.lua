@@ -21,6 +21,22 @@ local TOOLS = {
   { id = "pan", label = "Pan", tip = "Drag the map without painting" },
 }
 
+local EVENT_TOOLS = {
+  { id = "object", mapTool = "object", label = "Event",
+    tip = "Place an NPC or scripted object on a 16x16 cell" },
+  { id = "sign", mapTool = "sign", label = "Sign",
+    tip = "Place a sign/background event on a 16x16 cell" },
+  { id = "trainer", mapTool = "trainer", label = "Trainer",
+    tip = "Place a trainer event" },
+  { id = "wild", mapTool = "wild", label = "Wild",
+    tip = "Place a fixed wild encounter" },
+  { id = "event_select", mapTool = "select", label = "Select",
+    tip = "Select the nearest object, sign, or transfer" },
+}
+
+local EVENT_TOOL_BY_ID = {}
+for _, tool in ipairs(EVENT_TOOLS) do EVENT_TOOL_BY_ID[tool.id] = tool end
+
 -- Shared panel helpers
 
 local quadCache = setmetatable({}, { __mode = "k" })
@@ -46,10 +62,6 @@ end
 local function mapSource(S)
   return S.project and S.project.layeredMaps
     and S.project.layeredMaps[S.builderMapId]
-end
-
-local function mapRecord(S)
-  return S.project and S.project.maps and S.project.maps[S.builderMapId]
 end
 
 local function quad(image, x, y, w, h)
@@ -230,16 +242,118 @@ local function applyRectangle(S, source, rect, App, erase)
   return changed
 end
 
-local function clearSelections(S, source, App)
+local function clearSelections(S, source, App, withinBatch)
   if not S.builderSelections or #S.builderSelections == 0 then return false end
+  if not withinBatch then App.beginEditBatch() end
   local changed = false
   for _, rect in ipairs(S.builderSelections) do
-    changed = applyRectangle(S, source, rect, App, true) or changed
+    local x0, y0, x1, y1 = normalizedRect(rect)
+    for y = y0, y1 do
+      for x = x0, x1 do
+        local index = y * source.cellWidth + x + 1
+        for layerIndex, layer in ipairs(source.layers or {}) do
+          if layer.cells[index] ~= nil then
+            LayeredMap.setCell(source, layerIndex, x, y, nil)
+            changed = true
+          end
+        end
+        if source.collision[index] ~= "solid" then
+          LayeredMap.setCollision(source, x, y, "solid")
+          changed = true
+        end
+      end
+    end
   end
+  if changed then App.markDirty() end
+  if not withinBatch then App.endEditBatch() end
   if changed then
     S.status = string.format("Cleared %d selected range(s)", #S.builderSelections)
   end
   return changed
+end
+
+local function selectionBounds(S)
+  local minX, minY, maxX, maxY
+  for _, rect in ipairs(S.builderSelections or {}) do
+    local x0, y0, x1, y1 = normalizedRect(rect)
+    minX, minY = math.min(minX or x0, x0), math.min(minY or y0, y0)
+    maxX, maxY = math.max(maxX or x1, x1), math.max(maxY or y1, y1)
+  end
+  return minX, minY, maxX, maxY
+end
+
+local function copySelection(S, source)
+  local x0, y0, x1, y1 = selectionBounds(S)
+  if not x0 then return false end
+  local clip = { width = x1 - x0 + 1, height = y1 - y0 + 1,
+    layers = {}, collision = {} }
+  for layerIndex = 1, #source.layers do clip.layers[layerIndex] = {} end
+  for y = y0, y1 do
+    for x = x0, x1 do
+      local ci = (y - y0) * clip.width + (x - x0) + 1
+      for layerIndex = 1, #source.layers do
+        local ref = LayeredMap.getCell(source, layerIndex, x, y)
+        if ref then
+          clip.layers[layerIndex][ci] = { source = ref.source, tile = ref.tile }
+        end
+      end
+      clip.collision[ci] = source.collision[y * source.cellWidth + x + 1]
+    end
+  end
+  S.builderClip = clip
+  S.status = string.format("Copied %dx%d cells across all layers",
+    clip.width, clip.height)
+  return true
+end
+
+local function pasteSelection(S, source, App, destX, destY, withinBatch)
+  local clip = S.builderClip
+  if not clip then S.status = "Copy a selection first"; return false end
+  if not withinBatch then App.beginEditBatch() end
+  local changed = false
+  for y = 0, clip.height - 1 do
+    for x = 0, clip.width - 1 do
+      local px, py = destX + x, destY + y
+      if px >= 0 and py >= 0 and px < source.cellWidth and py < source.cellHeight then
+        local ci = y * clip.width + x + 1
+        for layerIndex = 1, math.min(#source.layers, #(clip.layers or {})) do
+          local ref = clip.layers[layerIndex][ci]
+          local nextRef = ref and { source = ref.source, tile = ref.tile } or nil
+          if not refEqual(LayeredMap.getCell(source, layerIndex, px, py), nextRef) then
+            LayeredMap.setCell(source, layerIndex, px, py, nextRef)
+            changed = true
+          end
+        end
+        local collision = clip.collision and clip.collision[ci] or "solid"
+        local destIndex = py * source.cellWidth + px + 1
+        if source.collision[destIndex] ~= collision then
+          LayeredMap.setCollision(source, px, py, collision)
+          changed = true
+        end
+      end
+    end
+  end
+  if changed then App.markDirty() end
+  if not withinBatch then App.endEditBatch() end
+  S.builderSelections = { { x0 = destX, y0 = destY,
+    x1 = destX + clip.width - 1, y1 = destY + clip.height - 1 } }
+  S.status = changed and "Pasted cells" or "Paste made no changes"
+  return changed
+end
+
+local function nudgeSelection(S, source, dx, dy, App)
+  local x0, y0, x1, y1 = selectionBounds(S)
+  if not x0 then S.status = "Select a range first"; return end
+  if x0 + dx < 0 or y0 + dy < 0
+      or x1 + dx >= source.cellWidth or y1 + dy >= source.cellHeight then
+    S.status = "Cannot nudge selection outside the map"
+    return
+  end
+  if not copySelection(S, source) then return end
+  App.beginEditBatch()
+  clearSelections(S, source, App, true)
+  pasteSelection(S, source, App, x0 + dx, y0 + dy, true)
+  App.endEditBatch()
 end
 
 local function sourceAtCell(S, source, x, y)
@@ -389,7 +503,7 @@ local function drawCanvas(S, source, x, y, w, h, App)
           end
         end
       end
-      if (S.builderTool or "pencil") == "collision" then
+      if (S.builderTool or "pencil") == "collision" or S.mapShowCollision then
         local mode = source.collision[cy * source.cellWidth + cx + 1] or "solid"
         local colors = {
           solid = { 1, 0.2, 0.2 }, walk = { 0.2, 1, 0.4 },
@@ -402,19 +516,26 @@ local function drawCanvas(S, source, x, y, w, h, App)
       end
     end
   end
-  love.graphics.setColor(1, 1, 1, 0.18)
-  for gx = 0, source.cellWidth do
-    love.graphics.line(gx * CELL, 0, gx * CELL, source.cellHeight * CELL)
-  end
-  for gy = 0, source.cellHeight do
-    love.graphics.line(0, gy * CELL, source.cellWidth * CELL, gy * CELL)
+  if S.mapShowGrid ~= false then
+    love.graphics.setColor(1, 1, 1, 0.18)
+    for gx = 0, source.cellWidth do
+      love.graphics.line(gx * CELL, 0, gx * CELL, source.cellHeight * CELL)
+    end
+    for gy = 0, source.cellHeight do
+      love.graphics.line(0, gy * CELL, source.cellWidth * CELL, gy * CELL)
+    end
   end
   drawSelections(S, source)
   drawWarpNodes(S, source)
+  if S.mapWorkspace then
+    local Maps = require("Maps")
+    Maps.drawEventOverlays(S)
+  end
   love.graphics.pop()
   love.graphics.setScissor()
 
   local over = Kit.hit(vx, vy, vw, vh)
+  S._builderViewHit = over
   local function mouseCell()
     local worldX = (Kit.mouseX - vx) / zoom + (S.builderCamX or 0)
     local worldY = (Kit.mouseY - vy) / zoom + (S.builderCamY or 0)
@@ -425,17 +546,73 @@ local function drawCanvas(S, source, x, y, w, h, App)
     and cx < source.cellWidth and cy < source.cellHeight
   if over and inMap then
     S.builderHoverX, S.builderHoverY = cx, cy
+    S._mapHoverCx, S._mapHoverCy = cx, cy
+  elseif not over then
+    S._mapHoverCx, S._mapHoverCy = nil, nil
   end
 
   local middle = love.mouse and love.mouse.isDown and love.mouse.isDown(3)
   local space = love.keyboard and love.keyboard.isDown
     and (love.keyboard.isDown("space") or love.keyboard.isDown("lalt"))
   local tool = S.builderTool or "pencil"
+  local eventTool = EVENT_TOOL_BY_ID[tool]
   local panning = tool == "pan" or middle or space
-  if over and inMap and Kit.mouseClicked and not Kit.blockClicks
+  local eventHandled = false
+  if eventTool and not Kit.blockClicks then
+    local Maps = require("Maps")
+    local drag = S._builderEvent
+    if over and inMap and Kit.mouseClicked and not drag then
+      local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+      local kind, index = Maps.pickEventAt(S, cx, cy)
+      App.beginEditBatch()
+      if kind and not shift then
+        Maps.selectEvent(S, kind, index)
+        S._builderEvent = { move = true, kind = kind, index = index,
+          lastX = cx, lastY = cy }
+        S.status = string.format("Selected %s #%d - drag to move", kind, index)
+      else
+        S._builderEvent = { click = true, x = cx, y = cy,
+          mx = Kit.mouseX, my = Kit.mouseY,
+          camX = S.builderCamX or 0, camY = S.builderCamY or 0,
+          moved = false }
+      end
+      drag = S._builderEvent
+      eventHandled = true
+    elseif Kit.mouseDown and drag then
+      if drag.move and inMap and (cx ~= drag.lastX or cy ~= drag.lastY) then
+        drag.lastX, drag.lastY = cx, cy
+        Maps.moveEvent(S, drag.kind, drag.index, cx, cy, App)
+      elseif drag.click then
+        local dx, dy = Kit.mouseX - drag.mx, Kit.mouseY - drag.my
+        if math.abs(dx) > 3 or math.abs(dy) > 3 then
+          drag.moved = true
+          S.builderCamX = drag.camX - dx / zoom
+          S.builderCamY = drag.camY - dy / zoom
+        end
+      end
+      eventHandled = true
+    elseif drag and not Kit.mouseDown then
+      if drag.click and not drag.moved and eventTool.mapTool ~= "select" then
+        Maps.applyEventAtCell(S, eventTool.mapTool, drag.x, drag.y, App)
+      elseif drag.click and not drag.moved then
+        Maps.applyEventAtCell(S, "select", drag.x, drag.y, App)
+      end
+      App.endEditBatch()
+      S._builderEvent = nil
+      eventHandled = true
+    end
+  elseif S._builderEvent then
+    App.endEditBatch()
+    S._builderEvent = nil
+  end
+  if eventHandled then
+    -- Event interaction owns this pointer gesture.
+  elseif over and inMap and Kit.mouseClicked and not Kit.blockClicks
       and (tool == "fill" or tool == "picker" or tool == "warp") then
     if tool == "fill" then
+      App.beginEditBatch()
       floodFill(S, source, cx, cy, App)
+      App.endEditBatch()
     elseif tool == "picker" then
       local ref, layerIndex = sourceAtCell(S, source, cx, cy)
       if ref then
@@ -499,9 +676,13 @@ local function drawCanvas(S, source, x, y, w, h, App)
         S.builderSelections = S.builderSelections or {}
         S.builderSelections[#S.builderSelections + 1] = rect
       elseif S._builderDrag.tool == "eraser" then
+        App.beginEditBatch()
         applyRectangle(S, source, rect, App, true)
+        App.endEditBatch()
       else
+        App.beginEditBatch()
         applyRectangle(S, source, rect, App, false)
+        App.endEditBatch()
       end
     end
     S._builderDrag = nil
@@ -618,7 +799,8 @@ local function drawMapList(S, x, y, w, h, App)
   end
   local rowH = 25 * Kit.scale
   local listY = y + 60 * Kit.scale
-  local footerH = (S.builderNewMap and 154 or 66) * Kit.scale
+  local footerH = (S.mapWorkspace and 34
+    or (S.builderNewMap and 154 or 66)) * Kit.scale
   local listH = math.max(rowH, h - (listY - y) - footerH)
   local perPage = math.max(1, math.floor(listH / rowH))
   local offset = clamp(S.builderMapOffset or 0, 0, math.max(0, #ids - perPage))
@@ -635,6 +817,8 @@ local function drawMapList(S, x, y, w, h, App)
     if Kit.row(x + 8 * Kit.scale, ry, innerW, rowH - 2 * Kit.scale,
         id == S.builderMapId, PAL.blue, 5 * Kit.scale) then
       S.builderMapId = id
+      S.mapId = id
+      if not layered then S.builderPane = "details" end
       S.builderLayer = 1
       S.builderSelections = {}
       S._builderFitFor = nil
@@ -654,25 +838,27 @@ local function drawMapList(S, x, y, w, h, App)
     10 * Kit.scale, listH, offset, #ids, perPage, scrollId)
 
   local fy = y + h - footerH + 6 * Kit.scale
-  if S.builderNewMap then
+  if not S.mapWorkspace and S.builderNewMap then
     drawNewMapForm(S, x + 8 * Kit.scale, fy, w - 16 * Kit.scale, App)
     return
   end
   local half = (w - 24 * Kit.scale) / 2
-  if Kit.button(x + 8 * Kit.scale, fy, half, 26 * Kit.scale, "+ New", {
+  if not S.mapWorkspace and Kit.button(x + 8 * Kit.scale, fy, half, 26 * Kit.scale, "+ New", {
       kind = "good", tooltip = "Create a blank layered custom map",
     }) then
     beginNewMap(S)
   end
-  local canConvert = S.builderMapId and not mapSource(S)
-  if Kit.button(x + 12 * Kit.scale + half, fy, half, 26 * Kit.scale,
-      "Convert", { kind = "accent", enabled = canConvert,
-        tooltip = "Preserve this map and open it as editable 16x16 layers" }) then
-    ensureLayeredDestination(S, App)
+  if not S.mapWorkspace then
+    local canConvert = S.builderMapId and not mapSource(S)
+    if Kit.button(x + 12 * Kit.scale + half, fy, half, 26 * Kit.scale,
+        "Convert", { kind = "accent", enabled = canConvert,
+          tooltip = "Preserve this map and open it as editable 16x16 layers" }) then
+      ensureLayeredDestination(S, App)
+    end
   end
   local selected = S.builderMapId or "none"
   Kit.text("micro", Kit.ellipsize("micro", selected, w - 16 * Kit.scale),
-    x + 8 * Kit.scale, fy + 34 * Kit.scale, PAL.faint)
+    x + 8 * Kit.scale, fy + (S.mapWorkspace and 8 or 34) * Kit.scale, PAL.faint)
 end
 
 local function importTileset(S, App)
@@ -683,6 +869,7 @@ local function importTileset(S, App)
       if not base:lower():match("%.png$") then base = base .. ".png" end
       local rel = "assets/mapbuilder/sources/" .. base
       App.importToMod(picked, rel, function(imported)
+        Preview.invalidatePath(imported)
         local image = Preview.image(S, imported)
         if not image then
           S.status = "Imported PNG could not be decoded"
@@ -700,6 +887,37 @@ local function importTileset(S, App)
         S.builderTile = 0
         App.markDirty()
         S.status = string.format("Imported %s — %d tiles", source.id, source.count)
+      end)
+    end)
+end
+
+local function replaceTileSource(S, App, source)
+  if not (source and not source.runtimeTileset) then
+    S.status = "Select a custom PNG source to replace"
+    return
+  end
+  App.pickFile("Replace 16x16 tileset PNG",
+    "PNG (*.png)|*.png|All files (*.*)|*.*", function(picked)
+      local base = App.assetBaseName(picked, "tiles.png")
+      if not base:lower():match("%.png$") then base = base .. ".png" end
+      local rel = "assets/mapbuilder/sources/" .. base
+      App.importToMod(picked, rel, function(imported)
+        local image = Preview.image(S, imported)
+        if not image then S.status = "Replacement PNG could not be decoded"; return end
+        local width, height = image:getDimensions()
+        if width < 16 or height < 16 or width % 16 ~= 0 or height % 16 ~= 0 then
+          S.status = "Replacement dimensions must be multiples of 16 pixels"
+          return
+        end
+        source.image = imported
+        source.columns = width / 16
+        source.count = (width / 16) * (height / 16)
+        for tile in pairs(source.animations or {}) do
+          if tile >= source.count then source.animations[tile] = nil end
+        end
+        S.builderTile = clamp(S.builderTile or 0, 0, source.count - 1)
+        App.markDirty()
+        S.status = "Replaced source " .. tostring(source.id)
       end)
     end)
 end
@@ -737,9 +955,14 @@ local function drawTilePalette(S, source, x, y, w, h, App)
     S.builderSourceId, S.builderTile, S.builderTileOffset = ids[sourceIndex], 0, 0
   end
 
+  Kit.text("micro", string.format("source %d / %d", sourceIndex, #ids),
+    x + 10 * Kit.scale, sy + 25 * Kit.scale, PAL.faint)
+
   local descriptor = LayeredMap.sourceDescriptor(S, S.builderSourceId)
-  local gridY = sy + 30 * Kit.scale
-  local gridH = math.max(20 * Kit.scale, h - (gridY - y) - 8 * Kit.scale)
+  local gridY = sy + 42 * Kit.scale
+  local footerH = 58 * Kit.scale
+  local gridH = math.max(20 * Kit.scale,
+    h - (gridY - y) - footerH - 8 * Kit.scale)
   if not descriptor then
     Kit.emptyBox(x + 8 * Kit.scale, gridY, w - 16 * Kit.scale, gridH,
       "Import a 16x16 PNG tileset")
@@ -769,6 +992,13 @@ local function drawTilePalette(S, source, x, y, w, h, App)
     drawChecker(tx + 3 * Kit.scale, ty + 3 * Kit.scale, 28 * Kit.scale)
     drawSourceTile(S, descriptor, tile,
       tx + 3 * Kit.scale, ty + 3 * Kit.scale, 28 * Kit.scale, 1)
+    if descriptor.animations and descriptor.animations[tile] then
+      love.graphics.setColor(PAL.green)
+      love.graphics.circle("fill", tx + tileSize - 8 * Kit.scale,
+        ty + 7 * Kit.scale, 5 * Kit.scale)
+      Kit.textCenter("micro", "A", tx + tileSize - 13 * Kit.scale,
+        ty + 1 * Kit.scale, 10 * Kit.scale, PAL.greenInk)
+    end
     if Kit.press(tx, ty, tileSize - 2, tileSize - 2) then
       S.builderTile = tile
     end
@@ -776,62 +1006,220 @@ local function drawTilePalette(S, source, x, y, w, h, App)
   Kit.popClip()
   S.builderTileOffset = Kit.scrollbar(x + w - 18 * Kit.scale, gridY,
     10 * Kit.scale, gridH, offset, count, perPage, scrollId)
+
+  local fy = y + h - footerH + 4 * Kit.scale
+  local bw = (w - 20 * Kit.scale) / 2
+  local custom = descriptor and not descriptor.runtimeTileset
+  if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
+      custom and "Animate tile" or "Source settings", { kind = "accent",
+        tooltip = custom
+          and "Create or edit an animation for the selected tile"
+          or "Open source settings" }) then
+    S.builderPane = "tileset"
+  end
+  if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
+      custom and "Replace PNG" or "Open in GFX", {
+        kind = "ghost",
+        tooltip = custom and "Replace this source while preserving painted references"
+          or "Edit this game tileset's blocks and flags in GFX",
+      }) then
+    if custom then
+      replaceTileSource(S, App, descriptor)
+    elseif descriptor and descriptor.runtimeTileset then
+      S.tab = "gfx"
+      S.gfxMode = "tilesets"
+      S.tilesetEditId = descriptor.runtimeTileset
+      S.gfxTilesetPane = "flags"
+    end
+  end
+  fy = fy + 28 * Kit.scale
+  if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
+      "+ New PNG", { kind = "good",
+        tooltip = "Add another custom 16x16 PNG source" }) then
+    importTileset(S, App)
+  end
+  if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
+      "Import TMX", { kind = "accent",
+        tooltip = "Legacy Pokemonium / Tiled map import" }) then
+    App.pickFile("Pokemonium / Tiled TMX",
+      "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*", function(path)
+        local Maps = require("Maps")
+        Maps.importTmx(S, path, App)
+      end)
+  end
 end
 
 -- Toolbars and property panes
 
 local function drawToolbar(S, source, x, y, w, App)
-  local tx, toolY = x, y
-  local firstLimit = x + w - 190 * Kit.scale
-  for _, tool in ipairs(TOOLS) do
-    local bw = math.max(48 * Kit.scale,
-      Kit.textWidth("micro", tool.label) + 14 * Kit.scale)
-    local limit = toolY == y and firstLimit or x + w
-    if tx + bw > limit and tx > x then
-      toolY = toolY + 29 * Kit.scale
-      tx = x
+  local s = Kit.scale
+  local stackedHeader = w < 460 * s
+  local tx, toolY = x, y + (stackedHeader and 64 or 32) * s
+  local workspace = S.mapWorkspace
+  if workspace then
+    S.mapEditMode = S.mapEditMode or "map"
+    Kit.text("micro", "MODE", x, y + 7 * s, PAL.caption)
+    local modeX = x + 38 * s
+    if Kit.chip(modeX, y, 62 * s, 26 * s, "Terrain",
+        S.mapEditMode == "map", PAL.green, PAL.steel) then
+      S.mapEditMode = "map"
+      if EVENT_TOOL_BY_ID[S.builderTool] then S.builderTool = "pencil" end
     end
-    if Kit.chip(tx, toolY, bw, 26 * Kit.scale, tool.label,
+    if Kit.chip(modeX + 65 * s, y, 58 * s, 26 * s, "Events",
+        S.mapEditMode == "events", PAL.yellow, PAL.steel) then
+      S.mapEditMode = "events"
+      if not EVENT_TOOL_BY_ID[S.builderTool] then S.builderTool = "object" end
+    end
+  end
+  local viewY = stackedHeader and y + 32 * s or y
+  local zx = stackedHeader and x or x + w - 184 * s
+  if not stackedHeader and zx > x + 280 * s then
+    if Kit.chip(zx - 132 * s, y, 52 * s, 26 * s, "Grid",
+        S.mapShowGrid ~= false, PAL.steel) then
+      S.mapShowGrid = S.mapShowGrid == false and true or false
+    end
+    if Kit.chip(zx - 76 * s, y, 72 * s, 26 * s, "Passage",
+        S.mapShowCollision == true, PAL.red, PAL.steel,
+        "Show collision without changing tools") then
+      S.mapShowCollision = not S.mapShowCollision
+    end
+  end
+  if Kit.stepper(zx, viewY, 26 * s, 26 * s, "-") then
+    S.builderZoom = clamp((S.builderZoom or 1) - 0.25, 0.25, 8)
+  end
+  Kit.textCenter("mono", string.format("%.2fx", S.builderZoom or 1),
+    zx + 28 * s, viewY + 6 * s, 52 * s, PAL.muted)
+  if Kit.stepper(zx + 82 * s, viewY, 26 * s, 26 * s, "+") then
+    S.builderZoom = clamp((S.builderZoom or 1) + 0.25, 0.25, 8)
+  end
+  if Kit.button(zx + 112 * s, viewY, 68 * s, 26 * s,
+      "Fit", { kind = "ghost", tooltip = "Fit the whole map in the canvas" }) then
+    S._builderFitFor = nil
+  end
+
+  local visibleTools = workspace and S.mapEditMode == "events" and EVENT_TOOLS or TOOLS
+  Kit.text("micro", "TOOLS", x, toolY + 7 * s, PAL.caption)
+  tx = x + 42 * s
+  for _, tool in ipairs(visibleTools) do
+    local bw = math.max(48 * s, Kit.textWidth("micro", tool.label) + 14 * s)
+    if tx + bw > x + w and tx > x + 42 * s then
+      toolY = toolY + 29 * s
+      tx = x + 42 * s
+    end
+    if Kit.chip(tx, toolY, bw, 26 * s, tool.label,
         (S.builderTool or "pencil") == tool.id, PAL.blue, PAL.steel, tool.tip) then
       S.builderTool = tool.id
       S.builderRangeDraft = nil
       if tool.id ~= "warp" then S.builderWarpDraft = nil end
+      if tool.mapTool == "warp" then S.builderPane = "warps" end
+      if tool.mapTool == "sign" then S.mapSection = "signs"
+      elseif tool.mapTool then S.mapSection = "objects" end
     end
-    tx = tx + bw + 3 * Kit.scale
+    tx = tx + bw + 3 * s
   end
-  local zx = x + w - 184 * Kit.scale
-  if Kit.stepper(zx, y, 26 * Kit.scale, 26 * Kit.scale, "-") then
-    S.builderZoom = clamp((S.builderZoom or 1) - 0.25, 0.25, 8)
-  end
-  Kit.text("mono", string.format("%.2fx", S.builderZoom or 1),
-    zx + 30 * Kit.scale, y + 6 * Kit.scale, PAL.muted)
-  if Kit.stepper(zx + 82 * Kit.scale, y, 26 * Kit.scale, 26 * Kit.scale, "+") then
-    S.builderZoom = clamp((S.builderZoom or 1) + 0.25, 0.25, 8)
-  end
-  if Kit.button(zx + 112 * Kit.scale, y, 68 * Kit.scale, 26 * Kit.scale,
-      "Fit", { kind = "ghost" }) then S._builderFitFor = nil end
 
-  local barY = toolY + 31 * Kit.scale
-  if (S.builderTool or "pencil") == "collision" then
+  local barY = toolY + 31 * s
+  local barBottom = barY + 24 * s
+  if EVENT_TOOL_BY_ID[S.builderTool] then
+    if Kit.button(x, barY, 62 * s, 24 * s, "Dialog",
+        { kind = "ghost", tooltip = "Open dialog for this map or selected event" }) then
+      local Dialog = require("Dialog")
+      Dialog.openMap(S, S.mapId)
+    end
+    Kit.text("micro", Kit.ellipsize("micro",
+      "Click a cell to place; drag an existing marker to move it", w - 76 * s),
+      x + 70 * s, barY + 5 * s, PAL.muted)
     local bx = x
+    if S.builderTool == "trainer" then
+      local fieldY = barY + 29 * s
+      Kit.text("micro", "Class", bx, fieldY + 5 * s, PAL.caption)
+      S.trainerId = Kit.textfield("builder_trainer_class", bx + 42 * s, fieldY,
+        132 * s, 24 * s, S.trainerId or "OPP_YOUNGSTER",
+        "Trainer class"):upper():gsub("%s+", "_")
+      Kit.text("micro", "Party", bx + 184 * s, fieldY + 5 * s, PAL.caption)
+      local party = Kit.textfield("builder_trainer_party", bx + 224 * s,
+        fieldY, 48 * s, 24 * s,
+        tostring(S.placeTrainerParty or 1), "1")
+      S.placeTrainerParty = math.max(1, math.floor(tonumber(party) or 1))
+      barBottom = fieldY + 24 * s
+    elseif S.builderTool == "wild" then
+      local fieldY = barY + 29 * s
+      Kit.text("micro", "Species", bx, fieldY + 5 * s, PAL.caption)
+      S.placeWildSpecies = Kit.textfield("builder_wild_species", bx + 52 * s, fieldY,
+        132 * s, 24 * s, S.placeWildSpecies or "ARTICUNO",
+        "Species"):upper():gsub("%s+", "_")
+      Kit.text("micro", "Level", bx + 194 * s, fieldY + 5 * s, PAL.caption)
+      local level = Kit.textfield("builder_wild_level", bx + 236 * s,
+        fieldY, 48 * s, 24 * s,
+        tostring(S.placeWildLevel or 50), "50")
+      S.placeWildLevel = math.max(1, math.min(100,
+        math.floor(tonumber(level) or 50)))
+      barBottom = fieldY + 24 * s
+    end
+  elseif (S.builderTool or "pencil") == "collision" then
+    Kit.text("micro", "PASSAGE", x, barY + 5 * s, PAL.caption)
+    local bx, modeY = x + 56 * s, barY
     for _, mode in ipairs(LayeredMap.COLLISION_MODES) do
-      local bw = Kit.textWidth("micro", mode) + 16 * Kit.scale
-      if Kit.chip(bx, barY, bw, 24 * Kit.scale, mode,
+      local bw = Kit.textWidth("micro", mode) + 16 * s
+      if bx + bw > x + w and bx > x + 56 * s then
+        modeY, bx = modeY + 27 * s, x + 56 * s
+        barBottom = modeY + 24 * s
+      end
+      if Kit.chip(bx, modeY, bw, 24 * s, mode,
           (S.builderCollision or "solid") == mode, PAL.green, PAL.steel) then
         S.builderCollision = mode
       end
-      bx = bx + bw + 3 * Kit.scale
+      bx = bx + bw + 3 * s
     end
   elseif (S.builderTool or "pencil") == "select" then
     local count = #(S.builderSelections or {})
     Kit.text("micro", string.format("%d selected range(s)", count),
       x, barY + 5 * Kit.scale, PAL.muted)
-    if Kit.button(x + 140 * Kit.scale, barY, 90 * Kit.scale, 24 * Kit.scale,
+    local actionX, actionY = x, barY + 27 * s
+    local function slot(width)
+      if actionX + width > x + w and actionX > x then
+        actionX, actionY = x, actionY + 27 * s
+      end
+      local sx, sy = actionX, actionY
+      actionX = actionX + width + 4 * s
+      barBottom = math.max(barBottom, actionY + 24 * s)
+      return sx, sy
+    end
+    local bx, by = slot(34 * s)
+    if Kit.button(bx, by, 34 * s, 24 * s,
+        "All", { kind = "accent" }) then
+      S.builderSelections = { { x0 = 0, y0 = 0,
+        x1 = source.cellWidth - 1, y1 = source.cellHeight - 1 } }
+    end
+    bx, by = slot(48 * s)
+    if Kit.button(bx, by, 48 * s, 24 * s,
+        "Copy", { kind = "accent", enabled = count > 0 }) then
+      copySelection(S, source)
+    end
+    bx, by = slot(50 * s)
+    if Kit.button(bx, by, 50 * s, 24 * s,
+        "Paste", { kind = "good", enabled = S.builderClip ~= nil }) then
+      local x0, y0 = selectionBounds(S)
+      pasteSelection(S, source, App,
+        x0 or S.builderHoverX or 0, y0 or S.builderHoverY or 0)
+    end
+    for _, move in ipairs({ { "<", -1, 0 }, { ">", 1, 0 },
+        { "^", 0, -1 }, { "v", 0, 1 } }) do
+      bx, by = slot(24 * s)
+      if Kit.button(bx, by, 24 * s, 24 * s, move[1],
+          { kind = "ghost", enabled = count > 0,
+            tooltip = "Nudge selected cells" }) then
+        nudgeSelection(S, source, move[2], move[3], App)
+      end
+    end
+    bx, by = slot(78 * s)
+    if Kit.button(bx, by, 78 * s, 24 * s,
         "Clear tiles", { kind = "danger", enabled = count > 0,
           tooltip = "Erase the active layer inside every selected range" }) then
       clearSelections(S, source, App)
     end
-    if Kit.button(x + 236 * Kit.scale, barY, 74 * Kit.scale, 24 * Kit.scale,
+    bx, by = slot(68 * s)
+    if Kit.button(bx, by, 68 * s, 24 * s,
         "Deselect", { kind = "ghost", enabled = count > 0 }) then
       S.builderSelections = {}
     end
@@ -852,7 +1240,7 @@ local function drawToolbar(S, source, x, y, w, App)
     Kit.text("micro", "Active layer: " .. label,
       x, barY + 5 * Kit.scale, PAL.muted)
   end
-  return barY + 29 * Kit.scale
+  return barBottom + 5 * s
 end
 
 local function drawLayersPane(S, source, x, y, w, h, App)
@@ -955,11 +1343,14 @@ local function drawTilesetPane(S, x, y, w, h, App)
     Kit.emptyBox(x, y, w, math.min(h, 100 * Kit.scale), "Import a tileset PNG")
     return
   end
-  Kit.text("micro", source.name or source.id, x, y, PAL.heading)
+  Kit.text("small", "Tile animation", x, y, PAL.heading)
+  Kit.textRight("micro", source.name or source.id, x + w, y + 2 * Kit.scale,
+    PAL.muted)
   y = y + 24 * Kit.scale
   if source.runtimeTileset then
-    Kit.text("micro", "Game tileset source. Import a PNG to define custom animation.",
-      x, y, PAL.muted)
+    Kit.text("micro", "Animations require an imported PNG source.", x, y, PAL.muted)
+    Kit.text("micro", "Use + New PNG below the tile palette, then select a tile.",
+      x, y + 17 * Kit.scale, PAL.caption)
     return
   end
   Kit.text("micro", "Color mode", x, y + 5 * Kit.scale, PAL.caption)
@@ -982,31 +1373,121 @@ local function drawTilesetPane(S, x, y, w, h, App)
   local frames = source.animations and source.animations[tile]
   local count = frames and #frames or 1
   local duration = frames and frames[1] and frames[1].duration or 200
-  Kit.text("micro", "Selected tile " .. tostring(tile) .. " animation", x, y, PAL.caption)
+  local function copyFrames(value)
+    local copy = {}
+    for index, frame in ipairs(value or {}) do
+      copy[index] = { tile = frame.tile, duration = frame.duration }
+    end
+    return copy
+  end
+  local available = math.max(1, (source.count or 1) - tile)
+  Kit.text("micro", "1. Selected tile: " .. tostring(tile), x, y, PAL.caption)
+  Kit.textRight("micro", string.format("%d consecutive tile%s available",
+    available, available == 1 and "" or "s"), x + w, y, PAL.faint)
   y = y + 18 * Kit.scale
   local ax = x
   for _, frameCount in ipairs({ 1, 2, 3, 4, 6, 8 }) do
+    local possible = frameCount <= available
     local label = frameCount == 1 and "Static" or tostring(frameCount)
     local bw = frameCount == 1 and 58 * Kit.scale or 32 * Kit.scale
     if Kit.chip(ax, y, bw, 24 * Kit.scale, label, count == frameCount,
-        PAL.green, PAL.steel,
-        "Frames use consecutive tiles starting at the selected tile") then
+        possible and PAL.green or PAL.steel, PAL.steel,
+        possible and "Use this many consecutive tiles as animation frames"
+          or "Not enough tiles remain after the selected tile") and possible then
       local ok, err = LayeredMap.setSourceAnimation(
         source, tile, frameCount, duration)
-      if ok then App.markDirty() else S.status = err end
+      if ok then
+        App.markDirty()
+        S.status = frameCount == 1
+          and string.format("Tile %d is now static", tile)
+          or string.format("Created %d-frame animation on tile %d", frameCount, tile)
+      else
+        S.status = err
+      end
     end
     ax = ax + bw + 3 * Kit.scale
   end
   y = y + 34 * Kit.scale
-  Kit.text("micro", "Frame time (ms)", x, y + 5 * Kit.scale, PAL.caption)
-  local value = field(App, "builder_anim_ms", x + 110 * Kit.scale, y,
-    70 * Kit.scale, 24 * Kit.scale, tostring(duration), "200")
-  if Kit.focus ~= "builder_anim_ms" and frames then
-    local nextDuration = math.max(16, math.floor(tonumber(value) or duration))
-    if nextDuration ~= duration then
-      LayeredMap.setSourceAnimation(source, tile, count, nextDuration)
-      App.markDirty()
+  if frames then
+    Kit.text("micro", "2. Edit frames", x, y, PAL.caption)
+    y = y + 18 * Kit.scale
+    local function saveFrames(nextFrames, message)
+      local ok, err = LayeredMap.setAnimationFrames(source, tile, nextFrames)
+      if ok then
+        App.markDirty()
+        S.status = message
+      else
+        S.status = err
+      end
     end
+    for index, frame in ipairs(frames) do
+      local rowY = y + (index - 1) * 29 * Kit.scale
+      Kit.text("micro", tostring(index), x, rowY + 5 * Kit.scale, PAL.faint)
+      Kit.text("micro", "Tile", x + 18 * Kit.scale, rowY + 5 * Kit.scale,
+        PAL.caption)
+      local fieldKey = tostring(source.id) .. "_" .. tostring(tile)
+        .. "_" .. tostring(index)
+      local tileId = "builder_anim_tile_" .. fieldKey
+      local tileValue = field(App, tileId, x + 46 * Kit.scale, rowY,
+        44 * Kit.scale, 24 * Kit.scale, tostring(frame.tile), "0")
+      Kit.text("micro", "ms", x + 96 * Kit.scale, rowY + 5 * Kit.scale,
+        PAL.caption)
+      local timeId = "builder_anim_ms_" .. fieldKey
+      local timeValue = field(App, timeId, x + 114 * Kit.scale, rowY,
+        48 * Kit.scale, 24 * Kit.scale, tostring(frame.duration), "200")
+      if Kit.focus ~= tileId and Kit.focus ~= timeId then
+        local nextTile = clamp(math.floor(tonumber(tileValue) or frame.tile),
+          0, math.max(0, (source.count or 1) - 1))
+        local nextDuration = math.max(16,
+          math.floor(tonumber(timeValue) or frame.duration))
+        if nextTile ~= frame.tile or nextDuration ~= frame.duration then
+          local nextFrames = copyFrames(frames)
+          nextFrames[index].tile = nextTile
+          nextFrames[index].duration = nextDuration
+          saveFrames(nextFrames, string.format("Updated animation frame %d", index))
+          frames = source.animations and source.animations[tile] or frames
+        end
+      end
+      local bx = x + w - 94 * Kit.scale
+      if Kit.stepper(bx, rowY, 22 * Kit.scale, 24 * Kit.scale, "^")
+          and index > 1 then
+        local nextFrames = copyFrames(frames)
+        nextFrames[index - 1], nextFrames[index] = nextFrames[index], nextFrames[index - 1]
+        saveFrames(nextFrames, "Moved animation frame up")
+        break
+      end
+      if Kit.stepper(bx + 24 * Kit.scale, rowY, 22 * Kit.scale, 24 * Kit.scale, "v")
+          and index < #frames then
+        local nextFrames = copyFrames(frames)
+        nextFrames[index + 1], nextFrames[index] = nextFrames[index], nextFrames[index + 1]
+        saveFrames(nextFrames, "Moved animation frame down")
+        break
+      end
+      if Kit.button(bx + 50 * Kit.scale, rowY, 44 * Kit.scale, 24 * Kit.scale,
+          "Delete", { kind = "danger", enabled = #frames > 2 }) then
+        local nextFrames = copyFrames(frames)
+        table.remove(nextFrames, index)
+        saveFrames(nextFrames, "Deleted animation frame")
+        break
+      end
+    end
+    y = y + #frames * 29 * Kit.scale + 4 * Kit.scale
+    if Kit.button(x, y, 92 * Kit.scale, 24 * Kit.scale, "+ Add frame", {
+        kind = "good", enabled = #frames < 16,
+        tooltip = "Append a frame; its tile and duration can be edited above" }) then
+      local nextFrames = copyFrames(frames)
+      local last = nextFrames[#nextFrames]
+      nextFrames[#nextFrames + 1] = {
+        tile = math.min((source.count or 1) - 1, (last.tile or tile) + 1),
+        duration = last.duration or 200,
+      }
+      saveFrames(nextFrames, "Added animation frame")
+    end
+    Kit.text("micro", "Each frame can use any tile and timing (minimum 16 ms).",
+      x, y + 31 * Kit.scale, PAL.muted)
+  else
+    Kit.text("micro", "Choose 2 or more frames to create the animation.",
+      x, y, PAL.muted)
   end
 end
 
@@ -1090,69 +1571,42 @@ local function drawWarpsPane(S, source, x, y, w, h, App)
 end
 
 local function drawProperties(S, source, x, y, w, h, App)
+  if S.builderPane == "details" then
+    Kit.card(x, y, w, h, 10 * Kit.scale)
+    local s = Kit.scale
+    local tabs = {
+      { id = "details", label = "Map" },
+      { id = "layers", label = "Layers" },
+      { id = "tileset", label = "Animate" },
+      { id = "warps", label = "Warps" },
+    }
+    local tx = x + 8 * s
+    local bw = (w - 28 * s) / 4
+    for _, tab in ipairs(tabs) do
+      if Kit.chip(tx, y + 7 * s, bw, 26 * s, tab.label,
+          S.builderPane == tab.id, PAL.blue, PAL.steel) then
+        S.builderPane = tab.id
+        if tab.id == "warps" then S.builderTool = "warp" end
+      end
+      tx = tx + bw + 4 * s
+    end
+    local Maps = require("Maps")
+    Maps.drawDetails(S, x, y + 39 * s, w, h - 39 * s, App)
+    return
+  end
   Kit.card(x, y, w, h, 10 * Kit.scale)
   local px, py = x + 10 * Kit.scale, y + 9 * Kit.scale
   local innerW = w - 20 * Kit.scale
-  local map = mapRecord(S)
-  Kit.text("caption", source.id, px, py, PAL.heading)
-  py = py + 24 * Kit.scale
-  if map then
-    local label = field(App, "builder_map_label", px, py, innerW,
-      26 * Kit.scale, map.label or source.id, "Map label")
-    if label ~= (map.label or source.id) then map.label = label end
-  end
-  py = py + 34 * Kit.scale
-  Kit.text("micro", "Size in 16x16 cells (even numbers)", px, py, PAL.caption)
-  py = py + 17 * Kit.scale
-  local draft = S._builderSizeDraft
-  if not draft or draft.map ~= source.id then
-    draft = { map = source.id, w = tostring(source.cellWidth),
-      h = tostring(source.cellHeight) }
-    S._builderSizeDraft = draft
-  end
-  local widthText = Kit.textfield("builder_map_w", px, py,
-    62 * Kit.scale, 25 * Kit.scale, draft.w, "20")
-  local heightText = Kit.textfield("builder_map_h", px + 70 * Kit.scale, py,
-    62 * Kit.scale, 25 * Kit.scale, draft.h, "18")
-  if Kit.focus == "builder_map_w" or Kit.focus == "builder_map_h" then
-    draft.w, draft.h = widthText, heightText
-  else
-    local newWidth = math.floor(tonumber(widthText) or source.cellWidth)
-    local newHeight = math.floor(tonumber(heightText) or source.cellHeight)
-    draft.w, draft.h = tostring(newWidth), tostring(newHeight)
-    if newWidth ~= source.cellWidth or newHeight ~= source.cellHeight then
-      local ok, result = LayeredMap.resizeMap(
-        S.project, source.id, newWidth, newHeight)
-      if ok then
-        S._builderFitFor = nil
-        S.builderSelections = {}
-        App.markDirty()
-        S.status = result > 0
-          and string.format("Resized map; removed %d out-of-bounds endpoint/event(s)", result)
-          or "Resized map safely"
-      else
-        S.status = "Resize rejected: " .. tostring(result)
-        draft.w, draft.h = tostring(source.cellWidth), tostring(source.cellHeight)
-      end
-    end
-  end
-  if Kit.button(px + innerW - 92 * Kit.scale, py,
-      92 * Kit.scale, 25 * Kit.scale, "Events", {
-        kind = "ghost", tooltip = "Open NPCs, signs, encounters, and advanced map settings",
-      }) then
-    S.mapId = source.id
-    S.tab = "maps"
-  end
-  py = py + 36 * Kit.scale
   local tabs = {
+    { id = "details", label = "Map" },
     { id = "layers", label = "Layers" },
-    { id = "tileset", label = "Tileset" },
+    { id = "tileset", label = "Animate" },
     { id = "warps", label = "Warps" },
   }
   S.builderPane = S.builderPane or "layers"
   local tx = px
   for _, tab in ipairs(tabs) do
-    local bw = (innerW - 8 * Kit.scale) / 3
+    local bw = (innerW - 12 * Kit.scale) / 4
     if Kit.chip(tx, py, bw, 26 * Kit.scale, tab.label,
         S.builderPane == tab.id, PAL.blue, PAL.steel) then
       S.builderPane = tab.id
@@ -1160,7 +1614,117 @@ local function drawProperties(S, source, x, y, w, h, App)
     end
     tx = tx + bw + 4 * Kit.scale
   end
-  py = py + 35 * Kit.scale
+  py = py + 36 * Kit.scale
+  if S.builderPane == "layers" then
+    Kit.text("micro", "MAP SIZE", px, py, PAL.caption)
+    Kit.textRight("micro", string.format("Current: %d x %d cells",
+      source.cellWidth, source.cellHeight), px + innerW, py, PAL.muted)
+    py = py + 18 * Kit.scale
+    local draft = S._builderSizeDraft
+    if not draft or draft.map ~= source.id then
+      draft = { map = source.id, w = tostring(source.cellWidth),
+        h = tostring(source.cellHeight) }
+      S._builderSizeDraft = draft
+    end
+    local function stepSize(key, delta)
+      local value = math.floor(tonumber(draft[key]) or source[
+        key == "w" and "cellWidth" or "cellHeight"])
+      draft[key] = tostring(math.max(2, value + delta))
+    end
+    Kit.text("micro", "Width", px, py + 5 * Kit.scale, PAL.heading)
+    if Kit.stepper(px + 48 * Kit.scale, py, 24 * Kit.scale, 25 * Kit.scale, "-") then
+      stepSize("w", -2)
+    end
+    draft.w = Kit.textfield("builder_map_w", px + 76 * Kit.scale, py,
+      54 * Kit.scale, 25 * Kit.scale, draft.w, "20")
+    if Kit.stepper(px + 134 * Kit.scale, py, 24 * Kit.scale, 25 * Kit.scale, "+") then
+      stepSize("w", 2)
+    end
+    py = py + 31 * Kit.scale
+    Kit.text("micro", "Height", px, py + 5 * Kit.scale, PAL.heading)
+    if Kit.stepper(px + 48 * Kit.scale, py, 24 * Kit.scale, 25 * Kit.scale, "-") then
+      stepSize("h", -2)
+    end
+    draft.h = Kit.textfield("builder_map_h", px + 76 * Kit.scale, py,
+      54 * Kit.scale, 25 * Kit.scale, draft.h, "18")
+    if Kit.stepper(px + 134 * Kit.scale, py, 24 * Kit.scale, 25 * Kit.scale, "+") then
+      stepSize("h", 2)
+    end
+
+    local newWidth, newHeight = tonumber(draft.w), tonumber(draft.h)
+    local whole = newWidth and newHeight
+      and newWidth == math.floor(newWidth) and newHeight == math.floor(newHeight)
+    local valid = whole and newWidth >= 2 and newHeight >= 2
+      and newWidth % 2 == 0 and newHeight % 2 == 0
+    local changed = valid and (newWidth ~= source.cellWidth
+      or newHeight ~= source.cellHeight)
+    local shrinking = valid and (newWidth < source.cellWidth
+      or newHeight < source.cellHeight)
+    local cropped = 0
+    if shrinking then
+      for _, node in pairs(S.project.mapWarpNodes or {}) do
+        if node.map == source.id and (node.x >= newWidth or node.y >= newHeight) then
+          cropped = cropped + 1
+        end
+      end
+      local map = S.project.maps and S.project.maps[source.id]
+      local function countCropped(list)
+        for _, event in ipairs(list or {}) do
+          if event.x >= newWidth or event.y >= newHeight then cropped = cropped + 1 end
+        end
+      end
+      if map then
+        countCropped(map.objects)
+        countCropped(map.warps)
+        countCropped(map.signs)
+        countCropped(map.bgEvents)
+      end
+    end
+    py = py + 33 * Kit.scale
+    if not valid then
+      Kit.text("micro", "Use whole, even values of at least 2 cells.",
+        px, py, PAL.red)
+    elseif shrinking then
+      local warning = cropped > 0
+        and string.format("Shrinking crops right/bottom and removes %d event(s).", cropped)
+        or "Shrinking crops terrain from the right and bottom."
+      Kit.text("micro", Kit.ellipsize("micro", warning, innerW),
+        px, py, PAL.yellow)
+    else
+      Kit.text("micro", "New space is added on the right and bottom.",
+        px, py, PAL.muted)
+    end
+    py = py + 20 * Kit.scale
+    local half = (innerW - 4 * Kit.scale) / 2
+    if Kit.button(px, py, half, 26 * Kit.scale, "Reset", {
+        kind = "ghost", enabled = changed or not valid }) then
+      draft.w, draft.h = tostring(source.cellWidth), tostring(source.cellHeight)
+      Kit.blur()
+    end
+    if Kit.button(px + half + 4 * Kit.scale, py, half, 26 * Kit.scale,
+        shrinking and "Resize & Crop" or "Apply Resize", {
+          kind = shrinking and "danger" or "good", enabled = changed,
+          tooltip = "Resize from the top-left corner" }) then
+      App.beginEditBatch()
+      local ok, result = LayeredMap.resizeMap(
+        S.project, source.id, newWidth, newHeight)
+      if ok then
+        S._builderFitFor = nil
+        S.builderSelections = {}
+        App.markDirty()
+        App.endEditBatch()
+        draft.w, draft.h = tostring(source.cellWidth), tostring(source.cellHeight)
+        S.status = result > 0
+          and string.format("Resized map; removed %d out-of-bounds event(s)", result)
+          or string.format("Resized map to %d x %d cells", newWidth, newHeight)
+      else
+        App.endEditBatch()
+        S.status = "Resize rejected: " .. tostring(result)
+      end
+      Kit.blur()
+    end
+    py = py + 36 * Kit.scale
+  end
   local remaining = y + h - py - 8 * Kit.scale
   if S.builderPane == "tileset" then
     drawTilesetPane(S, px, py, innerW, remaining, App)
@@ -1183,8 +1747,33 @@ function MapBuilder.keypressed(S, key, App)
   end
   local source = mapSource(S)
   if not source then return false end
+  if Kit.focus then return false end
+  local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+    or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
+  if ctrl and (key == "c" or key == "v") then
+    if S.mapEditMode == "events" then
+      local Maps = require("Maps")
+      local ok, msg
+      if key == "c" then
+        ok, msg = Maps.copySelectedEvent(S)
+      else
+        ok, msg = Maps.pasteEvent(S, App)
+      end
+      S.status = msg or (ok and (key == "c" and "Copied event" or "Pasted event")
+        or "Event copy/paste failed")
+    elseif key == "c" then
+      copySelection(S, source)
+    else
+      local x0, y0 = selectionBounds(S)
+      pasteSelection(S, source, App,
+        x0 or S.builderHoverX or 0, y0 or S.builderHoverY or 0)
+    end
+    return true
+  end
   if key == "delete" or key == "backspace" then
-    if #(S.builderSelections or {}) > 0 and Kit.focus == nil then
+    if S.mapEditMode == "events" and Kit.focus == nil then
+      return require("Maps").deleteSelectedEvent(S, App)
+    elseif #(S.builderSelections or {}) > 0 and Kit.focus == nil then
       clearSelections(S, source, App)
       return true
     end
@@ -1194,6 +1783,39 @@ function MapBuilder.keypressed(S, key, App)
     return true
   end
   return false
+end
+
+function MapBuilder.update(S, dt)
+  if not (S and S._builderViewHit and not Kit.focus and love.keyboard) then return end
+  local dx, dy = 0, 0
+  if love.keyboard.isDown("a") then dx = dx - 1 end
+  if love.keyboard.isDown("d") then dx = dx + 1 end
+  if love.keyboard.isDown("w") then dy = dy - 1 end
+  if love.keyboard.isDown("s") then dy = dy + 1 end
+  if dx ~= 0 or dy ~= 0 then
+    local step = 360 * (tonumber(dt) or 0) / math.max(0.25, S.builderZoom or 1)
+    S.builderCamX = (S.builderCamX or 0) + dx * step
+    S.builderCamY = (S.builderCamY or 0) + dy * step
+  end
+end
+
+function MapBuilder.wheelmoved(S, dy, dx)
+  if not (S and S._builderViewHit) then return false end
+  dy, dx = tonumber(dy) or 0, tonumber(dx) or 0
+  local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+  local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+  if dx ~= 0 or shift or ctrl then
+    local amount = dx ~= 0 and -dx or -dy
+    if shift then
+      S.builderCamY = (S.builderCamY or 0) + amount * 48
+    else
+      S.builderCamX = (S.builderCamX or 0) + amount * 48
+    end
+  elseif dy ~= 0 then
+    S.builderZoom = clamp((S.builderZoom or 1) + (dy > 0 and 0.25 or -0.25),
+      0.25, 8)
+  end
+  return dy ~= 0 or dx ~= 0
 end
 
 function MapBuilder.draw(S, x, y, w, h, App)
@@ -1218,19 +1840,28 @@ function MapBuilder.draw(S, x, y, w, h, App)
   local mapListMin = S.builderNewMap and 244 * s or 210 * s
   local mapListH = math.min(290 * s, math.max(mapListMin, h * 0.43))
   drawMapList(S, x, y, leftW, mapListH, App)
-  drawTilePalette(S, mapSource(S), x, y + mapListH + gap,
-    leftW, h - mapListH - gap, App)
-
   local source = mapSource(S)
+  if source then
+    drawTilePalette(S, source, x, y + mapListH + gap,
+      leftW, h - mapListH - gap, App)
+  else
+    local Maps = require("Maps")
+    Maps.drawClassicTileset(S, x, y + mapListH + gap,
+      leftW, h - mapListH - gap, App)
+  end
+
   if not source then
     Kit.card(centerX, y, centerW, h, 10 * s)
-    Kit.emptyBox(centerX + 12 * s, y + 12 * s,
-      centerW - 24 * s, h - 24 * s,
-      "Select a map, then Convert — or create a new layered map")
-    Kit.card(rightX, y, rightW, h, 10 * s)
-    Kit.text("small", "LAYERED MAPS", rightX + 14 * s, y + 16 * s, PAL.heading)
-    Kit.text("micro", "Original maps remain unchanged until converted.",
-      rightX + 14 * s, y + 48 * s, PAL.muted)
+    local Maps = require("Maps")
+    Maps.drawClassicTerrain(S, centerX, y, centerW, h, App)
+    Maps.drawDetails(S, rightX, y, rightW, h, App)
+    return
+  end
+
+  if S.mapViewMode == "world" then
+    S._builderViewHit = false
+    local Maps = require("Maps")
+    Maps.drawWorld(S, App, centerX, y, centerW + gap + rightW, h)
     return
   end
 

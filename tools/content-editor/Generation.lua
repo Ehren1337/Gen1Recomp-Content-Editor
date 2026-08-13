@@ -21,14 +21,11 @@ function Generation.isGen2(S)
   return Generation.num(S) == 2
 end
 
--- Manifest `games` tokens for the active authoring target.
--- Gold authoring scaffolds gen1+gen2 so the mod loads on both generations
--- (wiki: omit games ⇒ Gen1-only; gen2 alone won't load on Red/Blue/Yellow).
+-- Manifest `games` tokens for the exact active authoring target. Generated
+-- content comes from one selected ROM/cache and may rely on version-specific
+-- maps, tilesets, scripts, and constants even within the same generation.
 function Generation.manifestGames(S)
-  if Generation.isGen2(S) then
-    return { "gen1", "gen2" }
-  end
-  return { "gen1" }
+  return { Generation.id(S) }
 end
 
 return Generation

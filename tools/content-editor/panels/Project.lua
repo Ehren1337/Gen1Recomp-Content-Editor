@@ -238,12 +238,23 @@ function Project.draw(S, x, y, w, h, App)
   Kit.caption(x, row, "GAME DATA")
   row = row + 28 * s
   local src = S.dataSource or "fixtures"
-  local prefs = S.dataPrefs or DataSource.loadPrefs()
+  local persistedPrefs = DataSource.loadPrefs()
+  local prefs = S.dataPrefs or persistedPrefs
+  local mountedRoot = DataSource.mountedRecompRoot
+    and DataSource.mountedRecompRoot() or nil
+  local recompRoot = mountedRoot
+    or (prefs and prefs.recompRoot)
+    or (persistedPrefs and persistedPrefs.recompRoot)
+  if recompRoot == "" then recompRoot = nil end
+  local validRecompRoot = recompRoot ~= nil
+    and DataSource.isValidRecompRoot(recompRoot)
+  local usingRecomp = src == "recomp" and validRecompRoot
   local srcLine = DataSource.label(src)
-  if prefs.recompRoot and prefs.recompRoot ~= "" then
-    srcLine = srcLine .. " — Linked: " .. tostring(prefs.recompRoot)
+  if recompRoot then
+    local linkState = usingRecomp and "Linked" or "Remembered"
+    srcLine = srcLine .. " — " .. linkState .. ": " .. tostring(recompRoot)
   end
-  Kit.text("small", srcLine, x, row, PAL.text)
+  Kit.text("small", Kit.ellipsize("small", srcLine, w), x, row, PAL.text)
   row = row + 22 * s
   Kit.text("micro",
     "Shareable packs ship without a ROM cache. Link your Gen1Recomp folder "
@@ -259,7 +270,7 @@ function Project.draw(S, x, y, w, h, App)
     }) then
     App.pickFolder("Choose Gen1Recomp folder", function(path)
       App.linkRecompFolder(path)
-    end, prefs.recompRoot)
+    end, recompRoot)
   end
   if Kit.button(x + dsW + dsGap, row, dsW, btnH, "Import ROM", {
       kind = "accent",
@@ -282,8 +293,36 @@ function Project.draw(S, x, y, w, h, App)
       tooltip = "Delete save-directory ROM caches (red|blue|yellow|gold/…)\n"
         .. "and flush editor image caches, then reload data.\n"
         .. "Does not delete a Linked Gen1Recomp folder.",
-    }) then
+  }) then
     if App.clearCache then App.clearCache() end
+  end
+  local remembered = recompRoot ~= nil
+  if Kit.button(x + dsW + dsGap, row, dsW, btnH, "Use last link", {
+      kind = "accent",
+      enabled = validRecompRoot and not usingRecomp,
+      tooltip = remembered
+        and (not validRecompRoot
+          and ("Previously linked folder is no longer available:\n"
+            .. tostring(recompRoot))
+          or usingRecomp
+            and ("Already using:\n" .. tostring(recompRoot))
+            or ("Reconnect without browsing:\n" .. tostring(recompRoot)))
+        or "No previously linked Gen1Recomp folder",
+  }) then
+    App.linkRecompFolder(recompRoot)
+  end
+  local importedReady = DataSource.hasImportedCache(curVer)
+  if Kit.button(x + 2 * (dsW + dsGap), row, dsW, btnH,
+      "Use imported ROM", {
+        kind = "accent",
+        enabled = importedReady and src ~= "imported",
+        tooltip = importedReady
+          and (src == "imported"
+            and "Already using this version's imported ROM cache"
+            or "Reuse this version's imported ROM cache without selecting the ROM again")
+          or "No imported ROM cache exists for the selected game version",
+      }) then
+    App.useImportedData()
   end
   row = row + btnH + 20 * s
 
@@ -329,8 +368,8 @@ function Project.draw(S, x, y, w, h, App)
   end
   if Kit.button(x + btnW + 10 * s, row, btnW, fh, "Playtest", {
       kind = "accent",
-      tooltip = prefs.recompRoot and prefs.recompRoot ~= ""
-        and ("Sync mod into Linked Recomp and launch:\n" .. tostring(prefs.recompRoot))
+      tooltip = validRecompRoot
+        and ("Sync mod into Linked Recomp and launch:\n" .. tostring(recompRoot))
         or "Enable this mod and launch (Link Recomp to playtest the full game)",
     }) then
     if App.playtestMod then App.playtestMod()

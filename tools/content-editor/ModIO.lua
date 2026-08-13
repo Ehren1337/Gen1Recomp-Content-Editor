@@ -191,7 +191,7 @@ function ModIO.engineVersion()
   return "0.0.0-dev"
 end
 
-function ModIO.create(id, name)
+function ModIO.create(id, name, version)
   if not ModIO.isValidId(id) then
     return nil, "bad id (use letters, numbers, _ or -)"
   end
@@ -222,13 +222,14 @@ function ModIO.create(id, name)
   mkdir(join(dest, "assets"))
 
   local Generation = require("Generation")
-  local games = Generation.manifestGames(nil)
+  local target = version and { version = version } or nil
+  local games = Generation.manifestGames(target)
   local gamesLit = {}
   for i, g in ipairs(games) do
     gamesLit[i] = string.format("%q", g)
   end
   local gamesJson = "[" .. table.concat(gamesLit, ", ") .. "]"
-  local gen2compat = Generation.isGen2(nil) and "true" or "false"
+  local gen2compat = Generation.isGen2(target) and "true" or "false"
   local manifest = string.format([[{
   "id": "%s",
   "name": "%s",

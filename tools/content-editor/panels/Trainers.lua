@@ -1508,6 +1508,7 @@ function Trainers.draw(S, x, y, w, h, App)
     if Kit.button(viewX, fy, 180 * s, 30 * s, "Use on Maps tab",
         { kind = "primary" }) then
       S.tab = "maps"
+      S.builderPane = "details"
       S.mapTool = "trainer"
       S.placeTrainerParty = S.trainerPartyIndex or 1
       S.status = "Trainer tool active — click a cell to place "
@@ -1627,6 +1628,7 @@ function Trainers.draw(S, x, y, w, h, App)
           if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
               { kind = "ghost" }) then
             S.tab = "maps"
+            S.builderPane = "details"
             S.mapId = mapId
             S.mapSection = "objects"
             S.mapObjectIndex = picked.listI
@@ -1767,6 +1769,7 @@ function Trainers.draw(S, x, y, w, h, App)
           if Kit.button(viewX, fy, 160 * s, 28 * s, "Open on Maps",
               { kind = "ghost" }) then
             S.tab = "maps"
+            S.builderPane = "details"
             S.mapId = mapId
             S.mapSection = "objects"
             S.mapObjectIndex = picked.listI

@@ -406,7 +406,9 @@ function LayeredMap.resizeMap(project, mapId, newWidth, newHeight)
       end
     end
     trimEvents(map.objects)
+    trimEvents(map.warps)
     trimEvents(map.signs)
+    trimEvents(map.bgEvents)
   end
   return true, removed
 end
@@ -522,39 +524,84 @@ function LayeredMap.sourceDescriptor(S, sourceId)
 end
 
 function LayeredMap.sourceIds(S, mapId)
-  local ids = {}
+  local ids, seen = {}, {}
+  local function add(id)
+    if id and not seen[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
+  end
   local mapSource = S.project and S.project.layeredMaps
     and S.project.layeredMaps[mapId]
   if mapSource and mapSource.baseTileset then
-    ids[#ids + 1] = LayeredMap.runtimeSourceId(mapSource.baseTileset)
+    add(LayeredMap.runtimeSourceId(mapSource.baseTileset))
   end
+
+  -- A layered map may paint from any loaded game tileset. Keep the base
+  -- source first, then expose the complete runtime registry alphabetically.
+  local runtimeIds, runtimeSeen = {}, {}
+  for _, bucket in ipairs({ S.project and S.project.tilesets,
+      S.data and S.data.tilesets }) do
+    for tilesetId in pairs(bucket or {}) do
+      if not runtimeSeen[tilesetId] then
+        runtimeSeen[tilesetId] = true
+        runtimeIds[#runtimeIds + 1] = tilesetId
+      end
+    end
+  end
+  table.sort(runtimeIds)
+  for _, tilesetId in ipairs(runtimeIds) do
+    add(LayeredMap.runtimeSourceId(tilesetId))
+  end
+
   for _, id in ipairs(sortedKeys(S.project and S.project.mapTileSources)) do
-    ids[#ids + 1] = id
+    add(id)
   end
   return ids
+end
+
+function LayeredMap.setAnimationFrames(source, tile, frames)
+  if not source or source.runtimeTileset then
+    return false, "import a PNG to define a custom animation"
+  end
+  tile = math.floor(tonumber(tile) or 0)
+  if tile < 0 or tile >= (source.count or 0) then
+    return false, "animation tile is outside the source"
+  end
+  source.animations = source.animations or {}
+  local normalized = {}
+  for _, frame in ipairs(frames or {}) do
+    local frameTile = math.floor(tonumber(frame.tile) or -1)
+    if frameTile < 0 or frameTile >= (source.count or 0) then
+      return false, "frame tile is outside the source"
+    end
+    normalized[#normalized + 1] = {
+      tile = frameTile,
+      duration = math.max(16, math.floor(tonumber(frame.duration) or 200)),
+    }
+  end
+  source.animations[tile] = #normalized > 1 and normalized or nil
+  return true
 end
 
 function LayeredMap.setSourceAnimation(source, tile, frameCount, duration)
   if not source or source.runtimeTileset then
     return false, "import a PNG to define a custom animation"
   end
-  source.animations = source.animations or {}
   tile = math.floor(tonumber(tile) or 0)
+  if tile < 0 or tile >= (source.count or 0) then
+    return false, "animation tile is outside the source"
+  end
   frameCount = math.floor(tonumber(frameCount) or 1)
   if frameCount <= 1 then
-    source.animations[tile] = nil
-    return true
+    return LayeredMap.setAnimationFrames(source, tile, {})
   end
-  frameCount = math.min(frameCount, math.max(1, (source.count or 1) - tile))
+  frameCount = math.min(frameCount, (source.count or 1) - tile)
   local frames = {}
   for offset = 0, frameCount - 1 do
-    frames[#frames + 1] = {
-      tile = tile + offset,
-      duration = math.max(16, math.floor(tonumber(duration) or 200)),
-    }
+    frames[#frames + 1] = { tile = tile + offset, duration = duration }
   end
-  source.animations[tile] = frames
-  return true
+  return LayeredMap.setAnimationFrames(source, tile, frames)
 end
 
 local function validPoint(point)

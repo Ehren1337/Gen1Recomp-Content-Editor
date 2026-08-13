@@ -533,6 +533,7 @@ local function renameMapId(S, map, newId, App)
     LayeredMap.renameMap(S.project, oldId, newId)
   end
   S.mapId = newId
+  S.builderMapId = newId
   if S.data and S.data.maps then
     if S.data.maps[oldId] == map then
       S.data.maps[oldId] = nil
@@ -1456,6 +1457,41 @@ local function defaultMap(id, index, tileset, S)
   return def
 end
 
+-- Create a map from 16x16-cell dimensions.
+function Maps.createMap(S, wantedId, cellWidth, cellHeight, tileset, App)
+  if not (S and S.project) then return nil, "no open project" end
+  local base = tostring(wantedId or "NEW_MAP"):upper()
+    :gsub("[^A-Z0-9_]", "_"):gsub("_+", "_")
+    :gsub("^_+", ""):gsub("_+$", "")
+  if base == "" then base = "NEW_MAP" end
+  if base:match("^%d") then base = "MAP_" .. base end
+  local id, suffix = base, 1
+  while (S.project.maps and S.project.maps[id])
+      or (S.data and S.data.maps and S.data.maps[id]) do
+    suffix = suffix + 1
+    id = base .. "_" .. suffix
+  end
+  local cw = math.max(2, math.floor(tonumber(cellWidth) or 20))
+  local ch = math.max(2, math.floor(tonumber(cellHeight) or 18))
+  if cw % 2 ~= 0 or ch % 2 ~= 0 then
+    return nil, "map dimensions must be even 16x16-cell values"
+  end
+  local index = S.project.nextMapIndex or 1000
+  S.project.nextMapIndex = index + 1
+  local map = defaultMap(id, index, tileset or "OVERWORLD", S)
+  map.width, map.height = cw / 2, ch / 2
+  map.blocks = {}
+  for i = 1, map.width * map.height do map.blocks[i] = 1 end
+  S.project.maps[id] = map
+  S.mapId, S.builderMapId = id, id
+  S.mapPaletteTileset = map.tileset
+  S._mapPaletteFor = id
+  S._mapCenteredFor = nil
+  syncMapEditMode(S, "map")
+  if App and App.markDirty then App.markDirty() end
+  return map
+end
+
 -- Optional 9th arg `suggest`: id list or function() -> list for autocomplete.
 local function field(App, id, x, y, w, h, value, ph, suggest)
   if acS and suggest then
@@ -2366,6 +2402,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
       if hitId then
         if hitId ~= S.mapId then
           S.mapId = hitId
+          S.builderMapId = hitId
           S._mapIdDraft = nil
           S._mapCenteredFor = nil
           S._worldFitKey = nil
@@ -4408,6 +4445,7 @@ local function mergeImportResult(S, App)
   end
   if first then
     S.mapId = first
+    S.builderMapId = first
     S._mapCenteredFor = nil
     S._mapNeedsRebuild = first
   end
@@ -7011,7 +7049,7 @@ function Maps.draw(S, x, y, w, h, App)
   local leftTop = qy + qh + 6 * s
   local leftBot = y + h
   local leftBodyH = leftBot - leftTop
-  local newMapH = 30 * s
+  local newMapH = S.mapWorkspace and 0 or 30 * s
   local listFrac = 0.40
   local mapListH = math.max(100 * s, leftBodyH * listFrac - newMapH - 6 * s)
   local tilesetY = leftTop + mapListH + newMapH + 10 * s
@@ -7048,6 +7086,7 @@ function Maps.draw(S, x, y, w, h, App)
     offsetKey = "mapListOffset",
     perPage = perPage,
     onSelect = function(id)
+      S.builderMapId = id
       S._mapIdDraft = nil
       S._mapCenteredFor = nil
       S._mapPaletteFor = nil
@@ -7064,6 +7103,7 @@ function Maps.draw(S, x, y, w, h, App)
     if Kit.row(mapScrollX, ry, mapRowW, rowH, S.mapId == id, PAL.green) then
       mapNav.activate()
       S.mapId = id
+      S.builderMapId = id
       S._mapIdDraft = nil
       S._mapCenteredFor = nil
       S._mapPaletteFor = nil
@@ -7083,7 +7123,7 @@ function Maps.draw(S, x, y, w, h, App)
   S.mapListOffset = Kit.scrollbar(mapScrollX, leftTop + 6 * s, mapScrollW,
     mapScrollH, S.mapListOffset or 0, #ids, perPage, "mapListOffset")
 
-  if Kit.button(x, leftTop + mapListH + 4 * s, leftW, newMapH, "+ New map",
+  if not S.mapWorkspace and Kit.button(x, leftTop + mapListH + 4 * s, leftW, newMapH, "+ New map",
       { kind = "good" }) then
     local nid = "NEW_MAP"
     local n = 1
@@ -7095,6 +7135,7 @@ function Maps.draw(S, x, y, w, h, App)
     local ts = tilesetIds(S)[1] or "OVERWORLD"
     S.project.maps[nid] = defaultMap(nid, idx, ts, S)
     S.mapId = nid
+    S.builderMapId = nid
     S.mapPaletteTileset = ts
     S._mapPaletteFor = nid
     S._mapCenteredFor = nil
@@ -7106,6 +7147,7 @@ function Maps.draw(S, x, y, w, h, App)
   if not map then
     local first = ids[1]
     S.mapId = first
+    S.builderMapId = first
     map, owned = resolveMapDef(S, first)
   end
 
@@ -7652,7 +7694,9 @@ function Maps.draw(S, x, y, w, h, App)
       S.data.maps[mid] = nil
     end
     MapLoader.invalidate(mid)
-    S.mapId = next(S.project.maps) or ids[1]
+    local remaining = allMapIds(S)
+    S.mapId = remaining[1]
+    S.builderMapId = S.mapId
     S._mapIdDraft = nil
     S._mapCenteredFor = nil
     App.markDirty()
@@ -7667,5 +7711,359 @@ end
 Maps.allMapIds = allMapIds
 Maps.ensureOwned = ensureOwned
 Maps.resolveMapDef = resolveMapDef
+
+-- Event editing on the 16x16 map canvas.
+function Maps.applyEventAtCell(S, tool, cx, cy, App)
+  acS = S
+  local map = resolveMapDef(S, S.mapId)
+  if not map then return false end
+  local previous = S.mapTool
+  S.mapTool = tool
+  App.beginEditBatch()
+  applyToolAtCell(S, map, cx, cy, App)
+  App.endEditBatch()
+  S.mapTool = previous
+  return true
+end
+
+function Maps.pickEventAt(S, cx, cy)
+  acS = S
+  local map = resolveMapDef(S, S.mapId)
+  if not map then return nil end
+  return pickEventAt(S, map, cx, cy)
+end
+
+function Maps.selectEvent(S, kind, index)
+  selectEvent(S, kind, index)
+end
+
+function Maps.moveEvent(S, kind, index, cx, cy, App)
+  acS = S
+  local map = ensureOwned(S, S.mapId)
+  if not map then return false end
+  local entity = eventEntity(S, map, kind, index)
+  if not entity then return false end
+  cx = math.max(0, math.min((tonumber(map.width) or 1) * 2 - 1, cx))
+  cy = math.max(0, math.min((tonumber(map.height) or 1) * 2 - 1, cy))
+  if entity.x == cx and entity.y == cy then return false end
+  entity.x, entity.y = cx, cy
+  if S.data and S.data.maps then S.data.maps[map.id or S.mapId] = map end
+  MapLoader.invalidate(map.id or S.mapId)
+  App.markDirty()
+  S.status = string.format("Moved %s #%d to (%d,%d)", kind, index, cx, cy)
+  return true
+end
+
+function Maps.copySelectedEvent(S)
+  acS = S
+  return copySelectedMapEvent(S)
+end
+
+function Maps.pasteEvent(S, App)
+  acS = S
+  App.beginEditBatch()
+  local ok, message = pasteMapEventClip(S, App)
+  App.endEditBatch()
+  return ok, message
+end
+
+function Maps.deleteSelectedEvent(S, App)
+  acS = S
+  local map = ensureOwned(S, S.mapId)
+  if not map then return false end
+  local list, index, kind
+  if S.mapSection == "objects" and S.mapObjectIndex then
+    list, index, kind = map.objects, S.mapObjectIndex, "object"
+  elseif S.mapSection == "signs" and S.mapSignIndex then
+    list = Generation.isGen2(S) and map.bgEvents or map.signs
+    index, kind = S.mapSignIndex, "sign"
+  elseif S.mapSection == "warps" and S.mapWarpIndex then
+    list, index, kind = map.warps, S.mapWarpIndex, "warp"
+  end
+  if not (list and list[index]) then
+    S.status = "Select an event marker first"
+    return false
+  end
+  App.beginEditBatch()
+  table.remove(list, index)
+  if kind == "object" then S.mapObjectIndex = math.min(index, #list)
+  elseif kind == "sign" then S.mapSignIndex = math.min(index, #list)
+  else S.mapWarpIndex = math.min(index, #list) end
+  MapLoader.invalidate(map.id or S.mapId)
+  App.markDirty()
+  App.endEditBatch()
+  S.status = string.format("Deleted %s #%d", kind, index)
+  return true
+end
+
+function Maps.drawEventOverlays(S)
+  acS = S
+  local map = resolveMapDef(S, S.mapId)
+  if not map then return end
+  -- drawMarkerOverlays normally runs inside the classic canvas transform and
+  -- subtracts its camera. The layered canvas has already applied its camera.
+  local oldX, oldY = S.mapCamX, S.mapCamY
+  S.mapCamX, S.mapCamY = 0, 0
+  drawMarkerOverlays(S, map)
+  S.mapCamX, S.mapCamY = oldX, oldY
+end
+
+function Maps.drawWorld(S, App, x, y, w, h)
+  acS = S
+  drawWorldView(S, App, x, y, w, h, math.min(260 * Kit.scale, w * 0.3))
+end
+
+function Maps.clearEvents(S, App)
+  local map = ensureOwned(S, S.mapId)
+  if not map then return false end
+  App.beginEditBatch()
+  map.warps, map.objects, map.signs = {}, {}, {}
+  if Generation.isGen2(S) then map.bgEvents = {} end
+  local drop = {}
+  for id, node in pairs(S.project.mapWarpNodes or {}) do
+    if node.map == S.mapId then drop[#drop + 1] = id end
+  end
+  local okLayered, LayeredMap = pcall(require, "LayeredMap")
+  if okLayered then
+    for _, id in ipairs(drop) do LayeredMap.removeWarpNode(S.project, id) end
+  end
+  S.mapObjectIndex, S.mapWarpIndex, S.mapSignIndex = nil, nil, nil
+  MapLoader.invalidate(S.mapId)
+  App.markDirty()
+  App.endEditBatch()
+  S.status = "Cleared map events and warp endpoints"
+  return true
+end
+
+function Maps.deleteMap(S, App)
+  local id = S.mapId
+  if not (id and S.project and S.project.maps and S.project.maps[id]) then
+    S.status = "Only project-owned maps can be deleted"
+    return false
+  end
+  local map = S.project.maps[id]
+  App.beginEditBatch()
+  local okLayered, LayeredMap = pcall(require, "LayeredMap")
+  if okLayered then LayeredMap.removeMap(S.project, id) end
+  S.project.maps[id] = nil
+  if S._vanillaMapBackup and S._vanillaMapBackup[id] then
+    S.data.maps[id] = S._vanillaMapBackup[id]
+    S._vanillaMapBackup[id] = nil
+  elseif map._isNew then
+    S.data.maps[id] = nil
+  end
+  MapLoader.invalidate(id)
+  local remaining = allMapIds(S)
+  S.mapId, S.builderMapId = remaining[1], remaining[1]
+  S.builderSelections = {}
+  S._builderFitFor = nil
+  App.markDirty()
+  App.endEditBatch()
+  S.status = "Deleted map " .. id
+  return true
+end
+
+-- Map/event settings drawer used beside the canvas.
+function Maps.drawDetails(S, x, y, w, h, App)
+  acS = S
+  local s, pad = Kit.scale, 8 * Kit.scale
+  local map, owned = resolveMapDef(S, S.mapId)
+  if not map then
+    Kit.emptyBox(x, y, w, h, "No map selected")
+    return
+  end
+  local function mutate()
+    map = ensureOwned(S, S.mapId)
+    owned = true
+    return map
+  end
+
+  if S.mapSection == "blocks" or S.mapSection == "warps" then
+    S.mapSection = "basics"
+  end
+  S.mapSection = S.mapSection or "basics"
+  Kit.card(x, y, w, h, 10 * s)
+  Kit.text("caption", Kit.ellipsize("caption", map.id, w - 16 * s),
+    x + 8 * s, y + 7 * s, PAL.heading)
+
+  local sx, secY = x + 8 * s, y + 34 * s
+  local gen2 = Generation.isGen2(S)
+  for _, sec in ipairs(SECTIONS) do
+    if sec.id ~= "warps" and not (gen2 and sec.id == "gates") then
+      local label = sectionLabel(S, sec)
+      local bw = Kit.textWidth("micro", label) + 14 * s
+      if sx + bw > x + w - 8 * s then
+        sx = x + 8 * s
+        secY = secY + 28 * s
+      end
+      if Kit.chip(sx, secY, bw, 24 * s, label,
+          S.mapSection == sec.id, PAL.green) then
+        S.mapSection = sec.id
+      end
+      sx = sx + bw + 3 * s
+    end
+  end
+
+  local viewX = x + pad
+  local viewY = secY + 30 * s
+  local viewW = w - 2 * pad
+  local viewH = math.max(40 * s, y + h - viewY - 8 * s)
+  FormPane.track(S, "mapDetailsScroll",
+    tostring(S.mapId) .. "|" .. tostring(S.mapSection))
+  local contentY, view = FormPane.begin(S, "mapDetailsScroll",
+    viewX, viewY, viewW, viewH)
+  local formX = view.x or viewX
+  local formW = view.contentW or viewW
+  local contentTop = contentY
+  local listBottom = contentY + 4000 * s
+  local fh = 26 * s
+
+  if S.mapSection == "basics" then
+    contentY = drawBasics(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  elseif S.mapSection == "objects" then
+    contentY = drawObjects(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  elseif S.mapSection == "signs" then
+    contentY = drawSigns(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  elseif S.mapSection == "encounters" then
+    contentY = drawEncounters(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  elseif S.mapSection == "hidden" then
+    contentY = drawHiddenItems(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  elseif S.mapSection == "gates" then
+    contentY = drawBadgeGates(S, map, mutate, App, formX, contentY,
+      formW, listBottom, fh, s) or contentY
+  end
+  FormPane.finish(S, "mapDetailsScroll", contentTop, contentY, view)
+end
+
+-- Block terrain controls used when a map cannot be opened as cell layers.
+function Maps.drawClassicTileset(S, x, y, w, h, App)
+  acS = S
+  local map = resolveMapDef(S, S.mapId)
+  if not map then Kit.emptyBox(x, y, w, h, "No map selected"); return end
+  local function mutate() return ensureOwned(S, S.mapId) end
+  drawTilesetDock(S, map, mutate, App, x, y, w, h)
+end
+
+function Maps.drawClassicTerrain(S, x, y, w, h, App)
+  acS = S
+  local s = Kit.scale
+  local map = resolveMapDef(S, S.mapId)
+  if not map then Kit.emptyBox(x, y, w, h, "No map selected"); return end
+
+  syncMapEditMode(S)
+  local tools
+  if (S.mapEditMode or "map") == "events" then
+    tools = {
+      { id = "object", label = "Event" },
+      { id = "warp", label = "Transfer" },
+      { id = "sign", label = "Sign" },
+      { id = "trainer", label = "Trainer" },
+      { id = "wild", label = "Wild" },
+    }
+  else
+    tools = {
+      { id = "paint", label = "Pencil" },
+      { id = "erase", label = "Eraser" },
+      { id = "pick", label = "Pick" },
+      { id = "select", label = "Select" },
+      { id = "collision", label = "Passage" },
+    }
+  end
+  if Kit.chip(x + w - 66 * s, y, 66 * s, 26 * s, "World",
+      S.mapViewMode == "world", PAL.green, PAL.steel,
+      "Show this map with its connected neighbors") then
+    S.mapViewMode = S.mapViewMode == "world" and "editor" or "world"
+    if S.mapViewMode == "world" then S._worldFitKey = nil end
+  end
+  if S.mapViewMode == "world" then
+    drawWorldView(S, App, x, y + 32 * s, w, h - 32 * s,
+      math.min(260 * s, w * 0.3))
+    return
+  end
+  local tx = x
+  for _, tool in ipairs(tools) do
+    local bw = math.max(58 * s, Kit.textWidth("micro", tool.label) + 14 * s)
+    if Kit.chip(tx, y, bw, 26 * s, tool.label,
+        (S.mapTool or "paint") == tool.id, PAL.blue, PAL.steel) then
+      S.mapTool = tool.id
+      syncMapEditMode(S, EVENT_TOOLS[tool.id] and "events" or "map")
+      if tool.id == "warp" then S.mapSection = "warps"
+      elseif tool.id == "sign" then S.mapSection = "signs"
+      elseif EVENT_TOOLS[tool.id] then S.mapSection = "objects" end
+      if tool.id == "collision" then S.mapShowCollision = true end
+    end
+    tx = tx + bw + 4 * s
+  end
+  local toggleLabel = (S.mapEditMode or "map") == "events" and "Terrain" or "Events"
+  if Kit.button(tx + 4 * s, y, 72 * s, 26 * s, toggleLabel,
+      { kind = "accent" }) then
+    syncMapEditMode(S, (S.mapEditMode or "map") == "events" and "map" or "events")
+  end
+  tx = tx + 82 * s
+  if Kit.stepper(tx, y, 26 * s, 26 * s, "-") then
+    S.mapZoom = clampZoom((S.mapZoom or 2) - 0.25)
+  end
+  Kit.text("mono", string.format("%.1fx", S.mapZoom or 2),
+    tx + 29 * s, y + 6 * s, PAL.muted)
+  if Kit.stepper(tx + 70 * s, y, 26 * s, 26 * s, "+") then
+    S.mapZoom = clampZoom((S.mapZoom or 2) + 0.25)
+  end
+  if Kit.button(tx + 100 * s, y, 44 * s, 26 * s, "Fit", { kind = "ghost" }) then
+    S._mapCenteredFor = nil
+  end
+  if Kit.chip(tx + 150 * s, y, 54 * s, 26 * s, "Grid",
+      S.mapShowGrid, PAL.steel) then S.mapShowGrid = not S.mapShowGrid end
+
+  local extraY, extraH = y + 30 * s, 0
+  if (S.mapTool or "paint") == "collision" then
+    local modes = Generation.isGen2(S)
+      and { "solid", "walk", "water", "grass", "door", "warp", "ledge" }
+      or { "solid", "walk", "water", "grass", "shore", "ledge", "none" }
+    local mx = x
+    for _, mode in ipairs(modes) do
+      local mw = Kit.textWidth("micro", mode) + 14 * s
+      if Kit.chip(mx, extraY, mw, 24 * s, mode,
+          (S.mapCollisionMode or "solid") == mode, PAL.red, PAL.steel) then
+        S.mapCollisionMode = mode
+      end
+      mx = mx + mw + 3 * s
+    end
+    extraH = 28 * s
+  elseif (S.mapTool or "paint") == "select" then
+    local bx = x
+    if Kit.button(bx, extraY, 46 * s, 24 * s, "All", { kind = "accent" }) then
+      S.mapSel = selectAllBlocks(map)
+    end
+    bx = bx + 50 * s
+    if Kit.button(bx, extraY, 52 * s, 24 * s, "Copy", { kind = "accent" }) then
+      local x0, y0, x1, y1 = normalizeBlockSel(S.mapSel)
+      if x0 then copyBlocksToClip(S, map, x0, y0, x1, y1) end
+    end
+    bx = bx + 56 * s
+    if Kit.button(bx, extraY, 52 * s, 24 * s, "Paste", { kind = "good" }) then
+      local dx, dy = pasteDestBlock(S, map)
+      local _, msg = pasteClipAt(S, S.mapId, dx, dy, App)
+      if msg then S.status = msg end
+    end
+    bx = bx + 56 * s
+    if Kit.button(bx, extraY, 52 * s, 24 * s, "Clear", { kind = "ghost" }) then
+      S.mapSel, S._mapSelDraft = nil, nil
+    end
+    extraH = 28 * s
+  end
+
+  local canvasY = y + 32 * s + extraH
+  Kit.card(x, canvasY, w, h - 32 * s - extraH, 10 * s)
+  local pad = 8 * s
+  S._mapViewHit = Kit.hit(x + pad, canvasY + pad,
+    math.max(0, w - 2 * pad),
+    math.max(0, h - 32 * s - extraH - 2 * pad))
+  drawMapPreview(S, map, x, canvasY, w, h - 32 * s - extraH, App)
+end
 
 return Maps
