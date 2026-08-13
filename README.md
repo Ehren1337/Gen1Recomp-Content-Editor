@@ -74,8 +74,7 @@ sprites). Do **not** ship ROM files (`.gb`) or `data/generated` /
 | **Project** | Create / open / save; game data source; boot & constants; Validate / Playtest |
 | **Manifest** | `manifest.json` (name, version, deps) |
 | **Code** | Browse / edit Lua under `mods/` |
-| **Map Builder** | Native 16×16 layered maps, custom PNG tilesets, collision, animations, and guided warps |
-| **Maps** | Classic blocks plus NPCs, signs, encounters, connections, and optional TMX import |
+| **Maps** | One contextual workspace for layered/classic terrain, NPCs, signs, encounters, connections, and optional TMX import |
 | **Dialog** | NPC / sign text (`TEXT_*`) |
 | **Trainers** | Parties, money, battle pics, palette |
 | **AI** | Trainer AI classes |
@@ -90,40 +89,129 @@ sprites). Do **not** ship ROM files (`.gb`) or `data/generated` /
 
 ---
 
-## Native layered maps
+## Maps workspace
 
-Use **Map Builder** for new map work. It is built into the standalone editor;
-Tiled and changes to the Gen1Recomp workspace are not required.
+The old **Map Builder** and **Maps** split has been replaced by one contextual
+**Maps** workspace. The selected map controls what the workspace shows; map
+terrain, events, settings, layers, tilesets, animations, and warps no longer
+require switching between two tabs.
 
-1. Select a game map and click **Convert**, or click **+ New** and choose the
-   custom map ID, size, and starting game tileset.
-2. Click **Import PNG** to add any tileset arranged as 16×16 tiles. A map can
-   paint from several imported tilesets.
+The workspace is arranged as follows:
+
+- **Top bar** — World View / Back to Editor, Delete Map, Clear Events, and
+  **+ New Map**.
+- **Left column** — map list followed by the active tileset-source palette.
+- **Center** — the 16×16 terrain/event canvas and its mode-specific tools.
+- **Right drawer** — **Map**, **Layers**, **Animate**, and **Warps**.
+
+Use **+ New Map** for new map work. New maps always use the layered 16×16
+workflow. Selecting an existing or imported map prepares it for the same grid
+automatically; Save compiles the editable source back to Gen1Recomp's normal
+32×32 block representation. Tiled and manual runtime-data editing are not
+required.
+
+### Create and navigate maps
+
+1. Select an existing map, or click **+ New Map** and choose the custom map ID,
+   size, and starting game tileset. Existing maps are prepared for 16×16 editing
+   automatically when selected.
+2. Click **+ New PNG** below the tile palette to add a source arranged as 16×16
+   tiles. A map can paint from several imported PNG sources and game tilesets.
 3. Add and reorder layers. Layers are exported by default; turn **Out** off to
    keep a reference layer in the project without putting it in the game.
 4. Paint collision and warps, then Save.
+
+**World View** shows the selected map together with connected neighbors; use
+**Back to Editor** to resume editing. **Clear Events** removes objects, signs,
+transfers, and layered warp endpoints without erasing terrain. **Delete Map**
+deletes a project-owned map; source-game maps revert to their original data.
 
 The editor keeps the original layer data in `editor_project.lua`. Save also
 generates runtime blocks, collision lists, map records, and a
 `mapbuilder_transforms.lua` recipe. On first game load, that recipe composes
 the map atlas and animation frames from the player's own imported game art
-plus the custom PNGs in the mod. The shareable mod is self-contained, carries
-no copied game graphics, and runs on an unchanged Gen1Recomp installation.
+plus the custom PNGs in the mod. The shareable mod is self-contained and
+carries no copied game graphics. Tile animations require a Gen1Recomp runtime
+that supports the generated `tileset.animatedTiles` records; use the linked
+runtime described under [Tile animations](#tile-animations).
 
-Paint tools are **Pencil**, **Eraser**, **Fill**, **Rectangle**, **Picker**,
-**Select**, **Collision**, **Warp**, and **Pan**. Select supports several
-rectangular ranges: hold Shift while dragging to add a range, then use
-**Clear tiles** or press Delete to erase every selected range on the active
-layer.
+### Terrain mode
+
+Choose **Terrain** above the canvas for tile and passage editing. Its tools are:
+
+- **Pencil**, **Eraser**, **Fill**, and **Rectangle** for painting.
+- **Picker** to take a tile and layer from the canvas.
+- **Select** for rectangular multi-range operations.
+- **Collision** to paint `solid`, `walk`, `grass`, `water`, or `shore` passage.
+- **Warp** for coordinate transfers.
+- **Pan** to move the camera without editing.
+
+Hold Shift while dragging **Select** to add ranges. Selection actions can copy,
+paste, nudge, select all, or clear. **Clear tiles** and Delete clear every layer
+and reset passage to `solid` inside the selected ranges. **Grid** toggles cell
+lines; **Passage** overlays collision without changing the active tool. Zoom
+with **− / +**, **Fit**, or the mouse wheel; pan with the Pan tool, middle mouse,
+Space/Alt drag, WASD, or horizontal/modified wheel input.
+
+### Event mode
+
+Choose **Events** above the canvas to place and edit map events in the same
+16×16 coordinate system:
+
+- **Event** — NPC or scripted object.
+- **Sign** — sign/background event.
+- **Trainer** — trainer class and party.
+- **Wild** — fixed species and level encounter.
+- **Select** — select the nearest event without creating one.
+
+Click an empty cell to place the chosen event. Click and drag an existing marker
+to move it. Ctrl+C / Ctrl+V copy and paste the selected event; Delete removes
+it. **Dialog** opens the text associated with the current map or selected event.
+
+### Property drawers
+
+- **Map** contains the selected map's gameplay settings and event details.
+- **Layers** creates, names, reorders, hides, exports, and changes opacity for
+  terrain layers. **Eye** affects editor visibility; **Out** controls Save output.
+  It also contains safe map resizing. Growth adds space on the right/bottom;
+  shrinking reports and removes out-of-bounds terrain and events.
+- **Animate** controls imported-PNG color mode and tile animation frames.
+- **Warps** creates links and lists/deletes stable endpoints on the current map.
 
 Tileset color mode is an enum:
 
 - **True color** preserves all PNG colors and is the default for imported art.
 - **Palette** treats the PNG as four-shade graphics and applies the map palette.
 
-Animations use consecutive tiles in an imported PNG. Select the first tile,
-choose the frame count, and set the frame time in milliseconds. A composed
-cell may contain one animated source tile.
+### Tile animations
+
+Tile animations are authored from imported PNG sources; game tileset sources
+remain available for painting but cannot define custom animation frames.
+
+1. Select the tile that should act as the animated tile.
+2. Click **Animate tile** below the tile palette, or open the **Animate** drawer.
+3. Choose **2**, **3**, **4**, **6**, or **8** to create an initial sequence.
+   New sequences begin with consecutive tiles in sheet order.
+4. Edit each frame independently:
+   - **Tile** selects any 16×16 tile in the same PNG source.
+   - **ms** sets that frame's duration (minimum 16 ms).
+   - **↑ / ↓** reorder the frame.
+   - **Delete** removes it; **+ Add frame** appends another frame.
+5. Paint the animated starting tile onto the map. Animated starting tiles are
+   marked **A** in the palette. Choose **Static** to remove its animation.
+
+A composed cell may contain one animated source tile plus any number of static
+layers. Save converts the per-frame durations to a 60 Hz runtime sequence,
+writes `animatedTiles` into the generated tileset, and writes frame-composition
+jobs to `mapbuilder_transforms.lua`. On first game load, Gen1Recomp builds the
+frame PNGs under `save/mod-derived/<mod-id>/mapbuilder/`; they are derived output
+and should not be included when sharing the mod.
+
+The linked Gen1Recomp checkout at `D:\decomp\gen1recomp` contains the required
+runtime handling in `src/render/TileRenderer.lua`. If the mod is shared with
+another player, their Gen1Recomp build must also support `animatedTiles` frame
+records. If terrain appears but stays static, update/rebuild that runtime and
+launch the mod again so its derived assets can be generated.
 
 ### Warps without indices
 
@@ -141,9 +229,10 @@ Map dimensions are 16×16 cells and must be even because the game stores maps
 as 2×2-cell blocks. Resizing preserves the top-left area and removes only
 warps, NPCs, or signs that end up outside the smaller map.
 
-Use **Maps** for NPCs, signs, trainers, encounters, connections, palettes, and
-other classic map details. Its 32×32 block painter remains available for old
-projects.
+The **Map** drawer also exposes encounters, connections, palettes, hidden items,
+badge gates, and other classic map metadata. Connections remain in **Map**
+because they describe neighboring-map seams; coordinate transfers belong in
+**Warps**.
 
 ### Optional TMX import
 
@@ -153,7 +242,8 @@ projects.
 python tools/tmx_import.py path/to/maps --mod mods/my_content
 ```
 
-TMX is retained as a migration path; it is not needed by Map Builder.
+TMX is retained as a legacy migration action in **Maps**; it is not needed by
+the layered terrain editor.
 
 ---
 
@@ -186,7 +276,10 @@ TMX is retained as a migration path; it is not needed by Map Builder.
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Esc | Close picker / quit editor |
 | [ / ] or Tab | Previous / next tab |
-| Space + drag | Pan map while painting |
+| Space or Alt + drag | Pan map while painting |
+| WASD over the map | Pan the map camera |
+| Ctrl+C / Ctrl+V | Copy / paste selected terrain ranges or events |
+| Delete / Backspace | Clear selected terrain ranges or delete selected event |
 | Mouse wheel over a list | Scroll maps, tilesets, layers, or warps |
 | Mouse wheel over the classic map | Zoom map or scroll the block dock |
 
@@ -198,6 +291,9 @@ TMX is retained as a migration path; it is not needed by Map Builder.
 - Full tilesets/species/playtest need either a linked Gen1Recomp install, an
   imported ROM (save-dir cache), or a local `data/generated` in a dev
   checkout. Otherwise the editor uses `tests/fixture_data`.
+- Custom tile-animation playback requires the `animatedTiles` renderer support
+  documented above. Editor preview alone does not guarantee an older game
+  runtime can play the generated frames.
 
 ---
 

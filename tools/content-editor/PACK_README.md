@@ -29,11 +29,39 @@ Then on **Project** → **GAME DATA**:
 - **Use fixtures** — keep stub data for light authoring.
 
 **Project** → Open `mods/New_PokemonTest`, or **Create** a new mod. Use
-**Map Builder** to convert a game map or create a custom map, then **Save**.
+**Maps** to select an existing map or create a custom map, then **Save**.
 
 Save writes editable layers to `mods/<id>/editor_project.lua`, the runtime
 records to `main.lua`, and a transform recipe that derives flattened map art
 from each player's own imported cache on first load.
+
+## Maps workspace
+
+The former Map Builder and Maps screens are now one workspace:
+
+- Select or create maps in the left column; **+ New Map** creates a layered map.
+- Use **Terrain** for tiles, selections, passage, and warps.
+- Use **Events** for NPCs, signs, trainers, fixed wild encounters, and dragging
+  existing event markers.
+- Use the right-side **Map**, **Layers**, **Animate**, and **Warps** drawers for
+  settings. **World View** shows connected neighbors.
+
+Existing maps are prepared for the 16×16 editor when selected. Save still emits
+the normal Gen1Recomp map blocks and records.
+
+## Tile animations
+
+1. In **Maps**, add a 16×16-tile source with **+ New PNG**.
+2. Select a tile and click **Animate tile**.
+3. Choose an initial frame count in **Animate**.
+4. Set each frame's tile and duration in milliseconds; reorder, add, or delete
+   frames as needed. Tiles marked **A** are animated starting tiles.
+5. Save and Playtest. The first game load builds derived frame images in the
+   player's save cache.
+
+Animation playback requires a Gen1Recomp build that supports generated
+`tileset.animatedTiles` frame records. If the map loads but its animated tiles
+remain static, update/rebuild the linked Gen1Recomp runtime before Playtest.
 
 ## Validate / Playtest
 
@@ -55,4 +83,5 @@ Zip and send the `mods\<your_mod>\` folder.
 
 - Windows 64-bit and Linux x86_64 packs. LÖVE 11.5 is included.
 - Do **not** ship ROM files (`.gb`) or `data/generated` / `assets/generated`.
+- Do not ship `save/mod-derived`; Gen1Recomp rebuilds those animation/map assets.
 - More detail: `docs/content-editor.md`

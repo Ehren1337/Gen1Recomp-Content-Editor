@@ -35,8 +35,7 @@ The shareable pack from `scripts/pack_content_editor.ps1` never includes
 | **Project** | Create / open / save; game data source; `field.boot` + `constants`; Validate / Playtest |
 | **Manifest** | Edit `mods/<id>/manifest.json` |
 | **Code** | Browse/edit Lua under `mods/` (paste multi-line; Ctrl+Z undoes code) |
-| **Map Builder** | Native 16×16 layers, custom PNG tilesets, collision, animation, resizing, and guided warps |
-| **Maps** | Classic blocks, NPCs, signs, encounters, hidden items, badge gates; optional TMX import |
+| **Maps** | One contextual workspace for layered/classic terrain and all map events/settings |
 | **Dialog** | NPC/sign `TEXT_*` bindings and string table text |
 | **Trainers** | `OPP_*` parties / money / name + trainer headers |
 | **AI** | `ai_classes` (uses / item / switch behavior) |
@@ -142,17 +141,25 @@ Builds cache-free packs:
 
 See `tools/content-editor/PACK_README.md`.
 
-## Map Builder
+## Maps
 
-Map Builder is the primary map-authoring workflow. It is part of the portable
-editor and does not require Tiled or changes to a Gen1Recomp checkout.
+The selected map opens the appropriate terrain editor automatically. **New
+Map** always creates a layered map. Existing classic or imported maps remain
+available and are transparently adapted to the same 16×16 source model when
+selected. Layered terrain is the primary authoring workflow and is part of the
+portable editor; it does not require Tiled.
 
-### Create or convert
+The left column contains the map list and tile sources, the center switches
+between **Terrain** and **Events**, and the right drawer contains **Map**,
+**Layers**, **Animate**, and **Warps**. **World View** shows connected neighbors.
+
+### Create or open
 
 - **+ New** opens a short form for the custom map ID, even cell dimensions,
   and starting game tileset. Create assigns an index starting at 1000 and
   opens the new map immediately.
-- **Convert** turns a game or classic-editor map into a 16×16 Ground layer.
+- Selecting an existing game or classic-editor map prepares it for the 16×16
+  authoring grid automatically.
   The original map record, objects, signs, encounters, and connections are
   retained.
 - Width and height are entered in 16×16 walk cells. Both values must be even
@@ -162,7 +169,7 @@ editor and does not require Tiled or changes to a Gen1Recomp checkout.
 
 ### Custom tilesets and colors
 
-**Import PNG** copies a sheet into `assets/mapbuilder/sources/`. Its width and
+**+ New PNG** copies a sheet into `assets/mapbuilder/sources/`. Its width and
 height must be multiples of 16 pixels. Use the arrow buttons to switch between
 the original game block source and any number of imported sheets; maps may
 paint tiles from all of them.
@@ -198,16 +205,31 @@ The tools are:
 | Pan | Move around the canvas without editing |
 
 With Select active, **Clear tiles** or Delete erases all selected ranges from
-the active layer at once.
+every layer and resets passage to `solid`. Copy and paste preserve all layers
+and passage values; the arrow actions nudge the copied selection by one cell.
+
+Use **Terrain** mode for these tools. **Grid** toggles cell boundaries and
+**Passage** shows collision without changing the active tool. Use **Events**
+mode to place an object, sign, trainer, or fixed wild encounter directly on the
+same canvas. Existing markers can be dragged; Ctrl+C / Ctrl+V copies the
+selected event and Delete removes it. The **Dialog** action opens its text.
 
 ### Tile animation
 
-Select a tile from an imported PNG, open **Tileset**, choose a frame count,
-and enter the frame time in milliseconds. Frames are consecutive tiles from
-left to right in sheet order, beginning at the selected tile. A composed map
+Select a tile from an imported PNG and click **Animate tile** below the tile
+palette. In the **Animate** panel, choose a starting frame count. Each frame
+can then use any tile from that PNG, have its own duration in milliseconds,
+and be reordered, added, or deleted. Animated starting tiles are marked **A**
+in the palette. New animations initially use consecutive tiles from left to
+right in sheet order, beginning at the selected tile. A composed map
 cell may stack one animated tile with any number of static layers. Save emits
 the transform instructions and `animatedTiles` record used by the renderer;
 the frame PNGs are built in the player's derived-asset cache at game startup.
+
+Choose **Static** to remove an animation. Frame durations are quantized to the
+game's 60 Hz update clock with a minimum editor duration of 16 ms. Playback
+requires a Gen1Recomp runtime with `tileset.animatedTiles` support; the runtime
+checkout used with this editor implements it in `src/render/TileRenderer.lua`.
 
 ### Guided warps
 
@@ -240,18 +262,24 @@ into the shared mod. Imported custom PNGs remain normal mod assets.
 That output is an ordinary self-contained mod. No runtime companion mod or
 engine workspace modification is required. Because Gen1Recomp manifests can
 name one asset-transform file, Save stops with a clear error if the mod already
-uses a different `assets_transforms` recipe; move that work into Map Builder's
+uses a different `assets_transforms` recipe; move that work into the Maps workspace's
 generated recipe before saving again.
 
 The generated format retains Gen I limits of 256 unique 8×8 tiles and 256
 unique blocks per composed map. One grass collision graphic carries tall-
 grass encounter behavior; additional grass-marked graphics remain walkable.
 
-## Classic Maps
+### Classic maps and events
 
-The **Maps** tab remains available for 32×32 block painting and for NPCs,
-signs, trainers, encounters, connections, palettes, hidden items, and badge
-gates. Use **Events** from Map Builder to jump directly to those details.
+Legacy block maps are transparently adapted when selected. NPCs, signs, trainers,
+encounters, connections, palettes, hidden items, and badge gates are embedded
+in the same right-hand **Map** drawer used beside layered terrain. The map list
+and property drawer stay put, and Save compiles the source back into the
+runtime's normal 32×32 metatile block representation.
+
+Warp endpoints and links live only in the dedicated **Warps** drawer. The Map
+drawer retains connections, which describe neighboring-map seams rather than
+coordinate transfer events.
 
 ### Optional Pokemonium / Pokenet TMX import
 
@@ -261,7 +289,7 @@ python tools/tmx_import.py path/to/res/maps --mod mods/my_content
 
 Or **Import TMX** on the Maps tab. Converts 32×32 layers into Gen1 blocks + a
 new tileset; scripts/MMO AI do not convert. Do not redistribute Nintendo/fan
-tilesets in packed mods. This is a legacy migration path; Map Builder has no
+tilesets in packed mods. This is a legacy migration path; the Maps workspace has no
 Tiled dependency.
 
 ## Related
