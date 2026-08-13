@@ -784,8 +784,12 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
   end
   modeY = modeY + 28 * s
 
+  -- expBar/bg are single fixed entries (no per-ID creation makes sense there).
+  local canCreate = ctx ~= "expBar" and ctx ~= "bg"
+
   local ids = gen2EntryIds(S, ctx)
-  local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, modeY, w, h - (modeY - y),
+  local formX, formW, listY, listH, shown = RegList.drawList(S, App, x, modeY, w,
+    h - (modeY - y),
     "PALETTES · " .. ctx:upper(), ids, {
       queryKey = "gfxQuery", offsetKey = "gfxListOffset", selKey = "paletteId",
       accent = PAL.yellow,
@@ -793,10 +797,81 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
         local _, owned = gen2ResolveEntry(S, ctx, id)
         return owned
       end,
-      footerLabel = nil,
+      footerLabel = canCreate and "+ New Palette" or nil,
+      onFooter = canCreate and function()
+        S.paletteId = "__new__"
+      end or nil,
     })
+
   if not S.paletteId then S.paletteId = shown[1] end
   local id = S.paletteId
+  local fh = 28 * s
+
+  -- Create flow: type an ID, defaults get filled in per-context on Create.
+  if id == "__new__" then
+    Kit.caption(formX, modeY, "NEW " .. ctx:upper() .. " PALETTE")
+    Kit.card(formX, listY, formW, listH, 12 * s)
+    local viewX = formX + 12 * s
+    local fy = listY + 16 * s
+    local viewW = formW - 24 * s
+    Kit.text("micro",
+      "Must match an ID used elsewhere (e.g. a species, trainer class, roof set).",
+      viewX, fy, PAL.muted)
+    fy = fy + 22 * s
+    Kit.text("small", "ID", viewX, fy + 6 * s, PAL.caption)
+    S.gfxNewPalId = RegList.field(App, "g2pal_newid", viewX + 60 * s, fy,
+      viewW - 60 * s, fh, S.gfxNewPalId or "", "NEW_PALETTE")
+    fy = fy + fh + 16 * s
+    if Kit.button(viewX, fy, 140 * s, fh, "Create", { kind = "good" }) then
+      local nid = tostring(S.gfxNewPalId or "")
+        :gsub("^%s+", ""):gsub("%s+$", ""):upper()
+      if nid == "" then
+        S.status = "Type an ID first"
+      else
+        S.project.palettes[ctx] = S.project.palettes[ctx] or {}
+        local bucket = S.project.palettes[ctx]
+        local key = (ctx == "roofs" and tonumber(nid)) or nid
+
+        if bucket[key] ~= nil then
+          S.status = tostring(key) .. " already has a " .. ctx .. " palette"
+        else
+          if ctx == "pokemon" then
+            bucket[key] = {
+              normal = { { 200, 200, 200 }, { 80, 80, 80 } },
+              shiny  = { { 216, 184, 200 }, { 96, 64, 88 } },
+            }
+          elseif ctx == "roofs" then
+            bucket[key] = {
+              mornDay = { { 248, 80, 80 }, { 120, 16, 16 } },
+              nite    = { { 80, 40, 120 }, { 24, 8, 48 } },
+            }
+          elseif ctx == "objects" then
+            local rows = {}
+            for i = 1, 8 do
+              rows[i] = { { 248, 248, 248 }, { 168, 168, 168 },
+                          { 88, 88, 88 }, { 16, 16, 16 } }
+            end
+            bucket[key] = rows
+          elseif ctx == "battleObjects" then
+            bucket[key] = { { 248, 248, 248 }, { 168, 168, 168 },
+                            { 88, 88, 88 }, { 16, 16, 16 } }
+          else
+            -- trainers / hpBar: plain 2-colour row
+            bucket[key] = { { 248, 248, 248 }, { 16, 16, 16 } }
+          end
+          S.paletteId = tostring(key)
+          S.gfxNewPalId = ""
+          App.markDirty()
+          S.status = "Added " .. ctx .. " palette: " .. tostring(key)
+        end
+      end
+    end
+    if Kit.button(viewX + 150 * s, fy, 100 * s, fh, "Cancel", { kind = "ghost" }) then
+      S.paletteId = shown[1]
+    end
+    return
+  end
+
   local rec, owned = gen2ResolveEntry(S, ctx, id)
   if not id or not rec then
     Kit.emptyBox(formX, listY, formW, listH,
