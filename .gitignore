@@ -1,0 +1,16 @@
+# Content Editor packages and temporary staging trees
+/dist/
+
+# Local ROM-derived caches and private game data
+/data/generated/
+/assets/generated/
+portable.txt
+*.gb
+*.gbc
+
+# Tool caches
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+

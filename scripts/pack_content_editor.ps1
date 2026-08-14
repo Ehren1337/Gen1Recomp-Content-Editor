@@ -1,15 +1,16 @@
 # Build a shareable Content Editor pack with no ROM-derived cache.
 #
-#   .\scripts\pack_content_editor.ps1 [-Platform windows|linux|all]
+#   .\scripts\pack_content_editor.ps1 [-Platform windows|linux|macos|all]
 #
 # Outputs under dist/win/ and/or dist/linux/:
 #   gen1recomp-content-editor-win64.zip
 #   gen1recomp-content-editor-linux64.tar.gz
+#   gen1recomp-content-editor-macos-universal.tar.gz
 #
 # Excludes data/generated, assets/generated, *.gb/*.gbc, portable.txt.
 
 param(
-  [ValidateSet("windows", "linux", "all")]
+  [ValidateSet("windows", "linux", "macos", "all")]
   [string]$Platform = "all"
 )
 
@@ -17,6 +18,8 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $LoveUrl = "https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage"
 $LoveAppImageName = "love-11.5-x86_64.AppImage"
+$LoveMacUrl = "https://github.com/love2d/love/releases/download/11.5/love-11.5-macos.zip"
+$LoveMacZipName = "love-11.5-macos.zip"
 
 function Copy-TreeFiltered {
   param(
@@ -77,7 +80,7 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   }
 
   # Always ship both launchers when present (harmless on the other OS).
-  foreach ($launcher in @("ContentEditor.bat", "ContentEditor.sh")) {
+  foreach ($launcher in @("ContentEditor.bat", "ContentEditor.sh", "ContentEditor.command")) {
     $src = Join-Path $Root $launcher
     if (Test-Path $src) {
       Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $launcher) -Force
@@ -213,6 +216,26 @@ function Add-LinuxLove([string]$Stage) {
   Set-Content -Path (Join-Path $loveDir "README.txt") -Value $readme -Encoding ascii
 }
 
+function Add-MacLove([string]$Stage) {
+  $cacheDir = Join-Path $Root "dist\_cache"
+  New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+  $cached = Join-Path $cacheDir $LoveMacZipName
+  if (-not (Test-Path $cached)) {
+    Write-Host "Downloading $LoveMacUrl ..."
+    Invoke-WebRequest -Uri $LoveMacUrl -OutFile $cached -UseBasicParsing
+  }
+  $expanded = Join-Path $cacheDir "love-11.5-macos"
+  if (Test-Path $expanded) { Remove-Item -LiteralPath $expanded -Recurse -Force }
+  Expand-Archive -LiteralPath $cached -DestinationPath $expanded -Force
+  $app = Get-ChildItem -LiteralPath $expanded -Directory -Filter "love.app" -Recurse |
+    Select-Object -First 1
+  if (-not $app) { throw "The macOS LÖVE archive did not contain love.app" }
+  $loveDir = Join-Path $Stage "love"
+  New-Item -ItemType Directory -Force -Path $loveDir | Out-Null
+  Copy-Item -LiteralPath $app.FullName -Destination (Join-Path $loveDir "love.app") `
+    -Recurse -Force
+}
+
 function Write-LinuxReadme([string]$Stage) {
   $text = @(
     "Gen1Recomp Content Editor - portable Linux pack (x86_64)",
@@ -251,12 +274,12 @@ import tarfile, os, tempfile, shutil
 src = r'''$TarPath'''
 fd, tmp = tempfile.mkstemp(suffix='.tar.gz')
 os.close(fd)
-want = ('.sh', '.AppImage')
+want = ('.sh', '.command', '.AppImage', '/Contents/MacOS/love')
 with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
     for m in inn.getmembers():
         name = m.name.replace('\\', '/')
         base = os.path.basename(name)
-        if base.endswith(want) or base == 'ContentEditor.sh':
+        if name.endswith(want) or base in ('ContentEditor.sh', 'ContentEditor.command'):
             m.mode = (m.mode & 0o777) | 0o755
         f = inn.extractfile(m) if m.isfile() else None
         out.addfile(m, f)
@@ -317,5 +340,21 @@ function Pack-Linux {
   Write-Host "On Linux: ./ContentEditor.sh  (chmod auto-applied if needed)"
 }
 
+function Pack-MacOS {
+  $OutDir = Join-Path $Root "dist\macos"
+  $Stage = Join-Path $Root "dist\_content_editor_stage_macos"
+  $TarPath = Join-Path $OutDir "gen1recomp-content-editor-macos-universal.tar.gz"
+  New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+  New-ContentEditorStage $Stage "macOS"
+  Add-MacLove $Stage
+  if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
+  tar -czf $TarPath -C $Stage .
+  if ($LASTEXITCODE -ne 0) { throw "tar failed with exit $LASTEXITCODE" }
+  Set-LinuxTarExecBits $TarPath
+  $size = (Get-Item $TarPath).Length
+  Write-Host ("Wrote {0} ({1:N1} MB)" -f $TarPath, ($size / 1MB))
+}
+
 if ($Platform -eq "windows" -or $Platform -eq "all") { Pack-Windows }
 if ($Platform -eq "linux" -or $Platform -eq "all") { Pack-Linux }
+if ($Platform -eq "macos" -or $Platform -eq "all") { Pack-MacOS }

@@ -68,6 +68,9 @@ remain static, update/rebuild the linked Gen1Recomp runtime before Playtest.
 On **Project**, under Overview:
 
 - **Validate** runs `modkit.py validate`. Needs Python on PATH, plus LuaJIT.
+- Without an imported game-data cache, Validate still checks structure, Lua,
+  permissions, and packaging, but skips vanilla cross-reference rules MK102 and
+  MK103 instead of reporting normal game IDs as errors.
   If LuaJIT is missing: **Windows** tries `winget install DEVCOM.LuaJIT`
   (Program Files — not AppData; Defender flags AppData LuaJIT as SuspLua);
   **Linux** tries a passwordless `apt`/`dnf`/`pacman` install, else install
