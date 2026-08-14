@@ -4,6 +4,7 @@ local Kit = require("Kit")
 local Theme = require("Theme")
 local Preview = require("Preview")
 local LayeredMap = require("LayeredMap")
+local TilesetExport = require("TilesetExport")
 
 local MapBuilder = {}
 local PAL = Theme.PAL
@@ -36,6 +37,9 @@ local EVENT_TOOLS = {
 
 local EVENT_TOOL_BY_ID = {}
 for _, tool in ipairs(EVENT_TOOLS) do EVENT_TOOL_BY_ID[tool.id] = tool end
+
+local BASIC_TERRAIN_TOOLS = { pencil = true, eraser = true, fill = true, pan = true }
+local BASIC_EVENT_TOOLS = { object = true, sign = true, event_select = true }
 
 -- Shared panel helpers
 
@@ -99,12 +103,23 @@ local function drawSourceTile(S, source, tile, x, y, size, alpha)
   local image = Preview.image(S, source.image)
   if not image then return false end
   tile = animationTile(source, math.max(0, math.floor(tonumber(tile) or 0)))
+  local shaded = false
+  if source.colorMode ~= "true_color" then
+    local mapId = S.builderMapId or S.mapId
+    local map = S.project and S.project.maps and S.project.maps[mapId]
+      or S.data and S.data.maps and S.data.maps[mapId]
+    shaded = Preview.pushPaletteShader(S, Preview.mapPaletteName(S, map))
+  end
   love.graphics.setColor(1, 1, 1, alpha or 1)
   if source.runtimeTileset then
     local blockId = math.floor(tile / 4)
     local quadrant = tile % 4
     local block = source.tileset.blocks and source.tileset.blocks[blockId + 1]
-    if not block then return false end
+    if not block then
+      Preview.popPaletteShader(shaded)
+      love.graphics.setColor(1, 1, 1, 1)
+      return false
+    end
     local qx, qy = quadrant % 2, math.floor(quadrant / 2)
     local scale = size / 16
     local perRow = source.tileset.tilesPerRow
@@ -128,6 +143,7 @@ local function drawSourceTile(S, source, tile, x, y, size, alpha)
     local scale = size / 16
     love.graphics.draw(image, quad(image, sx, sy, 16, 16), x, y, 0, scale, scale)
   end
+  Preview.popPaletteShader(shaded)
   love.graphics.setColor(1, 1, 1, 1)
   return true
 end
@@ -823,14 +839,19 @@ local function drawMapList(S, x, y, w, h, App)
       S.builderSelections = {}
       S._builderFitFor = nil
       if S.builderWarpDraft and not S.project.layeredMaps[id] then
-        ensureLayeredDestination(S, App)
+        if S.mapWorkspace then
+          S.builderWarpDraft = nil
+          S.status = "Transfer cancelled; click Edit Map before changing this map"
+        else
+          ensureLayeredDestination(S, App)
+        end
       end
     end
     Kit.text("micro", Kit.ellipsize("micro", id, innerW - 42 * Kit.scale),
       x + 14 * Kit.scale, ry + 6 * Kit.scale,
       layered and PAL.heading or PAL.muted)
     if layered then
-      Kit.textRight("micro", "L", x + innerW, ry + 6 * Kit.scale, PAL.green)
+      Kit.textRight("micro", "EDIT", x + innerW, ry + 6 * Kit.scale, PAL.green)
     end
   end
   Kit.popClip()
@@ -922,6 +943,28 @@ local function replaceTileSource(S, App, source)
     end)
 end
 
+local function exportSourcesToMod(S, sources)
+  local result = TilesetExport.exportSources(S, sources)
+  if result.ok then
+    S.status = string.format("Exported %d tileset PNG%s to %s", result.count,
+      result.count == 1 and "" or "s", result.folder)
+  else
+    S.status = string.format("Exported %d; %d failed (%s)", result.count,
+      #result.failures, table.concat(result.failures, "; "))
+  end
+  return result.ok, result.count, result.failures
+end
+
+function MapBuilder.exportAllTilesets(S, mapId)
+  local ids = LayeredMap.sourceIds(S, mapId or S.builderMapId)
+  local sources = {}
+  for _, id in ipairs(ids) do
+    local item = LayeredMap.sourceDescriptor(S, id)
+    if item then sources[#sources + 1] = item end
+  end
+  return exportSourcesToMod(S, sources)
+end
+
 local function drawTilePalette(S, source, x, y, w, h, App)
   Kit.card(x, y, w, h, 10 * Kit.scale)
   Kit.text("caption", "TILESETS", x + 10 * Kit.scale, y + 8 * Kit.scale, PAL.heading)
@@ -960,7 +1003,7 @@ local function drawTilePalette(S, source, x, y, w, h, App)
 
   local descriptor = LayeredMap.sourceDescriptor(S, S.builderSourceId)
   local gridY = sy + 42 * Kit.scale
-  local footerH = 58 * Kit.scale
+  local footerH = (S.builderSourceOptions and 90 or 34) * Kit.scale
   local gridH = math.max(20 * Kit.scale,
     h - (gridY - y) - footerH - 8 * Kit.scale)
   if not descriptor then
@@ -1011,20 +1054,12 @@ local function drawTilePalette(S, source, x, y, w, h, App)
   local bw = (w - 20 * Kit.scale) / 2
   local custom = descriptor and not descriptor.runtimeTileset
   if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
-      custom and "Animate tile" or "Source settings", { kind = "accent",
+      custom and "Animate selected" or "Edit game tileset", { kind = "accent",
         tooltip = custom
           and "Create or edit an animation for the selected tile"
-          or "Open source settings" }) then
-    S.builderPane = "tileset"
-  end
-  if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
-      custom and "Replace PNG" or "Open in GFX", {
-        kind = "ghost",
-        tooltip = custom and "Replace this source while preserving painted references"
-          or "Edit this game tileset's blocks and flags in GFX",
-      }) then
+          or "Open this game tileset in the graphics editor" }) then
     if custom then
-      replaceTileSource(S, App, descriptor)
+      S.builderPane = "tileset"
     elseif descriptor and descriptor.runtimeTileset then
       S.tab = "gfx"
       S.gfxMode = "tilesets"
@@ -1032,20 +1067,40 @@ local function drawTilePalette(S, source, x, y, w, h, App)
       S.gfxTilesetPane = "flags"
     end
   end
-  fy = fy + 28 * Kit.scale
-  if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
-      "+ New PNG", { kind = "good",
-        tooltip = "Add another custom 16x16 PNG source" }) then
-    importTileset(S, App)
-  end
   if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
-      "Import TMX", { kind = "accent",
-        tooltip = "Legacy Pokemonium / Tiled map import" }) then
-    App.pickFile("Pokemonium / Tiled TMX",
-      "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*", function(path)
-        local Maps = require("Maps")
-        Maps.importTmx(S, path, App)
-      end)
+      S.builderSourceOptions and "Hide options" or "More options", {
+        kind = "ghost", tooltip = "Show import, replace, and export tools" }) then
+    S.builderSourceOptions = not S.builderSourceOptions
+  end
+  if S.builderSourceOptions then
+    fy = fy + 28 * Kit.scale
+    if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
+        custom and "Replace image" or "Import tile image", { kind = "good",
+          tooltip = custom and "Replace this source without changing painted cells"
+            or "Add your own 16x16 tile image" }) then
+      if custom then replaceTileSource(S, App, descriptor)
+      else importTileset(S, App) end
+    end
+    if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
+        "Import Tiled map", { kind = "accent",
+          tooltip = "Advanced: import a legacy TMX file made with Tiled" }) then
+      App.pickFile("Pokemonium / Tiled TMX",
+        "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*", function(path)
+          local Maps = require("Maps")
+          Maps.importTmx(S, path, App)
+        end)
+    end
+    fy = fy + 28 * Kit.scale
+    if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
+        "Export selected", { kind = "ghost", enabled = descriptor ~= nil,
+          tooltip = "Export this source to the mod's workspace folder" }) then
+      exportSourcesToMod(S, { descriptor })
+    end
+    if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
+        "Export all", { kind = "ghost", enabled = #ids > 0,
+          tooltip = "Export every source to the mod's workspace folder" }) then
+      MapBuilder.exportAllTilesets(S, source.id)
+    end
   end
 end
 
@@ -1058,14 +1113,14 @@ local function drawToolbar(S, source, x, y, w, App)
   local workspace = S.mapWorkspace
   if workspace then
     S.mapEditMode = S.mapEditMode or "map"
-    Kit.text("micro", "MODE", x, y + 7 * s, PAL.caption)
-    local modeX = x + 38 * s
-    if Kit.chip(modeX, y, 62 * s, 26 * s, "Terrain",
+    Kit.text("micro", "EDIT", x, y + 7 * s, PAL.caption)
+    local modeX = x + 34 * s
+    if Kit.chip(modeX, y, 82 * s, 26 * s, "Paint map",
         S.mapEditMode == "map", PAL.green, PAL.steel) then
       S.mapEditMode = "map"
       if EVENT_TOOL_BY_ID[S.builderTool] then S.builderTool = "pencil" end
     end
-    if Kit.chip(modeX + 65 * s, y, 58 * s, 26 * s, "Events",
+    if Kit.chip(modeX + 85 * s, y, 86 * s, 26 * s, "Add events",
         S.mapEditMode == "events", PAL.yellow, PAL.steel) then
       S.mapEditMode = "events"
       if not EVENT_TOOL_BY_ID[S.builderTool] then S.builderTool = "object" end
@@ -1097,14 +1152,23 @@ local function drawToolbar(S, source, x, y, w, App)
     S._builderFitFor = nil
   end
 
-  local visibleTools = workspace and S.mapEditMode == "events" and EVENT_TOOLS or TOOLS
-  Kit.text("micro", "TOOLS", x, toolY + 7 * s, PAL.caption)
-  tx = x + 42 * s
+  local allTools = workspace and S.mapEditMode == "events" and EVENT_TOOLS or TOOLS
+  local basicTools = workspace and S.mapEditMode == "events"
+    and BASIC_EVENT_TOOLS or BASIC_TERRAIN_TOOLS
+  local visibleTools = {}
+  for _, tool in ipairs(allTools) do
+    if S.builderAdvancedTools or basicTools[tool.id]
+        or S.builderTool == tool.id then
+      visibleTools[#visibleTools + 1] = tool
+    end
+  end
+  Kit.text("micro", "ACTION", x, toolY + 7 * s, PAL.caption)
+  tx = x + 50 * s
   for _, tool in ipairs(visibleTools) do
     local bw = math.max(48 * s, Kit.textWidth("micro", tool.label) + 14 * s)
-    if tx + bw > x + w and tx > x + 42 * s then
+    if tx + bw > x + w and tx > x + 50 * s then
       toolY = toolY + 29 * s
-      tx = x + 42 * s
+      tx = x + 50 * s
     end
     if Kit.chip(tx, toolY, bw, 26 * s, tool.label,
         (S.builderTool or "pencil") == tool.id, PAL.blue, PAL.steel, tool.tip) then
@@ -1114,8 +1178,22 @@ local function drawToolbar(S, source, x, y, w, App)
       if tool.mapTool == "warp" then S.builderPane = "warps" end
       if tool.mapTool == "sign" then S.mapSection = "signs"
       elseif tool.mapTool then S.mapSection = "objects" end
+      if tool.mapTool and tool.mapTool ~= "warp" then
+        S.builderPane = "details"
+      end
     end
     tx = tx + bw + 3 * s
+  end
+  local moreLabel = S.builderAdvancedTools and "Fewer tools" or "More tools"
+  local moreW = Kit.textWidth("micro", moreLabel) + 18 * s
+  if tx + moreW > x + w and tx > x + 50 * s then
+    toolY = toolY + 29 * s
+    tx = x + 50 * s
+  end
+  if Kit.chip(tx, toolY, moreW, 26 * s, moreLabel,
+      S.builderAdvancedTools == true, PAL.yellow, PAL.steel,
+      "Show selection, collision, warp, trainer, and other advanced tools") then
+    S.builderAdvancedTools = not S.builderAdvancedTools
   end
 
   local barY = toolY + 31 * s
@@ -1246,7 +1324,7 @@ end
 local function drawLayersPane(S, source, x, y, w, h, App)
   local rowH = 28 * Kit.scale
   local listH = math.max(rowH, math.min(
-    math.max(rowH, h - 104 * Kit.scale),
+    math.max(rowH, h - 134 * Kit.scale),
     math.max(rowH, #source.layers * rowH)))
   local perPage = math.max(1, math.floor(listH / rowH))
   local offset = clamp(S.builderLayerOffset or 0, 0,
@@ -1290,23 +1368,13 @@ local function drawLayersPane(S, source, x, y, w, h, App)
     S.builderLayerOffset = 0
   end
   local by = y + listH + 5 * Kit.scale
-  local bw = (w - 12 * Kit.scale) / 4
-  if Kit.button(x, by, bw, 25 * Kit.scale, "+", { kind = "good" }) then
+  local bw = (w - 4 * Kit.scale) / 2
+  if Kit.button(x, by, bw, 25 * Kit.scale, "Add layer", { kind = "good" }) then
     local _, index = LayeredMap.addLayer(source, "Decoration")
     S.builderLayer = index
     App.markDirty()
   end
-  if Kit.button(x + bw + 4 * Kit.scale, by, bw, 25 * Kit.scale, "Up",
-      { kind = "accent" }) then
-    S.builderLayer = LayeredMap.moveLayer(source, S.builderLayer or 1, 1)
-    App.markDirty()
-  end
-  if Kit.button(x + (bw + 4 * Kit.scale) * 2, by, bw, 25 * Kit.scale, "Down",
-      { kind = "accent" }) then
-    S.builderLayer = LayeredMap.moveLayer(source, S.builderLayer or 1, -1)
-    App.markDirty()
-  end
-  if Kit.button(x + (bw + 4 * Kit.scale) * 3, by, bw, 25 * Kit.scale, "X",
+  if Kit.button(x + bw + 4 * Kit.scale, by, bw, 25 * Kit.scale, "Delete layer",
       { kind = "danger", enabled = (S.builderLayer or 1) > 1,
         tooltip = "Remove the selected layer" }) then
     local ok, err = LayeredMap.removeLayer(source, S.builderLayer or 1)
@@ -1314,6 +1382,17 @@ local function drawLayersPane(S, source, x, y, w, h, App)
       S.builderLayer = clamp((S.builderLayer or 1) - 1, 1, #source.layers)
       App.markDirty()
     else S.status = err end
+  end
+  by = by + 30 * Kit.scale
+  if Kit.button(x, by, bw, 25 * Kit.scale, "Move layer up",
+      { kind = "accent", tooltip = "Draw this layer above the next layer" }) then
+    S.builderLayer = LayeredMap.moveLayer(source, S.builderLayer or 1, 1)
+    App.markDirty()
+  end
+  if Kit.button(x + bw + 4 * Kit.scale, by, bw, 25 * Kit.scale, "Move layer down",
+      { kind = "accent", tooltip = "Draw this layer below the previous layer" }) then
+    S.builderLayer = LayeredMap.moveLayer(source, S.builderLayer or 1, -1)
+    App.markDirty()
   end
   local layer = activeLayer(S, source)
   if layer then
@@ -1570,51 +1649,47 @@ local function drawWarpsPane(S, source, x, y, w, h, App)
   end
 end
 
+local PANE_INFO = {
+  details = { label = "Map setup", help = "Name, size, encounters, and map behavior" },
+  layers = { label = "Layers", help = "Choose what you paint on and arrange draw order" },
+  tileset = { label = "Tile animation", help = "Advanced: animate individual source tiles" },
+  warps = { label = "Doors & exits", help = "Connect this map to another location" },
+}
+
+local function drawPaneNavigation(S, x, y, w)
+  local s = Kit.scale
+  local tabs = { "details", "layers", "tileset", "warps" }
+  local bw = (w - 4 * s) / 2
+  for index, id in ipairs(tabs) do
+    local col, row = (index - 1) % 2, math.floor((index - 1) / 2)
+    local tx, ty = x + col * (bw + 4 * s), y + row * 30 * s
+    local info = PANE_INFO[id]
+    if Kit.chip(tx, ty, bw, 27 * s, info.label,
+        S.builderPane == id, PAL.blue, PAL.steel, info.help) then
+      S.builderPane = id
+      if id == "warps" then S.builderTool = "warp" end
+    end
+  end
+  local info = PANE_INFO[S.builderPane] or PANE_INFO.layers
+  Kit.text("micro", Kit.ellipsize("micro", info.help, w),
+    x, y + 63 * s, PAL.muted)
+  return y + 82 * s
+end
+
 local function drawProperties(S, source, x, y, w, h, App)
   if S.builderPane == "details" then
     Kit.card(x, y, w, h, 10 * Kit.scale)
     local s = Kit.scale
-    local tabs = {
-      { id = "details", label = "Map" },
-      { id = "layers", label = "Layers" },
-      { id = "tileset", label = "Animate" },
-      { id = "warps", label = "Warps" },
-    }
-    local tx = x + 8 * s
-    local bw = (w - 28 * s) / 4
-    for _, tab in ipairs(tabs) do
-      if Kit.chip(tx, y + 7 * s, bw, 26 * s, tab.label,
-          S.builderPane == tab.id, PAL.blue, PAL.steel) then
-        S.builderPane = tab.id
-        if tab.id == "warps" then S.builderTool = "warp" end
-      end
-      tx = tx + bw + 4 * s
-    end
+    local contentY = drawPaneNavigation(S, x + 10 * s, y + 8 * s, w - 20 * s)
     local Maps = require("Maps")
-    Maps.drawDetails(S, x, y + 39 * s, w, h - 39 * s, App)
+    Maps.drawDetails(S, x, contentY, w, h - (contentY - y), App)
     return
   end
   Kit.card(x, y, w, h, 10 * Kit.scale)
   local px, py = x + 10 * Kit.scale, y + 9 * Kit.scale
   local innerW = w - 20 * Kit.scale
-  local tabs = {
-    { id = "details", label = "Map" },
-    { id = "layers", label = "Layers" },
-    { id = "tileset", label = "Animate" },
-    { id = "warps", label = "Warps" },
-  }
   S.builderPane = S.builderPane or "layers"
-  local tx = px
-  for _, tab in ipairs(tabs) do
-    local bw = (innerW - 12 * Kit.scale) / 4
-    if Kit.chip(tx, py, bw, 26 * Kit.scale, tab.label,
-        S.builderPane == tab.id, PAL.blue, PAL.steel) then
-      S.builderPane = tab.id
-      if tab.id == "warps" then S.builderTool = "warp" end
-    end
-    tx = tx + bw + 4 * Kit.scale
-  end
-  py = py + 36 * Kit.scale
+  py = drawPaneNavigation(S, px, py, innerW)
   if S.builderPane == "layers" then
     Kit.text("micro", "MAP SIZE", px, py, PAL.caption)
     Kit.textRight("micro", string.format("Current: %d x %d cells",
@@ -1844,24 +1919,43 @@ function MapBuilder.draw(S, x, y, w, h, App)
   if source then
     drawTilePalette(S, source, x, y + mapListH + gap,
       leftW, h - mapListH - gap, App)
+  elseif S.mapPreviewOnly then
+    Kit.card(x, y + mapListH + gap, leftW, h - mapListH - gap, 10 * s)
+    Kit.emptyBox(x + 10 * s, y + mapListH + gap + 10 * s,
+      leftW - 20 * s, h - mapListH - gap - 20 * s,
+      "Click Edit Map to unlock tiles and tools")
   else
     local Maps = require("Maps")
     Maps.drawClassicTileset(S, x, y + mapListH + gap,
       leftW, h - mapListH - gap, App)
   end
 
-  if not source then
-    Kit.card(centerX, y, centerW, h, 10 * s)
-    local Maps = require("Maps")
-    Maps.drawClassicTerrain(S, centerX, y, centerW, h, App)
-    Maps.drawDetails(S, rightX, y, rightW, h, App)
-    return
-  end
-
   if S.mapViewMode == "world" then
     S._builderViewHit = false
     local Maps = require("Maps")
     Maps.drawWorld(S, App, centerX, y, centerW + gap + rightW, h)
+    return
+  end
+
+  if not source then
+    if S.mapPreviewOnly then
+      Kit.card(centerX, y, centerW + gap + rightW, h, 10 * s)
+      Kit.text("title", S.builderMapId or "Select a map",
+        centerX + 24 * s, y + 28 * s, PAL.heading)
+      Kit.text("small", "Step 1 complete: you selected a map.",
+        centerX + 24 * s, y + 66 * s, PAL.green)
+      Kit.text("small", "You are looking at a safe preview. Nothing can change yet.",
+        centerX + 24 * s, y + 102 * s, PAL.text)
+      Kit.text("small", "Next: click Edit this map above to make your own copy.",
+        centerX + 24 * s, y + 132 * s, PAL.heading)
+      Kit.text("micro", "Then choose Paint map or Add events, make changes, and Save.",
+        centerX + 24 * s, y + 170 * s, PAL.caption)
+    else
+      Kit.card(centerX, y, centerW, h, 10 * s)
+      local Maps = require("Maps")
+      Maps.drawClassicTerrain(S, centerX, y, centerW, h, App)
+      Maps.drawDetails(S, rightX, y, rightW, h, App)
+    end
     return
   end
 

@@ -130,7 +130,7 @@ LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`
 ## Pack for sharing
 
 ```powershell
-.\scripts\pack_content_editor.ps1              # windows + linux
+.\scripts\pack_content_editor.ps1              # windows + linux + macOS
 .\scripts\pack_content_editor.ps1 -Platform linux
 ```
 
@@ -138,30 +138,41 @@ Builds cache-free packs:
 
 - `dist/win/gen1recomp-content-editor-win64.zip`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz` (LÖVE AppImage)
+- `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz` (LÖVE app)
 
 See `tools/content-editor/PACK_README.md`.
 
 ## Maps
 
-The selected map opens the appropriate terrain editor automatically. **New
-Map** always creates a layered map. Existing classic or imported maps remain
-available and are transparently adapted to the same 16×16 source model when
-selected. Layered terrain is the primary authoring workflow and is part of the
-portable editor; it does not require Tiled.
+The Map Builder header walks through four steps: **Choose a map**, **Make it
+editable**, **Paint or add events**, and **Save your mod**. Existing classic or
+imported maps open in a read-only preview. Click **Edit this map** to create an editable 16×16
+layered copy. Selecting a map, opening World View, scrolling, or using keyboard
+navigation never changes the mod. The layered editor is portable and does not
+require Tiled.
 
 The left column contains the map list and tile sources, the center switches
-between **Terrain** and **Events**, and the right drawer contains **Map**,
+between **Paint map** and **Add events**, and the right drawer contains **Map**,
 **Layers**, **Animate**, and **Warps**. **World View** shows connected neighbors.
+Potentially destructive commands are kept under **More actions**.
+
+To keep the workspace approachable, only the everyday painting/event tools are
+shown initially. **More tools** reveals selection, collision, warps, trainers,
+and other specialized actions. The settings drawer uses four task names:
+**Map setup**, **Layers**, **Tile animation**, and **Doors & exits**, each with a
+short explanation. Map setup initially shows Map options, People & objects,
+Signs & messages, and Wild Pokemon; **More settings** reveals hidden items and
+badge gates. Tile-source importing, replacement, TMX, and export commands live
+under **More options** below the tile palette.
 
 ### Create or open
 
-- **+ New** opens a short form for the custom map ID, even cell dimensions,
-  and starting game tileset. Create assigns an index starting at 1000 and
-  opens the new map immediately.
-- Selecting an existing game or classic-editor map prepares it for the 16×16
-  authoring grid automatically.
-  The original map record, objects, signs, encounters, and connections are
-  retained.
+- **Create new map** opens a guided form with **Small room**, **Town**, and
+  **Large area** size presets. A custom size and starting visual style remain
+  available. Create assigns an index starting at 1000 and opens the new map.
+- Selecting an existing game or classic-editor map is navigation-only. Click
+  **Edit Map** when ready; the explicit conversion retains the original map
+  record, objects, signs, encounters, and connections.
 - Width and height are entered in 16×16 walk cells. Both values must be even
   because one game block contains 2×2 cells.
 - Growing a map keeps existing content at the top left. Shrinking removes only
@@ -179,6 +190,14 @@ Imported sources have a **Color mode** enum:
 - `True color` is the default and keeps every PNG color.
 - `Palette` treats the source as four-shade artwork and applies the map's
   effective palette when it must be composed with true-color layers.
+
+The canvas follows the same rule as Save: true-color sources keep their pixels
+and palette sources use the effective map palette, including animated frames
+and transparent layers. **Export PNG** copies one original source without
+quantization; **Export All** writes every available source. Both write to the
+open mod's `exports/tilesets/` folder. This is an editor workspace folder:
+validation and packaging ignore it. Move an original or appropriately
+transformed asset into the mod's `assets/` tree when it is ready to ship.
 
 Do not place ROM-derived graphics in a shared mod. Referencing the player's
 game tileset is safe; only artwork imported into the mod is redistributed.
@@ -271,7 +290,7 @@ grass encounter behavior; additional grass-marked graphics remain walkable.
 
 ### Classic maps and events
 
-Legacy block maps are transparently adapted when selected. NPCs, signs, trainers,
+Legacy block maps are adapted only after **Edit Map** is clicked. NPCs, signs, trainers,
 encounters, connections, palettes, hidden items, and badge gates are embedded
 in the same right-hand **Map** drawer used beside layered terrain. The map list
 and property drawer stay put, and Save compiles the source back into the

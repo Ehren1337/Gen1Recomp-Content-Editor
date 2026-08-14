@@ -185,6 +185,18 @@ function ModIO.exists(path)
   return false
 end
 
+function ModIO.ensureDirectory(path)
+  if type(path) ~= "string" or path == "" then return false, "no directory" end
+  local sep = package.config:sub(1, 1)
+  local command = sep == "\\"
+    -- cmd.exe's bare mkdir exits 1 when the directory already exists.  Export
+    -- All calls this once per source, so make the operation idempotent.
+    and ('if not exist "' .. path .. '" mkdir "' .. path .. '"')
+    or ('mkdir -p "' .. path .. '"')
+  local ok = os.execute(command)
+  return ok == true or ok == 0, ok
+end
+
 function ModIO.engineVersion()
   local ok, Version = pcall(require, "src.core.Version")
   if ok and Version and Version.engine then return Version.engine end

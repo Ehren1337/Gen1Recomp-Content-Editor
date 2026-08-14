@@ -305,13 +305,13 @@ end
 local CELL = 16  -- walk cell; a block is 2x2 cells
 local BLOCK_PX = 32  -- one Gen1 block = 4x4 of 8x8 tiles
 local SECTIONS = {
-  { id = "basics", label = "Basics" },
+  { id = "basics", label = "Map options" },
   { id = "warps", label = "Warps" },
-  { id = "objects", label = "Objects" },
-  { id = "signs", label = "Signs" },
-  { id = "encounters", label = "Encounters" },
-  { id = "hidden", label = "Hidden" },
-  { id = "gates", label = "Gates" },
+  { id = "objects", label = "People & objects" },
+  { id = "signs", label = "Signs & messages" },
+  { id = "encounters", label = "Wild Pokemon" },
+  { id = "hidden", label = "Hidden items", advanced = true },
+  { id = "gates", label = "Badge gates", advanced = true },
 }
 local ENV_GEN2 = {
   "TOWN", "ROUTE", "INDOOR", "CAVE", "ENVIRONMENT_5", "GATE", "DUNGEON",
@@ -7889,7 +7889,9 @@ function Maps.drawDetails(S, x, y, w, h, App)
   local sx, secY = x + 8 * s, y + 34 * s
   local gen2 = Generation.isGen2(S)
   for _, sec in ipairs(SECTIONS) do
-    if sec.id ~= "warps" and not (gen2 and sec.id == "gates") then
+    local show = sec.id ~= "warps" and not (gen2 and sec.id == "gates")
+      and (not sec.advanced or S.mapDetailsAdvanced or S.mapSection == sec.id)
+    if show then
       local label = sectionLabel(S, sec)
       local bw = Kit.textWidth("micro", label) + 14 * s
       if sx + bw > x + w - 8 * s then
@@ -7902,6 +7904,17 @@ function Maps.drawDetails(S, x, y, w, h, App)
       end
       sx = sx + bw + 3 * s
     end
+  end
+  local moreLabel = S.mapDetailsAdvanced and "Fewer settings" or "More settings"
+  local moreW = Kit.textWidth("micro", moreLabel) + 14 * s
+  if sx + moreW > x + w - 8 * s then
+    sx = x + 8 * s
+    secY = secY + 28 * s
+  end
+  if Kit.chip(sx, secY, moreW, 24 * s, moreLabel,
+      S.mapDetailsAdvanced == true, PAL.yellow, PAL.steel,
+      "Show hidden items and badge-gate settings") then
+    S.mapDetailsAdvanced = not S.mapDetailsAdvanced
   end
 
   local viewX = x + pad

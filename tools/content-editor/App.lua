@@ -9,6 +9,7 @@ local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
+local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
 
 local Project = require("Project")
@@ -588,56 +589,6 @@ local function runShell(cmd)
   return exit == 0, out
 end
 
-local function validateDataDir(root)
-  -- Prefer a real ROM/recomp dataset so vanilla id refs (TACKLE, DOJO, …)
-  -- resolve.  Editor "fixtures" mode is only for stub authoring — it must
-  -- not force fixture-base validate when an imported cache exists.
-  local sep = package.config:sub(1, 1)
-  local source = S and S.dataSource or "fixtures"
-
-  local function tryDir(dir)
-    if not dir or dir == "" then return nil end
-    local f = io.open(dir .. sep .. "pokemon.lua", "rb")
-    if not f then return nil end
-    f:close()
-    return dir
-  end
-
-  if source == "recomp" then
-    local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
-      or DataSource.mountedRecompRoot()
-    if recomp and recomp ~= "" then
-      local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
-      if dir then return dir, "imported" end
-    end
-  end
-
-  if source == "local" then
-    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  local save = love.filesystem.getSaveDirectory()
-  if save and save ~= "" then
-    local dir = tryDir(save .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  -- Fallbacks when the active source's path was missing.
-  do
-    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-  local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
-    or DataSource.mountedRecompRoot()
-  if recomp and recomp ~= "" then
-    local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  return nil, "fixture"
-end
-
 function App.validateMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -660,13 +611,18 @@ function App.validateMod()
     say("Installed LuaJIT — validating…")
   end
 
-  local dataDir, base = validateDataDir(root)
+  local dataDir, base = DataSource.validationDataDir({
+    version = S.version,
+    source = S.dataSource,
+    prefs = S.dataPrefs,
+    repoRoot = root,
+  })
   local extraEnv = {}
   if dataDir then
     extraEnv.POKEPORT_DATA_DIR = dataDir
   end
   if base == "fixture" then
-    say("No ROM cache on disk for validate — using fixtures (vanilla ids will fail)")
+    say("No ROM cache — validating structure with fixtures (vanilla references skipped)")
   end
 
   local function runValidate(py)

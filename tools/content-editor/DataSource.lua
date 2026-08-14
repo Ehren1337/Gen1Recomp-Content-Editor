@@ -14,6 +14,8 @@ local SEP = package.config:sub(1, 1)
 local mountedRecomp = nil
 
 local function join(a, b)
+  a, b = tostring(a or ""), tostring(b or "")
+  b = b:gsub("[/\\]", SEP):gsub("^[/\\]+", "")
   if a:sub(-1) == "/" or a:sub(-1) == "\\" then return a .. b end
   return a .. SEP .. b
 end
@@ -451,6 +453,57 @@ end
 
 function DataSource.mountedRecompRoot()
   return mountedRecomp
+end
+
+-- Resolve the generated-data directory used by external tools such as
+-- modkit. Cache layout knowledge belongs here, alongside mounting/importing,
+-- rather than in the application shell.
+function DataSource.validationDataDir(opts)
+  opts = opts or {}
+  local version = opts.version or "red"
+  local source = opts.source or "fixtures"
+  local prefs = opts.prefs or {}
+  local repoRoot = opts.repoRoot
+  local GameVersion = require("src.core.GameVersion")
+  local prefix = GameVersion.cachePrefix(version) or ""
+
+  local function generated(root, versioned)
+    if not root or root == "" then return nil end
+    local base = root
+    if versioned and prefix ~= "" then base = join(base, prefix) end
+    local candidate = join(join(base, "data"), "generated")
+    if fileExists(join(candidate, "pokemon.lua")) then return candidate end
+    return nil
+  end
+
+  local function versionedGenerated(root)
+    local candidate = generated(root, true)
+    if not candidate and version == "red" then
+      candidate = generated(root, false)
+    end
+    return candidate
+  end
+
+  local recompRoot = prefs.recompRoot or mountedRecomp
+  if source == "recomp" then
+    local candidate = generated(recompRoot, false)
+    if candidate then return candidate, "imported" end
+  elseif source == "local" then
+    local candidate = versionedGenerated(repoRoot)
+    if candidate then return candidate, "imported" end
+  end
+
+  if love and love.filesystem and love.filesystem.getSaveDirectory then
+    local saveRoot = love.filesystem.getSaveDirectory()
+    local candidate = versionedGenerated(saveRoot)
+    if candidate then return candidate, "imported" end
+  end
+
+  local localFallback = versionedGenerated(repoRoot)
+  if localFallback then return localFallback, "imported" end
+  local recompFallback = generated(recompRoot, false)
+  if recompFallback then return recompFallback, "imported" end
+  return nil, "fixture"
 end
 
 local function ensureDir(path)

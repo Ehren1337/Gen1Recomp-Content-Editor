@@ -76,7 +76,10 @@ def luajit_env():
 IMAGE_EXTS = {".png"}
 ASSET_EXTS = {".png", ".wav", ".bin"}
 ROM_PATCH_EXTS = {".gb", ".gbc", ".ips", ".bps"}
-SKIP_DIRS = {".git", ".modkit", "__pycache__", ".vscode"}
+# Editor exports are working/reference files, not shippable mod content.  Keeping
+# them out of the package also prevents a lossless vanilla preview from being
+# mistaken for a redistributed ROM-derived asset by MK302.
+SKIP_DIRS = {".git", ".modkit", "__pycache__", ".vscode", "exports"}
 
 GENERATED_MODULES = [
     "constants", "maps", "tilesets", "text", "text_pointers",
@@ -775,7 +778,11 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None):
             # with the known set spelled out; the loader's echo adds nothing
             if "unknown permission" in message:
                 continue
-            add(Finding(classify_error(message), "error", message))
+            rule = classify_error(message)
+            if base != "imported" and rule == "MK102":
+                skipped.add("MK102")
+                continue
+            add(Finding(rule, "error", message))
         elif kind == "IGN" and len(parts) > 1:
             if "unknown permission" in parts[1]:
                 continue
@@ -809,8 +816,11 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None):
             mod_id, _version, state, error = (parts[1], parts[2], parts[3],
                                               "\t".join(parts[4:]))
             if state not in ("loaded", "disabled") and error:
-                add(Finding(classify_error(error), "error",
-                            f"{mod_id}: {error}"))
+                rule = classify_error(error)
+                if base != "imported" and rule == "MK102":
+                    skipped.add("MK102")
+                    continue
+                add(Finding(rule, "error", f"{mod_id}: {error}"))
     if skipped and notes is not None:
         notes.append(
             "%s not checked: the ROM-free fixture base only stands in for "

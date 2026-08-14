@@ -35,6 +35,8 @@ Outputs (no ROM cache):
 - `dist/win/gen1recomp-content-editor-win64.zip` → `ContentEditor.bat`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz` → `./ContentEditor.sh`
   (after `chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage`)
+- macOS: `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz` →
+  `./ContentEditor.command`
 
 On **Project → GAME DATA** they can **Link Recomp** (reuse an existing
 install’s cache), **Import ROM** (cache in the LÖVE save directory), or
@@ -183,6 +185,11 @@ Tileset color mode is an enum:
 - **True color** preserves all PNG colors and is the default for imported art.
 - **Palette** treats the PNG as four-shade graphics and applies the map palette.
 
+The canvas uses the same color rule as Save, including animated frames and
+transparent layers. **Export PNG** copies the selected original source without
+quantization; **Export All** writes every available source. Both export to the
+open mod's `exports/tilesets/` folder.
+
 ### Tile animations
 
 Tile animations are authored from imported PNG sources; game tileset sources
@@ -307,5 +314,6 @@ Outputs:
 
 - `dist/win/gen1recomp-content-editor-win64.zip`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz`
+- `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz`
 
 Editor + LÖVE runtime + fixtures + sample mods, **no ROM cache**.
