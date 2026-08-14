@@ -13,8 +13,10 @@ LOVE=""
 if [[ -x "love/love-11.5-x86_64.AppImage" ]]; then
   LOVE="./love/love-11.5-x86_64.AppImage"
 elif [[ -f "love/love-11.5-x86_64.AppImage" ]]; then
-  # Still not executable (no-chmod FS); try invoking via the dynamic loader.
-  LOVE="./love/love-11.5-x86_64.AppImage"
+  echo "The bundled LOVE AppImage is not executable."
+  echo "Run: chmod 755 ContentEditor.sh love/love-11.5-x86_64.AppImage"
+  echo "If the launcher itself is not executable, start it once with: bash ContentEditor.sh"
+  exit 1
 elif [[ -x "love/love" ]]; then
   LOVE="./love/love"
 elif command -v love >/dev/null 2>&1; then

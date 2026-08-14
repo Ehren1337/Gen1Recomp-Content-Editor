@@ -298,7 +298,7 @@ with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
         name = m.name.replace('\\', '/')
         base = os.path.basename(name)
         if name.endswith(want) or base in ('ContentEditor.sh', 'ContentEditor.command'):
-            m.mode = (m.mode & 0o777) | 0o755
+            m.mode = 0o755
         f = inn.extractfile(m) if m.isfile() else None
         out.addfile(m, f)
 shutil.move(tmp, src)
