@@ -326,7 +326,29 @@ function Project.draw(S, x, y, w, h, App)
   end
   row = row + btnH + 20 * s
 
+  -- Validate / Playtest share the OVERVIEW caption row so they stay on screen.
+  -- GAME DATA + the overview card already fill a 1080p content pane; drawing
+  -- the buttons under that card puts them behind the status bar.
+  local fh = 28 * s
+  local btnW = 120 * s
   Kit.caption(x, row, "OVERVIEW")
+  if S.project then
+    if Kit.button(x + w - 2 * btnW - 10 * s, row, btnW, fh, "Validate", {
+        kind = "primary",
+        tooltip = "Run python tools/modkit.py validate on this mod",
+      }) then
+      if App.validateMod then App.validateMod()
+      else S.status = "Implement App.validateMod() to run modkit validate from the editor" end
+    end
+    if Kit.button(x + w - btnW, row, btnW, fh, "Playtest", {
+        kind = "accent",
+        tooltip = "Launch the bundled game runtime with only this mod enabled\n"
+          .. "using the ROM version selected in the editor",
+      }) then
+      if App.playtestMod then App.playtestMod()
+      else S.status = "Implement App.playtestMod() to launch a playtest build" end
+    end
+  end
   row = row + 28 * s
 
   if not S.project then
@@ -354,27 +376,6 @@ function Project.draw(S, x, y, w, h, App)
     x + 20 * s, row + 90 * s, PAL.muted)
 
   row = row + overviewH + 12 * s
-
-  -- Always above the fold: GAME DATA used to push these into a lower card
-  -- that early-returned when the window was too short.
-  local fh = 28 * s
-  local btnW = 120 * s
-  if Kit.button(x, row, btnW, fh, "Validate", {
-      kind = "primary",
-      tooltip = "Run python tools/modkit.py validate on this mod",
-    }) then
-    if App.validateMod then App.validateMod()
-    else S.status = "Implement App.validateMod() to run modkit validate from the editor" end
-  end
-  if Kit.button(x + btnW + 10 * s, row, btnW, fh, "Playtest", {
-      kind = "accent",
-      tooltip = "Launch the bundled game runtime with only this mod enabled\n"
-        .. "using the ROM version selected in the editor",
-    }) then
-    if App.playtestMod then App.playtestMod()
-    else S.status = "Implement App.playtestMod() to launch a playtest build" end
-  end
-  row = row + fh + 8 * s
   if S.validateOutput and S.validateOutput ~= "" then
     local lines = lastValidateLines(S.validateOutput, 6)
     for _, line in ipairs(lines) do
