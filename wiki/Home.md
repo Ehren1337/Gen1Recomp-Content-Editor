@@ -17,4 +17,3 @@ authors to edit generated Lua by hand.
 
 Portable packages contain no ROM or ROM-derived cache. Each user links a local
 Gen1Recomp checkout or imports their own supported game ROM.
-

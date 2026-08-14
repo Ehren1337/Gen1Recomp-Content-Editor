@@ -11,4 +11,3 @@ if [ ! -x "$LOVE" ]; then
 fi
 
 exec "$LOVE" "$HERE" --content-editor "$@"
-
