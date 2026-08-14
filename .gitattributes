@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Unix launchers must retain LF even when packaged from a Windows checkout.
+ContentEditor.sh text eol=lf
+ContentEditor.command text eol=lf
+
+# Windows launcher remains native to cmd.exe.
+ContentEditor.bat text eol=crlf

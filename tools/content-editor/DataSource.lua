@@ -528,14 +528,26 @@ end
 local function copyFileRaw(src, dest)
   local inf = io.open(src, "rb")
   if not inf then return false, "cannot read " .. tostring(src) end
-  local data = inf:read("*a")
+  local data, readErr = inf:read("*a")
   inf:close()
+  if data == nil then
+    return false, "cannot read " .. tostring(src) .. ": "
+      .. tostring(readErr or "unknown read error")
+  end
   local parent = dest:match("^(.*)[/\\][^/\\]+$")
   if parent then ensureDir(parent) end
   local out = io.open(dest, "wb")
   if not out then return false, "cannot write " .. tostring(dest) end
-  out:write(data)
-  out:close()
+  local written, writeErr = out:write(data)
+  local closed, closeErr = out:close()
+  if not written then
+    return false, "cannot write " .. tostring(dest) .. ": "
+      .. tostring(writeErr or "unknown write error")
+  end
+  if not closed then
+    return false, "cannot close " .. tostring(dest) .. ": "
+      .. tostring(closeErr or "unknown close error")
+  end
   return true
 end
 
@@ -562,13 +574,9 @@ local function listDir(path)
 end
 
 local function isDir(path)
-  -- Append sep and try opening as file; directories fail io.open for write check.
-  local f = io.open(path, "rb")
-  if f then
-    f:close()
-    return false
-  end
-  -- Directory: dir listing succeeds and path has no trailing file open.
+  -- Test directory semantics before io.open. On Linux, opening a directory in
+  -- binary read mode can succeed; treating that handle as a file makes *a
+  -- return nil and used to crash copyFileRaw with write(nil).
   local platform = (love and love.system and love.system.getOS
     and love.system.getOS()) or ""
   if platform == "Windows" or SEP == "\\" then
