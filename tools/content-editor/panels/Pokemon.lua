@@ -1290,6 +1290,13 @@ local function drawDex(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     local function mutateDex()
       return ensureDexOwned(S, id, App)
     end
+    row("Dex #", function(fx, fy_, fw, fh_)
+      local cur = de.dex or 0
+      local v = numField(S, App, "pk_ddex", fx, fy_, 80 * s, fh_, cur)
+      if v ~= cur then de = mutateDex(); de.dex = v end
+      Kit.text("micro", "National order (used by NEW/OLD/A-Z list + printed #)",
+        fx + 90 * s, fy_ + 8 * s, PAL.faint)
+    end)
     row("Kind", function(fx, fy_, fw, fh_)
       local v = field(S, App, "pk_dk", fx, fy_, fw, fh_, de.kind or "", "LEAF")
       if v ~= (de.kind or "") then de = mutateDex(); de.kind = v end
