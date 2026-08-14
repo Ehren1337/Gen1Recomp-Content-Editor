@@ -341,7 +341,8 @@ with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
 shutil.move(tmp, src)
 print('exec bits set; launcher CR stripped')
 "@
-  $pyFile = Join-Path $env:TEMP "ce_fix_linux_tar_exec.py"
+  # $env:TEMP is not guaranteed on Unix PowerShell (including ubuntu-latest).
+  $pyFile = Join-Path ([IO.Path]::GetTempPath()) "ce_fix_linux_tar_exec.py"
   Set-Content -Path $pyFile -Value $py -Encoding utf8
   $python = $null
   foreach ($c in @("python", "py", "python3")) {

@@ -18,20 +18,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install LuaJIT on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y luajit
-      - name: Install LuaJIT on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install luajit --no-progress -y
+      - uses: step-security/msvc-dev-cmd@v1
+      - uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: luajit-2.1
       - name: Run runtime compatibility tests
         shell: bash
         run: |
-          luajit tests/test_state_stack.lua
-          luajit tests/content-editor/test_manifest_target.lua
-          luajit tests/content-editor/test_mapbuilder_manifest.lua
-          luajit tests/content-editor/test_tileset_export.lua
+          lua tests/test_state_stack.lua
+          lua tests/content-editor/test_manifest_target.lua
+          lua tests/content-editor/test_mapbuilder_manifest.lua
+          lua tests/content-editor/test_tileset_export.lua
 
   linux-package:
     runs-on: ubuntu-latest
