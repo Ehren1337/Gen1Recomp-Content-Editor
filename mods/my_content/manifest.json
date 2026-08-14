@@ -10,10 +10,12 @@
   "gen2compat": true,
   "category": "GAMEPLAY",
   "priority": 100,
+  "permissions": ["filesystem"],
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
   "incompatible": [],
   "experimental": false,
-  "description": "Authored with the Gen1Recomp content editor"
+  "description": "Authored with the Gen1Recomp content editor",
+  "assets_transforms": "mapbuilder_transforms.lua"
 }

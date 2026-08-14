@@ -30,6 +30,14 @@ function StateStack:pop()
   return state
 end
 
+-- Game2 boot cinema and Pack/Party exitToField.  Pop so each state's exit
+-- and screen.popped still run (same loop Game.lua uses at title / restore).
+function StateStack:clear()
+  while self:top() do
+    self:pop()
+  end
+end
+
 function StateStack:top()
   return self.states[#self.states]
 end
