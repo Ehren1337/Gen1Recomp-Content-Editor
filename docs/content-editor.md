@@ -115,17 +115,21 @@ idea as `love . --editor` Events).
 
 On **Project**, **Validate** / **Playtest** sit under Overview.
 
-**Validate** runs `python tools/modkit.py validate <id>` and shows the log.
-If LuaJIT is missing, the editor installs it via the OS package manager
+**Validate** runs `python tools/modkit.py validate <id>` against the ROM
+version currently selected in the editor. The Windows pack includes its
+validator-only LuaJIT under `tools/tooling/luajit`; if LuaJIT is missing, the
+editor installs it via the OS package manager
 (`winget` on Windows, `apt`/`dnf`/`pacman` on Linux when passwordless sudo
 works) and sets `MODKIT_LUAJIT`. It does **not** drop `luajit.exe` into the
 LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`.
 
-**Playtest** enables the mod in options and launches a second LOVE window:
-
-- Linked Recomp → syncs `mods/<id>` into that install and launches it
-- Local / imported cache → launches this pack’s game root
-- Fixtures only → launches with a stub-data warning
+**Playtest** requires a linked Recomp folder. It synchronizes the currently
+open editor project into that runtime's `mods/<id>`, enables only that mod for
+the playtest, and launches the editor's selected game version. The open editor
+project remains the authoring source of truth; each Playtest refreshes the
+runtime copy before launch.
+Imported caches and fixtures remain available for authoring and previews, but
+the editor pack itself is not used as the playtest runtime.
 
 ## Pack for sharing
 

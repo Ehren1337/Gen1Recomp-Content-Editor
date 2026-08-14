@@ -623,6 +623,7 @@ function App.validateMod()
     repoRoot = root,
   })
   local extraEnv = {}
+  extraEnv.MODKIT_VERSION = S.version or "red"
   if dataDir then
     extraEnv.POKEPORT_DATA_DIR = dataDir
   end
@@ -654,21 +655,24 @@ local function resolveLoveExe(searchRoots)
   for _, root in ipairs(searchRoots or {}) do
     if root and root ~= "" then
       local candidates = {
+        -- Fused portable distribution (does not take a source-folder arg).
+        { root .. sep .. "gen1recomp.exe", true },
         -- Windows portable / checkout
-        root .. sep .. "love" .. sep .. "love.exe",
-        root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe",
-        root .. sep .. "love.exe",
+        { root .. sep .. "love" .. sep .. "love.exe", false },
+        { root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe", false },
+        { root .. sep .. "love.exe", false },
         -- Linux portable AppImage / binary
-        root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage",
-        root .. sep .. "love" .. sep .. "love",
+        { root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage", false },
+        { root .. sep .. "love" .. sep .. "love", false },
       }
-      for _, path in ipairs(candidates) do
+      for _, candidate in ipairs(candidates) do
+        local path, fused = candidate[1], candidate[2]
         local f = io.open(path, "rb")
-        if f then f:close(); return path end
+        if f then f:close(); return path, fused end
       end
     end
   end
-  return "love"
+  return "love", false
 end
 
 local function linkedRecompRoot()
@@ -698,55 +702,74 @@ function App.playtestMod()
       return say("Playtest manifest update failed: " .. tostring(wireErr))
     end
   end
-  local packRoot = repoRoot()
   local sep = package.config:sub(1, 1)
-  local source = S.dataSource or "fixtures"
-  -- Prefer Linked Recomp so playtest matches the real game. Mods no longer
-  -- require engine edits (trainer_headers fall back to mods.loaded).
   local recomp = linkedRecompRoot()
-  local launchRoot = packRoot
-  local usedRecomp = false
-
-  if recomp then
-    local dest = recomp .. sep .. "mods" .. sep .. id
-    local src = S.path or (ModIO.modsRoot() .. sep .. id)
-    local okCopy, copyErr = DataSource.copyTree(src, dest)
-    if not okCopy then
-      return say("Playtest sync failed: " .. tostring(copyErr))
-    end
-    launchRoot = recomp
-    usedRecomp = true
+  if not recomp then
+    return say("Playtest requires a Linked Recomp folder. "
+      .. "Use Project > Link Recomp, then try again.")
   end
 
+  local dest = recomp .. sep .. "mods" .. sep .. id
+  local src = S.path or (ModIO.modsRoot() .. sep .. id)
+  -- Fused portable builds do not consistently expose Windows junctions to
+  -- PhysFS, even when symlinks are enabled.  Synchronize the open project to
+  -- the selected runtime's real mods directory so its loader always sees it.
+  local okSync, syncErr = DataSource.copyTree(src, dest)
+  if not okSync then
+    return say("Playtest sync failed: " .. tostring(syncErr))
+  end
+
+  local version = S.version or "red"
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    version = "red"
+  end
+
+  -- A Playtest is an isolated run of the project open in the editor.  Do not
+  -- inherit mods the player enabled in an earlier normal game session.
   local okEnable, errEnable = pcall(function()
-    local LauncherMods = require("src.mods.LauncherMods")
-    LauncherMods.setEnabled(id, true)
+    local SaveData = require("src.core.SaveData")
+    local options = SaveData.loadOptions()
+    options.mods = options.mods or {}
+    for otherId in pairs(options.mods) do
+      options.mods[otherId] = false
+    end
+    options.mods[id] = true
+    options.modsByVersion = options.modsByVersion or {}
+    local bucket = options.modsByVersion[version] or {}
+    options.modsByVersion[version] = bucket
+    for otherId in pairs(bucket) do
+      bucket[otherId] = false
+    end
+    bucket[id] = true
+    SaveData.saveOptions(options)
   end)
   if not okEnable then
     say("Could not enable mod in options: " .. tostring(errEnable))
     return
   end
 
-  local loveExe = usedRecomp
-    and resolveLoveExe({ launchRoot, packRoot })
-    or resolveLoveExe({ packRoot, launchRoot })
+  local loveExe, fused = resolveLoveExe({ recomp, repoRoot() })
   local cmd
   if sep == "\\" then
-    cmd = string.format('start "" "%s" "%s"', loveExe, launchRoot)
+    if fused then
+      cmd = string.format('start "" "%s" --game=%s', loveExe, version)
+    else
+      cmd = string.format('start "" "%s" "%s" --game=%s',
+        loveExe, recomp, version)
+    end
   else
-    cmd = string.format('"%s" "%s" &', loveExe, launchRoot)
+    if fused then
+      cmd = string.format('"%s" --game=%s &', loveExe, version)
+    else
+      cmd = string.format('"%s" "%s" --game=%s &',
+        loveExe, recomp, version)
+    end
   end
   local ok, err = pcall(os.execute, cmd)
   if not ok then
     return say("Playtest launch failed: " .. tostring(err))
   end
-  if usedRecomp then
-    say("Playtest launched in linked Recomp with mod: " .. id)
-  elseif source == "fixtures" then
-    say("Playtest launched (fixtures - stub data only). Import ROM for full game.")
-  else
-    say("Playtest launched with mod enabled: " .. id)
-  end
+  say("Playtest launched " .. version .. " with selected editor mod: " .. id)
 end
 
 function App.markDirty()

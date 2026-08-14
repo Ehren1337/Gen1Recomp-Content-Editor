@@ -111,6 +111,17 @@ end
 function DataSource.isValidRecompRoot(path)
   if type(path) ~= "string" or path == "" then return false end
   path = path:gsub("[/\\]+$", "")
+  -- A fused Windows distribution is a complete Playtest runtime even though
+  -- it has no visible main.lua (the game source is fused into the executable).
+  if fileExists(join(path, "gen1recomp.exe")) then return true end
+  -- A linked Recomp is also the Playtest runtime.  Its ROM cache may live in
+  -- the shared LÖVE save directory, so a genuine source checkout remains a
+  -- valid link even when it has no generated data inside the repository.
+  if fileExists(join(path, "main.lua"))
+      and fileExists(join(path, "src" .. SEP .. "mods" .. SEP .. "Loader.lua"))
+      and fileExists(join(path, "src" .. SEP .. "core" .. SEP .. "LaunchOptions.lua")) then
+    return true
+  end
   -- Legacy un-prefixed cache, or any GameVersion cachePrefix tree
   -- (red/, blue/, yellow/, gold/).
   if fileExists(join(path, "data" .. SEP .. "generated" .. SEP .. "maps.lua")) then
@@ -372,8 +383,7 @@ end
 
 function DataSource.linkRecomp(path)
   if not DataSource.isValidRecompRoot(path) then
-    return nil, "Folder needs data/generated or <version>/data/generated "
-      .. "(import a ROM in Gen1Recomp first)"
+    return nil, "Folder is not a Gen1Recomp checkout or generated-data folder"
   end
   path = path:gsub("[/\\]+$", "")
   local prefs = DataSource.setMode("recomp", path)

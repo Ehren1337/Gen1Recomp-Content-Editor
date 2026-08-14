@@ -39,10 +39,11 @@ on first load, so the shareable mod contains no copied game graphics.
 
 ## Playtest
 
-- With a **linked Recomp**, Playtest copies your mod into that install’s
-  `mods\` and launches it there.
-- With an **imported** / local cache, Playtest launches this pack as the game.
-- With **fixtures only**, Playtest is stub data — Link or Import for a real run.
+- With a **linked Recomp**, Playtest synchronizes the open mod into that
+  install’s `mods\`, isolates it from other enabled mods, and launches the
+  selected game version there.
+- With an **imported** cache or **fixtures only**, authoring and previews still
+  work, but Playtest asks you to link a separate Recomp runtime first.
 
 ## Share your mod
 
