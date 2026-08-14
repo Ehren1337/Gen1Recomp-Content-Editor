@@ -317,7 +317,7 @@ function ModIO.load(modDir)
   return project
 end
 
-function ModIO.save(modDir, project)
+function ModIO.save(modDir, project, version)
   if project._protectMain then
     return false,
       "this mod has a hand-written main.lua (e.g. example_mew_starter); "
@@ -359,17 +359,28 @@ function ModIO.save(modDir, project)
     os.remove(schemasPath)
   end
 
-  -- keep manifest name in sync when present
+  -- Keep editor-owned manifest fields aligned with the selected ROM target.
+  -- Content generated from Gold maps/tilesets is not valid on Red merely
+  -- because both runtimes share the same mod API.
   local manifestPath = join(modDir, "manifest.json")
-  if ModIO.exists(manifestPath) and project.name then
+  if ModIO.exists(manifestPath) then
     local mh = io.open(manifestPath, "rb")
     if mh then
       local text = mh:read("*a")
       mh:close()
-      text = text:gsub('"name"%s*:%s*"[^"]*"',
-        string.format('"name": "%s"', project.name:gsub('"', '\\"')))
-      local mw = io.open(manifestPath, "wb")
-      if mw then mw:write(text); mw:close() end
+      local manifest, decodeErr = Json.decode(text)
+      if not manifest then return false, decodeErr end
+      if project.name then manifest.name = project.name end
+      if version then
+        local Generation = require("Generation")
+        local target = { version = version }
+        manifest.games = Generation.manifestGames(target)
+        manifest.gen2compat = Generation.isGen2(target)
+      end
+      local mw, manifestErr = io.open(manifestPath, "wb")
+      if not mw then return false, manifestErr end
+      mw:write(ModIO.encodeManifest(manifest))
+      mw:close()
     end
   end
   return true
@@ -686,6 +697,20 @@ end
 
 function ModIO.encodeManifest(data)
   return encodeJsonValue(data or {}, "") .. "\n"
+end
+
+function ModIO.setManifestTarget(modDir, version, name)
+  local path = join(modDir, "manifest.json")
+  local body, readErr = ModIO.readText(path)
+  if not body then return false, readErr end
+  local manifest, decodeErr = Json.decode(body)
+  if not manifest then return false, decodeErr end
+  if name then manifest.name = name end
+  local Generation = require("Generation")
+  local target = { version = version }
+  manifest.games = Generation.manifestGames(target)
+  manifest.gen2compat = Generation.isGen2(target)
+  return ModIO.writeText(path, ModIO.encodeManifest(manifest))
 end
 
 function ModIO.readManifest(modId)

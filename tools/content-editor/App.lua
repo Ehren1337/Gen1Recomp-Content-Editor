@@ -564,7 +564,7 @@ function App.save()
     base.tilesets = tilesets
   end
   ModIO._emitBaseData = base
-  local ok, err = ModIO.save(S.path, S.project)
+  local ok, err = ModIO.save(S.path, S.project, S.version)
   ModIO._emitBaseData = nil
   if ok then
     S.dirty = false
@@ -716,6 +716,20 @@ function App.playtestMod()
   local root = repoRoot()
   local recomp = linkedRecompRoot()
   local src = S.path or (ModIO.modsRoot() .. sep .. id)
+  local version = S.version or "red"
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    version = "red"
+  end
+
+  -- Existing projects may predate version-scoped manifests. Ensure a Gold
+  -- project cannot be loaded against Red (or vice versa) even when Playtest
+  -- did not need to save any dirty editor fields first.
+  local okTarget, targetErr = ModIO.setManifestTarget(
+    src, version, S.project.name)
+  if not okTarget then
+    return say("Playtest target update failed: " .. tostring(targetErr))
+  end
+
   local bundledMods = root .. sep .. "mods" .. sep .. id
   if not samePath(src, bundledMods) then
     -- A project opened from an external/linked location must be copied into
@@ -725,11 +739,6 @@ function App.playtestMod()
     if not okSync then
       return say("Playtest sync failed: " .. tostring(syncErr))
     end
-  end
-
-  local version = S.version or "red"
-  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
-    version = "red"
   end
 
   -- A Playtest is an isolated run of the project open in the editor.  Do not

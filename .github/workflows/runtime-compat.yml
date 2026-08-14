@@ -29,6 +29,7 @@ jobs:
         shell: bash
         run: |
           luajit tests/test_state_stack.lua
+          luajit tests/content-editor/test_manifest_target.lua
           luajit tests/content-editor/test_mapbuilder_manifest.lua
           luajit tests/content-editor/test_tileset_export.lua
 
