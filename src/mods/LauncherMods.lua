@@ -254,6 +254,50 @@ function LauncherMods.list()
   return result or {}
 end
 
+local STRINGS_CATALOG = "lang/strings.lua"
+
+local function readStringsCatalog(path)
+  local fs = love and love.filesystem
+  if not (fs and fs.read) then return nil end
+  local rel = path .. "/" .. STRINGS_CATALOG
+  local raw = fs.read(rel)
+  if type(raw) ~= "string" or raw == "" then return nil end
+  local chunk = loadstring(raw, "@" .. rel)
+  if not chunk then return nil end
+  if setfenv then setfenv(chunk, {}) end
+  local ok, result = pcall(chunk)
+  if not ok or type(result) ~= "table" then return nil end
+  return result
+end
+
+function LauncherMods.deriveStrings(rows, byId, read)
+  local merged, any = {}, false
+  for _, row in ipairs(rows or {}) do
+    local manifest = row.enabled and byId and byId[row.id] or nil
+    local catalog = manifest and manifest.path and read(manifest.path)
+    for source, value in pairs(catalog or {}) do
+      if type(source) == "string" and type(value) == "string"
+          and value ~= "" then
+        merged[source] = value
+        any = true
+      end
+    end
+  end
+  return any and merged or nil
+end
+
+function LauncherMods.translationStrings()
+  local ok, merged = pcall(function()
+    local manifests = discover()
+    if #manifests == 0 then return nil end
+    local rows = LauncherMods.deriveList(manifests, SaveData.loadOptions())
+    local byId = {}
+    for _, manifest in ipairs(manifests) do byId[manifest.id] = manifest end
+    return LauncherMods.deriveStrings(rows, byId, readStringsCatalog)
+  end)
+  return ok and merged or nil
+end
+
 -- setEnabled(id, enabled): persist options.mods[id] in the exact shape
 -- Loader:_saveState writes (a plain boolean), so the running game and the
 -- in-game ManagerState pick it up unchanged.

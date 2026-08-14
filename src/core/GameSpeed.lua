@@ -51,4 +51,11 @@ function GameSpeed.cycle(v, dir)
   return levels[nextIdx]
 end
 
+GameSpeed.CATEGORIES = { "overworld", "battle", "menu" }
+
+function GameSpeed.optionKey(category)
+  category = tostring(category or "overworld")
+  return "speed" .. category:sub(1, 1):upper() .. category:sub(2)
+end
+
 return GameSpeed
