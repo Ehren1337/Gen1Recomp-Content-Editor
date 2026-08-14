@@ -1310,10 +1310,11 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
   map.blocks = mapBlocks
   map.borderBlock = 0
   map.warps = warpRecords or {}
-  -- The generated tileset is unique to this map, so its flag is enough for
-  -- the runtime and remains compatible with map schemas that predate the
-  -- optional per-map trueColor field.
-  map.trueColor = nil
+  -- Carry this on both records.  The tileset flag is the canonical link, but
+  -- editor/world previews can temporarily retain an older tileset object
+  -- while a generated map is being rebuilt.  The map-level override makes
+  -- the color contract immediate and is also what TileRenderer checks first.
+  map.trueColor = trueColor and true or nil
   map._layeredSource = mapId
   return map, tileset
 end

@@ -6,6 +6,9 @@ local Json = require("src.link.Json")
 
 local ModIO = {}
 
+local MAP_BUILDER_TRANSFORM = "mapbuilder_transforms.lua"
+local FILESYSTEM_PERMISSION = "filesystem"
+
 local function join(a, b)
   if a:sub(-1) == "/" or a:sub(-1) == "\\" then return a .. b end
   return a .. package.config:sub(1, 1) .. b
@@ -525,8 +528,17 @@ function ModIO.copyFile(src, dest)
   return true
 end
 
--- Map Builder owns one transform recipe. Keep the manifest wiring automatic
--- so the generated mod can derive base-game pixels from the player's cache.
+local function ensureArrayValue(values, wanted)
+  values = type(values) == "table" and values or {}
+  for _, value in ipairs(values) do
+    if value == wanted then return values end
+  end
+  values[#values + 1] = wanted
+  return values
+end
+
+-- Map Builder owns one transform recipe. Keep the manifest wiring and its
+-- least-privilege capability declaration together as one idempotent update.
 function ModIO.setMapBuilderTransform(modDir, relative)
   if type(modDir) ~= "string" then return false, "no mod directory" end
   local path = join(modDir, "manifest.json")
@@ -535,15 +547,23 @@ function ModIO.setMapBuilderTransform(modDir, relative)
   local manifest, decodeErr = Json.decode(body)
   if not manifest then return false, decodeErr end
 
-  local owned = "mapbuilder_transforms.lua"
   local current = manifest.assets_transforms
-  if relative and current and current ~= owned then
+  if relative and relative ~= MAP_BUILDER_TRANSFORM then
+    return false, "unsupported Map Builder transform " .. tostring(relative)
+  end
+  if relative and current and current ~= MAP_BUILDER_TRANSFORM then
     return false, "Map Builder cannot replace the existing assets_transforms file "
       .. tostring(current)
   end
   if relative then
-    manifest.assets_transforms = owned
-  elseif current == owned then
+    manifest.assets_transforms = MAP_BUILDER_TRANSFORM
+    -- The generated recipe writes its flattened atlases into the derived
+    -- asset cache through ctx.writeImage.  Keep the capability declaration
+    -- in sync automatically; otherwise a freshly-authored layered map saves
+    -- successfully but is rejected as soon as Playtest loads the mod.
+    manifest.permissions = ensureArrayValue(
+      manifest.permissions, FILESYSTEM_PERMISSION)
+  elseif current == MAP_BUILDER_TRANSFORM then
     manifest.assets_transforms = nil
   end
   return ModIO.writeText(path, ModIO.encodeManifest(manifest))
@@ -552,7 +572,7 @@ end
 function ModIO.removeMapBuilderTransform(modDir)
   local ok, err = ModIO.setMapBuilderTransform(modDir, nil)
   if not ok then return false, err end
-  local path = join(modDir, "mapbuilder_transforms.lua")
+  local path = join(modDir, MAP_BUILDER_TRANSFORM)
   if ModIO.exists(path) then
     local removed, removeErr = os.remove(path)
     if not removed then return false, removeErr end

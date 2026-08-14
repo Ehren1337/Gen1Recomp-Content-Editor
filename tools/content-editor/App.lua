@@ -529,7 +529,8 @@ end
 
 function App.save()
   if not S or not S.path or not S.project then
-    return say("No mod open")
+    say("No mod open")
+    return false
   end
   -- Layered maps are editor source. Compile them into normal map and tileset
   -- records before ModWriter serializes the portable mod.
@@ -537,10 +538,12 @@ function App.save()
     return LayeredMap.compileProject(S)
   end)
   if not okLayered then
-    return say("Save failed: " .. tostring(layeredResult))
+    say("Save failed: " .. tostring(layeredResult))
+    return false
   end
   if layeredResult == false then
-    return say("Save failed: " .. tostring(layeredErr))
+    say("Save failed: " .. tostring(layeredErr))
+    return false
   end
 
   -- Base ROM data so move/item/tileset patches emit diffs + prefer :patch.
@@ -566,8 +569,10 @@ function App.save()
   if ok then
     S.dirty = false
     say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
+    return true
   else
     say("Save failed: " .. tostring(err))
+    return false
   end
 end
 
@@ -594,7 +599,7 @@ function App.validateMod()
     return say("No mod open")
   end
   if S.dirty then
-    App.save()
+    if not App.save() then return false end
   end
   local id = S.project.id
   local root = repoRoot()
@@ -680,8 +685,19 @@ function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
-  if anyDirty(S) then App.save() end
+  if anyDirty(S) and not App.save() then return false end
   local id = S.project.id
+  -- Older editor saves can already contain the Map Builder transform without
+  -- its required filesystem capability.  Repair that manifest before either
+  -- launching locally or copying it into a linked Recomp install, even when
+  -- the project had no dirty edits for App.save() to rewrite.
+  if S.project.layeredTransform then
+    local wired, wireErr = ModIO.setMapBuilderTransform(
+      S.path or ModIO.modDir(id), S.project.layeredTransform)
+    if not wired then
+      return say("Playtest manifest update failed: " .. tostring(wireErr))
+    end
+  end
   local packRoot = repoRoot()
   local sep = package.config:sub(1, 1)
   local source = S.dataSource or "fixtures"
