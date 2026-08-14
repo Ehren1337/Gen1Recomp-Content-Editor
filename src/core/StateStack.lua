@@ -30,6 +30,15 @@ function StateStack:pop()
   return state
 end
 
+-- Remove every state through the normal pop lifecycle.  Game2 uses this when
+-- moving between overworld, battle, and title flows; bypassing pop() would
+-- skip state exit hooks and the screen.popped runtime event.
+function StateStack:clear()
+  while #self.states > 0 do
+    self:pop()
+  end
+end
+
 function StateStack:top()
   return self.states[#self.states]
 end

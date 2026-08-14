@@ -259,7 +259,7 @@ function Project.draw(S, x, y, w, h, App)
   Kit.text("micro",
     "Shareable packs ship without a ROM cache. Link your Gen1Recomp folder "
       .. "or Import a ROM (cache stays in the save directory, not this pack). "
-      .. "Playtest launches the Linked Recomp folder when one is set.",
+      .. "Playtest uses this editor package's bundled game runtime.",
     x, row, PAL.muted)
   row = row + 32 * s
   local dsW = 150 * s
@@ -368,9 +368,8 @@ function Project.draw(S, x, y, w, h, App)
   end
   if Kit.button(x + btnW + 10 * s, row, btnW, fh, "Playtest", {
       kind = "accent",
-      tooltip = validRecompRoot
-        and ("Sync the open mod into Linked Recomp and launch:\n" .. tostring(recompRoot))
-        or "Link Recomp first; Playtest does not launch the editor's bundled runtime",
+      tooltip = "Launch the bundled game runtime with only this mod enabled\n"
+        .. "using the ROM version selected in the editor",
     }) then
     if App.playtestMod then App.playtestMod()
     else S.status = "Implement App.playtestMod() to launch a playtest build" end

@@ -1,0 +1,55 @@
+name: Runtime compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lua-runtime-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LuaJIT on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Install LuaJIT on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install luajit --no-progress -y
+      - name: Run runtime compatibility tests
+        shell: bash
+        run: |
+          luajit tests/test_state_stack.lua
+          luajit tests/content-editor/test_mapbuilder_manifest.lua
+          luajit tests/content-editor/test_tileset_export.lua
+
+  linux-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux portable package
+        shell: pwsh
+        run: ./scripts/pack_content_editor.ps1 -Platform linux
+      - name: Verify Linux archive
+        shell: bash
+        run: |
+          archive="$(find dist/linux -name '*.tar.gz' -print -quit)"
+          test -n "$archive"
+          mkdir package
+          tar -xzf "$archive" -C package
+          launcher="$(find package -name ContentEditor.sh -print -quit)"
+          test -x "$launcher"
+          if grep -IU $'\r' "$launcher"; then
+            echo 'ContentEditor.sh contains CRLF line endings' >&2
+            exit 1
+          fi
+          test -f "$(dirname "$launcher")/src/core/StateStack.lua"

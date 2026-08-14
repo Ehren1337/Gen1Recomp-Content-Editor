@@ -668,11 +668,11 @@ local function resolveLoveExe(searchRoots)
       for _, candidate in ipairs(candidates) do
         local path, fused = candidate[1], candidate[2]
         local f = io.open(path, "rb")
-        if f then f:close(); return path, fused end
+        if f then f:close(); return path, fused, root end
       end
     end
   end
-  return "love", false
+  return "love", false, nil
 end
 
 local function linkedRecompRoot()
@@ -683,6 +683,16 @@ local function linkedRecompRoot()
     return recomp:gsub("[/\\]+$", "")
   end
   return nil
+end
+
+local function samePath(a, b)
+  local function normalize(path)
+    path = tostring(path or ""):gsub("[/\\]+", package.config:sub(1, 1))
+      :gsub("[/\\]+$", "")
+    if package.config:sub(1, 1) == "\\" then path = path:lower() end
+    return path
+  end
+  return normalize(a) == normalize(b)
 end
 
 function App.playtestMod()
@@ -703,20 +713,18 @@ function App.playtestMod()
     end
   end
   local sep = package.config:sub(1, 1)
+  local root = repoRoot()
   local recomp = linkedRecompRoot()
-  if not recomp then
-    return say("Playtest requires a Linked Recomp folder. "
-      .. "Use Project > Link Recomp, then try again.")
-  end
-
-  local dest = recomp .. sep .. "mods" .. sep .. id
   local src = S.path or (ModIO.modsRoot() .. sep .. id)
-  -- Fused portable builds do not consistently expose Windows junctions to
-  -- PhysFS, even when symlinks are enabled.  Synchronize the open project to
-  -- the selected runtime's real mods directory so its loader always sees it.
-  local okSync, syncErr = DataSource.copyTree(src, dest)
-  if not okSync then
-    return say("Playtest sync failed: " .. tostring(syncErr))
+  local bundledMods = root .. sep .. "mods" .. sep .. id
+  if not samePath(src, bundledMods) then
+    -- A project opened from an external/linked location must be copied into
+    -- the bundled runtime's source tree. Projects created by this editor are
+    -- already there, so the common path performs no redundant copy.
+    local okSync, syncErr = DataSource.copyTree(src, bundledMods)
+    if not okSync then
+      return say("Playtest sync failed: " .. tostring(syncErr))
+    end
   end
 
   local version = S.version or "red"
@@ -748,28 +756,41 @@ function App.playtestMod()
     return
   end
 
-  local loveExe, fused = resolveLoveExe({ recomp, repoRoot() })
+  -- The package is a complete game runtime. Prefer its pinned, tested source
+  -- and LÖVE binary so Playtest does not depend on a separately installed or
+  -- differently-versioned Recomp checkout. A linked folder is only a binary
+  -- fallback for development checkouts that do not bundle LÖVE.
+  local loveExe, fused, runtimeRoot = resolveLoveExe({ root, recomp })
+  runtimeRoot = runtimeRoot or root
+  if not samePath(runtimeRoot, root) then
+    local runtimeMods = runtimeRoot .. sep .. "mods" .. sep .. id
+    local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
+    if not okSync then
+      return say("Playtest fallback sync failed: " .. tostring(syncErr))
+    end
+  end
   local cmd
   if sep == "\\" then
     if fused then
       cmd = string.format('start "" "%s" --game=%s', loveExe, version)
     else
       cmd = string.format('start "" "%s" "%s" --game=%s',
-        loveExe, recomp, version)
+        loveExe, runtimeRoot, version)
     end
   else
     if fused then
       cmd = string.format('"%s" --game=%s &', loveExe, version)
     else
       cmd = string.format('"%s" "%s" --game=%s &',
-        loveExe, recomp, version)
+        loveExe, runtimeRoot, version)
     end
   end
   local ok, err = pcall(os.execute, cmd)
   if not ok then
     return say("Playtest launch failed: " .. tostring(err))
   end
-  say("Playtest launched " .. version .. " with selected editor mod: " .. id)
+  say("Standalone Playtest launched " .. version
+    .. " with selected editor mod: " .. id)
 end
 
 function App.markDirty()
