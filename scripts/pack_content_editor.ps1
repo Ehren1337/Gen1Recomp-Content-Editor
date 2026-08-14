@@ -56,6 +56,13 @@ function Clear-RomCache([string]$Stage) {
   }
 }
 
+function ConvertTo-UnixLineEndings([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path)
+  $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+  $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+  [IO.File]::WriteAllText($Path, $text, $utf8WithoutBom)
+}
+
 function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   Write-Host "Staging $Kind from $Root -> $Stage"
   if (Test-Path $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
@@ -91,6 +98,9 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   }
   Copy-Item -LiteralPath $launcherPath `
     -Destination (Join-Path $Stage $launcher) -Force
+  if ($Kind -eq "linux" -or $Kind -eq "macOS") {
+    ConvertTo-UnixLineEndings (Join-Path $Stage $launcher)
+  }
 
   $packReadme = Join-Path $Root "tools\content-editor\PACK_README.md"
   if (-not (Test-Path $packReadme)) {
