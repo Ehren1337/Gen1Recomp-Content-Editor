@@ -30,11 +30,10 @@ function StateStack:pop()
   return state
 end
 
--- Remove every state through the normal pop lifecycle.  Game2 uses this when
--- moving between overworld, battle, and title flows; bypassing pop() would
--- skip state exit hooks and the screen.popped runtime event.
+-- Game2 boot cinema and Pack/Party exitToField.  Pop so each state's exit
+-- and screen.popped still run (same loop Game.lua uses at title / restore).
 function StateStack:clear()
-  while #self.states > 0 do
+  while self:top() do
     self:pop()
   end
 end
