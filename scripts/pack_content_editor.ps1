@@ -46,6 +46,16 @@ function Copy-TreeFiltered {
   }
 }
 
+# Unix launchers must be LF-only. Copy-Item from a Windows checkout can
+# leave CR bytes, and macOS then treats the shebang as /bin/sh^M.
+function ConvertTo-UnixFile([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $text = [System.IO.File]::ReadAllText($Path)
+  $unix = $text -replace "`r`n", "`n" -replace "`r", "`n"
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($Path, $unix, $utf8)
+}
+
 function Clear-RomCache([string]$Stage) {
   @(
     (Join-Path $Stage "portable.txt"),
@@ -89,8 +99,15 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   if (-not (Test-Path $launcherPath)) {
     throw "Missing $launcher - cannot build the $Kind package."
   }
-  Copy-Item -LiteralPath $launcherPath `
-    -Destination (Join-Path $Stage $launcher) -Force
+  $launcherDest = Join-Path $Stage $launcher
+  Copy-Item -LiteralPath $launcherPath -Destination $launcherDest -Force
+  if ($Kind -eq "linux" -or $Kind -eq "macOS") {
+    ConvertTo-UnixFile $launcherDest
+    $launcherBytes = [System.IO.File]::ReadAllBytes($launcherDest)
+    if ($launcherBytes -contains 13) {
+      throw "$launcher still has CR bytes after Unix conversion."
+    }
+  }
 
   $packReadme = Join-Path $Root "tools\content-editor\PACK_README.md"
   if (-not (Test-Path $packReadme)) {
@@ -121,13 +138,21 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
       Copy-Item -LiteralPath $src -Destination (Join-Path $toolsStage $extra) -Force
     }
   }
-  foreach ($mf in @(
-    "rom_manifest.json", "rom_manifest_blue.json", "rom_manifest_yellow.json"
+  $manifests = @(Get-ChildItem -LiteralPath (Join-Path $Root "tools") `
+    -Filter "rom_manifest*.json")
+  foreach ($need in @(
+    "rom_manifest.json",
+    "rom_manifest_blue.json",
+    "rom_manifest_yellow.json",
+    "rom_manifest_gold.json"
   )) {
-    $src = Join-Path $Root "tools\$mf"
-    if (Test-Path $src) {
-      Copy-Item -LiteralPath $src -Destination (Join-Path $toolsStage $mf) -Force
+    if (-not ($manifests | Where-Object { $_.Name -eq $need })) {
+      throw "Missing tools\$need - cannot build pack."
     }
+  }
+  foreach ($mf in $manifests) {
+    Copy-Item -LiteralPath $mf.FullName `
+      -Destination (Join-Path $toolsStage $mf.Name) -Force
   }
 
   $dataStage = Join-Path $Stage "data"
@@ -288,21 +313,26 @@ function Pack-Windows {
 function Set-LinuxTarExecBits([string]$TarPath) {
   # Windows tar stores .sh / AppImage as 644. Rewrite modes so extract is +x.
   $py = @"
-import tarfile, os, tempfile, shutil
+import io, tarfile, os, tempfile, shutil
 src = r'''$TarPath'''
 fd, tmp = tempfile.mkstemp(suffix='.tar.gz')
 os.close(fd)
 want = ('.sh', '.command', '.AppImage', '/Contents/MacOS/love')
+launchers = ('ContentEditor.sh', 'ContentEditor.command')
 with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
     for m in inn.getmembers():
         name = m.name.replace('\\', '/')
         base = os.path.basename(name)
-        if name.endswith(want) or base in ('ContentEditor.sh', 'ContentEditor.command'):
+        if name.endswith(want) or base in launchers:
             m.mode = 0o755
         f = inn.extractfile(m) if m.isfile() else None
+        if f is not None and base in launchers:
+            data = f.read().replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+            m.size = len(data)
+            f = io.BytesIO(data)
         out.addfile(m, f)
 shutil.move(tmp, src)
-print('exec bits set on .sh / AppImage')
+print('exec bits set; launcher CR stripped')
 "@
   $pyFile = Join-Path $env:TEMP "ce_fix_linux_tar_exec.py"
   Set-Content -Path $pyFile -Value $py -Encoding utf8

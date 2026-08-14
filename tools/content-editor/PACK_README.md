@@ -10,6 +10,20 @@ link a Gen1Recomp install or import your own ROM.
 
 **Windows:** unzip anywhere → double-click `ContentEditor.bat`.
 
+**macOS:**
+
+```sh
+tar -xzf gen1recomp-content-editor-macos-universal.tar.gz
+cd gen1recomp-content-editor-macos-universal
+chmod +x ContentEditor.command
+./ContentEditor.command
+```
+
+Do not open `love/love.app` directly — that yields `No code to run`.
+The pack script writes `ContentEditor.command` with LF endings; if an older
+Windows-built pack still has `^M` in the shebang, run
+`sed -i '' 's/\r$//' ContentEditor.command` once.
+
 **Linux (x86_64):**
 
 ```sh
@@ -25,7 +39,7 @@ Without one, Link Recomp / Import ROM opens an in-app path paste box instead.
 Then on **Project** → **GAME DATA**:
 
 - **Link Recomp** — pick your Gen1Recomp folder (must already have imported a ROM), or
-- **Import ROM** — choose a clean US Red/Blue/Yellow `.gb` (cache goes to the LÖVE save directory, not this pack), or
+- **Import ROM** — choose a clean US Red/Blue/Yellow `.gb` or Gold `.gbc` (cache goes to the LÖVE save directory, not this pack), or
 - **Use fixtures** — keep stub data for light authoring.
 
 **Project** → Open `mods/New_PokemonTest`, or **Create** a new mod. Use
@@ -89,7 +103,7 @@ Zip and send the `mods\<your_mod>\` folder.
 
 ## Notes
 
-- Windows 64-bit and Linux x86_64 packs. LÖVE 11.5 is included.
+- Windows 64-bit, Linux x86_64, and macOS universal packs. LÖVE 11.5 is included.
 - Do **not** ship ROM files (`.gb`) or `data/generated` / `assets/generated`.
 - Do not ship `save/mod-derived`; Gen1Recomp rebuilds those animation/map assets.
 - More detail: `docs/content-editor.md`
