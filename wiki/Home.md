@@ -8,6 +8,15 @@ authors to edit generated Lua by hand.
 - [[Maps]] — view, create, paint, connect, animate, and export maps.
 - Open or create a mod from **Project** before editing content.
 - Use **Save** to compile editor source into normal Gen1Recomp mod records.
+- Selecting a source-game map is always a read-only preview; click
+  **Edit this map** explicitly before changing it.
+
+## Documentation
+
+- The repository `README.md` is the quick-start and maintainer packaging guide.
+- `docs/content-editor.md` is the complete editor reference.
+- `tools/content-editor/PACK_README.md` ships inside portable releases.
+- `mods/PALLET_CHAOS/` is a full map-authoring example project.
 
 ## Portable packages
 

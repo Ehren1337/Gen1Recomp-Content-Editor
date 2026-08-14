@@ -152,8 +152,9 @@ navigation never changes the mod. The layered editor is portable and does not
 require Tiled.
 
 The left column contains the map list and tile sources, the center switches
-between **Paint map** and **Add events**, and the right drawer contains **Map**,
-**Layers**, **Animate**, and **Warps**. **World View** shows connected neighbors.
+between **Paint map** and **Add events**, and the right drawer contains
+**Map setup**, **Layers**, **Tile animation**, and **Doors & exits**.
+**World View** shows connected neighbors.
 Potentially destructive commands are kept under **More actions**.
 
 To keep the workspace approachable, only the everyday painting/event tools are
@@ -236,7 +237,7 @@ selected event and Delete removes it. The **Dialog** action opens its text.
 ### Tile animation
 
 Select a tile from an imported PNG and click **Animate tile** below the tile
-palette. In the **Animate** panel, choose a starting frame count. Each frame
+palette. In **Tile animation**, choose a starting frame count. Each frame
 can then use any tile from that PNG, have its own duration in milliseconds,
 and be reordered, added, or deleted. Animated starting tiles are marked **A**
 in the palette. New animations initially use consecutive tiles from left to
@@ -296,9 +297,9 @@ in the same right-hand **Map** drawer used beside layered terrain. The map list
 and property drawer stay put, and Save compiles the source back into the
 runtime's normal 32×32 metatile block representation.
 
-Warp endpoints and links live only in the dedicated **Warps** drawer. The Map
-drawer retains connections, which describe neighboring-map seams rather than
-coordinate transfer events.
+Warp endpoints and links live only in **Doors & exits**. **Map setup** retains
+connections, which describe neighboring-map seams rather than coordinate
+transfer events.
 
 ### Optional Pokemonium / Pokenet TMX import
 
@@ -314,5 +315,5 @@ Tiled dependency.
 ## Related
 
 - [Tiled map editing](tiled-map-editing.md)
-- [Modding](modding.md)
+- [Content Editor quick start](../README.md)
 - Save editor: `love . --editor` (player saves, not content)

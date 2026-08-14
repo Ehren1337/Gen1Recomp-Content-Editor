@@ -20,10 +20,10 @@ Maps already owned by the project show **EDIT** in the list.
 
 ## Create a map
 
-1. Click **+ New Map**.
+1. Click **Create new map**.
 2. Enter a unique ID.
 3. Enter even width and height values. Sizes are measured in 16×16 walk cells.
-4. Choose the starting game tileset and click **Create**.
+4. Choose the starting visual style and click **Create map**.
 
 Both dimensions must be even because the runtime stores four 16×16 cells in
 each 32×32 block.
@@ -31,14 +31,22 @@ each 32×32 block.
 ## Workspace layout
 
 - Left: map search/list and tileset sources.
-- Center: Terrain or Events toolbar and canvas.
-- Right: Map, Layers, Animate, and Warps drawers.
-- Header: World View, Edit Map, New Map, Clear Events, and Delete Map.
+- Center: **Paint map** or **Add events** toolbar and canvas.
+- Right: **Map setup**, **Layers**, **Tile animation**, and
+  **Doors & exits** drawers.
+- Header: the four-step guide, World View, **Edit this map**,
+  **Create new map**, and **More actions**.
 
 The map list uses full IDs. **EDIT** is a text label as well as a color cue, so
 editable state does not depend on color alone.
 
-## Terrain tools
+The initial view contains the everyday controls. **More tools** reveals
+selection, collision, warp, trainer, and other specialized tools;
+**More settings** reveals hidden items and badge gates; **More options** reveals
+tileset import, replacement, TMX, and export; and **More actions** contains
+destructive or legacy map commands.
+
+## Paint map tools
 
 | Tool | Action |
 |---|---|
@@ -107,16 +115,16 @@ Animated starting tiles show **A**. Choose **Static** to remove an animation.
 Save writes frame images and timing records; durations are converted to the
 runtime's 60 Hz clock.
 
-## Events
+## Add events
 
-Switch the center toolbar to **Events** to place an Event, Sign, Trainer, or
-fixed Wild encounter. **Select** chooses an existing marker without creating
+Switch the center toolbar to **Add events** to place an Event, Sign, Trainer,
+or fixed Wild encounter. **Select** chooses an existing marker without creating
 one. Drag a marker to move it, Ctrl+C/Ctrl+V to duplicate it, Delete to remove
 it, and **Dialog** to edit associated text.
 
-## Warps
+## Doors & exits
 
-The Warps drawer uses stable endpoints and generates runtime indices on Save.
+**Doors & exits** uses stable endpoints and generates runtime indices on Save.
 
 - **Two-way:** A links to B and B links to A.
 - **One-way:** A links to B; B is arrival-only.

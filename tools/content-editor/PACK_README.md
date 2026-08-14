@@ -39,21 +39,26 @@ from each player's own imported cache on first load.
 
 The former Map Builder and Maps screens are now one workspace:
 
-- Select or create maps in the left column; **+ New Map** creates a layered map.
-- Use **Terrain** for tiles, selections, passage, and warps.
-- Use **Events** for NPCs, signs, trainers, fixed wild encounters, and dragging
-  existing event markers.
-- Use the right-side **Map**, **Layers**, **Animate**, and **Warps** drawers for
+- Select a map in the left column to preview it without changing the mod.
+- Click **Edit this map** to make an editable layered copy, or use
+  **Create new map** to start from a size preset and visual style.
+- Use **Paint map** for terrain and passage, and **Add events** for NPCs, signs,
+  trainers, fixed wild encounters, and dragging existing markers.
+- Use **Map setup**, **Layers**, **Tile animation**, and **Doors & exits** for
   settings. **World View** shows connected neighbors.
+- Use **More tools**, **More settings**, **More options**, and **More actions**
+  when you need specialized or destructive commands.
 
-Existing maps are prepared for the 16×16 editor when selected. Save still emits
-the normal Gen1Recomp map blocks and records.
+Selecting, scrolling, keyboard navigation, and World View never convert a
+source-game map. Save still emits normal Gen1Recomp map blocks and records for
+maps explicitly added to the project.
 
 ## Tile animations
 
-1. In **Maps**, add a 16×16-tile source with **+ New PNG**.
+1. In **Maps**, open **More options** and add a 16×16-tile source with
+   **+ New PNG**.
 2. Select a tile and click **Animate tile**.
-3. Choose an initial frame count in **Animate**.
+3. Choose an initial frame count in **Tile animation**.
 4. Set each frame's tile and duration in milliseconds; reorder, add, or delete
    frames as needed. Tiles marked **A** are animated starting tiles.
 5. Save and Playtest. The first game load builds derived frame images in the
