@@ -1,0 +1,78 @@
+name: Sync Gen1Recomp runtime
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-gen1recomp-runtime
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge current upstream runtime
+        id: merge
+        env:
+          UPSTREAM_REPOSITORY: bryanthaboi/gen1recomp
+          UPSTREAM_REF: dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add runtime-upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch runtime-upstream "$UPSTREAM_REF"
+          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="sync/gen1recomp-runtime"
+          git fetch origin "$branch:refs/remotes/origin/$branch" || true
+          git switch -C "$branch"
+          git merge --no-edit "$upstream_sha"
+          python3 - "$upstream_sha" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path('.github/runtime-upstream.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          data['integratedCommit'] = sys.argv[1]
+          path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+          PY
+          git add .github/runtime-upstream.json
+          git commit -m "chore: record synced Gen1Recomp runtime" || true
+          git push --force-with-lease="refs/heads/$branch" origin "$branch:$branch"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Create ready-for-review pull request
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          short_sha="${UPSTREAM_SHA:0:12}"
+          existing="$(gh pr list --head sync/gen1recomp-runtime --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" \
+              --title "chore: sync Gen1Recomp runtime ${short_sha}" \
+              --body "Automated daily sync of bryanthaboi/gen1recomp@${UPSTREAM_SHA}. Runtime compatibility and Linux package checks must pass before merge."
+          else
+            gh pr create \
+              --base main \
+              --head sync/gen1recomp-runtime \
+              --title "chore: sync Gen1Recomp runtime ${short_sha}" \
+              --body "Automated daily sync of bryanthaboi/gen1recomp@${UPSTREAM_SHA}. Runtime compatibility and Linux package checks must pass before merge."
+          fi
