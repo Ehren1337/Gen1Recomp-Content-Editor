@@ -66,6 +66,13 @@ function Clear-RomCache([string]$Stage) {
   }
 }
 
+function ConvertTo-UnixLineEndings([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path)
+  $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+  $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+  [IO.File]::WriteAllText($Path, $text, $utf8WithoutBom)
+}
+
 function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   Write-Host "Staging $Kind from $Root -> $Stage"
   if (Test-Path $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }

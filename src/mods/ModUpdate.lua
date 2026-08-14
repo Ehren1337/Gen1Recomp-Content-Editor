@@ -382,6 +382,22 @@ function ModUpdate.fetchReleases(repo, modId, opts)
   return list, nil, { fromCache = false }
 end
 
+-- Preserve the handle-based UI contract while using this snapshot's existing
+-- synchronous host transport. Work is deferred until the first pump call.
+function ModUpdate.beginFetchReleases(repo, modId, opts)
+  return { repo = repo, modId = modId, opts = opts or {}, pending = true }
+end
+
+function ModUpdate.pumpFetchReleases(handle)
+  if not handle then return true, nil, "no handle" end
+  if handle.pending then
+    handle.pending = false
+    handle.releases, handle.err, handle.meta = ModUpdate.fetchReleases(
+      handle.repo, handle.modId, handle.opts)
+  end
+  return true, handle.releases, handle.err, handle.meta
+end
+
 function ModUpdate.downloadZip(url, destName)
   if type(url) ~= "string" or url == "" then
     return nil, "missing download url"
@@ -411,6 +427,21 @@ function ModUpdate.downloadZip(url, destName)
     return nil, "download failed"
   end
   return name
+end
+
+function ModUpdate.beginDownloadZip(url, destName, size)
+  return { url = url, destName = destName, size = size, pending = true }
+end
+
+function ModUpdate.pumpDownloadZip(handle)
+  if not handle then return true, nil, "no handle" end
+  if handle.pending then
+    handle.pending = false
+    handle.path, handle.err = ModUpdate.downloadZip(
+      handle.url, handle.destName)
+  end
+  return true, handle.path, handle.err,
+    { received = handle.path and handle.size or 0, total = handle.size }
 end
 
 return ModUpdate

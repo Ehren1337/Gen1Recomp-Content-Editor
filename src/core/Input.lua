@@ -286,6 +286,65 @@ function Input:joystickhat(joystick, hat, direction)
   self.hatDirs[hat] = dirs
 end
 
+function Input:reconcile()
+  local keyboard = love and love.keyboard
+  if keyboard and keyboard.isDown then
+    for key, btn in pairs(self.keyBindings) do
+      local ok, down = pcall(keyboard.isDown, key)
+      if ok and down then press(self, btn, "key:" .. key) end
+    end
+  end
+
+  local joystickApi = love and love.joystick
+  if not (joystickApi and joystickApi.getJoysticks) then return end
+  local ok, joysticks = pcall(joystickApi.getJoysticks)
+  if not ok or type(joysticks) ~= "table" then return end
+  for _, joystick in ipairs(joysticks) do
+    if GamepadMap.ignoreRawForJoystick(joystick) then
+      if joystick.isGamepadDown then
+        for button, btn in pairs(self.padBindings) do
+          local readOk, down = pcall(
+            joystick.isGamepadDown, joystick, button)
+          if readOk and down then press(self, btn, "pad:" .. button) end
+        end
+      end
+      if joystick.getGamepadAxis then
+        for _, axis in ipairs({ "leftx", "lefty" }) do
+          local readOk, value = pcall(
+            joystick.getGamepadAxis, joystick, axis)
+          if readOk and type(value) == "number" then
+            self:gamepadaxis(joystick, axis, value)
+          end
+        end
+      end
+    else
+      if joystick.isDown then
+        for index, btn in pairs(self.joyBindings) do
+          local readOk, down = pcall(joystick.isDown, joystick, index)
+          if readOk and down then press(self, btn, "joy:" .. index) end
+        end
+      end
+      if joystick.getAxis then
+        for _, axis in ipairs({ 1, 2 }) do
+          local readOk, value = pcall(joystick.getAxis, joystick, axis)
+          if readOk and type(value) == "number" then
+            self:joystickaxis(joystick, axis, value)
+          end
+        end
+      end
+      if joystick.getHatCount and joystick.getHat then
+        local countOk, count = pcall(joystick.getHatCount, joystick)
+        for hat = 1, (countOk and count) or 0 do
+          local readOk, direction = pcall(joystick.getHat, joystick, hat)
+          if readOk and direction then
+            self:joystickhat(joystick, hat, direction)
+          end
+        end
+      end
+    end
+  end
+end
+
 function Input:isDown(btn)
   return self.state[btn] or false
 end
