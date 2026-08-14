@@ -16,7 +16,6 @@ authors to edit generated Lua by hand.
 - The repository `README.md` is the quick-start and maintainer packaging guide.
 - `docs/content-editor.md` is the complete editor reference.
 - `tools/content-editor/PACK_README.md` ships inside portable releases.
-- `mods/PALLET_CHAOS/` is a full map-authoring example project.
 
 ## Portable packages
 

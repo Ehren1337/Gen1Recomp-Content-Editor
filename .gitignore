@@ -8,6 +8,10 @@ portable.txt
 *.gb
 *.gbc
 
+# Local content projects; keep only the bundled starter under version control
+/mods/*/
+!/mods/my_content/
+
 # Tool caches
 __pycache__/
 *.pyc
