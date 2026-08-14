@@ -122,7 +122,8 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     }
   }
   foreach ($mf in @(
-    "rom_manifest.json", "rom_manifest_blue.json", "rom_manifest_yellow.json"
+    "rom_manifest.json", "rom_manifest_blue.json", "rom_manifest_yellow.json",
+    "rom_manifest_gold.json"
   )) {
     $src = Join-Path $Root "tools\$mf"
     if (Test-Path $src) {
