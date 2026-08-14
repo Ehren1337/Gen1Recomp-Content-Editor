@@ -35,6 +35,8 @@ Outputs (no ROM cache):
 - `dist/win/gen1recomp-content-editor-win64.zip` → `ContentEditor.bat`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz` → `./ContentEditor.sh`
   (after `chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage`)
+- macOS: `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz` →
+  `./ContentEditor.command`
 
 On **Project → GAME DATA** they can **Link Recomp** (reuse an existing
 install’s cache), **Import ROM** (cache in the LÖVE save directory), or
@@ -98,33 +100,42 @@ require switching between two tabs.
 
 The workspace is arranged as follows:
 
-- **Top bar** — World View / Back to Editor, Delete Map, Clear Events, and
-  **+ New Map**.
+- **Top bar** — the four-step guide, World View / Back to Editor,
+  **Edit this map**, **Create new map**, and **More actions**.
 - **Left column** — map list followed by the active tileset-source palette.
-- **Center** — the 16×16 terrain/event canvas and its mode-specific tools.
-- **Right drawer** — **Map**, **Layers**, **Animate**, and **Warps**.
+- **Center** — the 16×16 canvas, switching between **Paint map** and
+  **Add events**.
+- **Right drawer** — **Map setup**, **Layers**, **Tile animation**, and
+  **Doors & exits**.
 
-Use **+ New Map** for new map work. New maps always use the layered 16×16
-workflow. Selecting an existing or imported map prepares it for the same grid
-automatically; Save compiles the editable source back to Gen1Recomp's normal
-32×32 block representation. Tiled and manual runtime-data editing are not
-required.
+Selecting an existing or imported map opens a read-only preview. This is safe
+navigation and never adds data to the mod. Click **Edit this map** only when you
+want an editable project copy; the conversion retains the map record, objects,
+signs, encounters, connections, and other metadata. New maps always use the
+layered 16×16 workflow. Save compiles editable sources back to Gen1Recomp's
+normal 32×32 block representation. Tiled and manual runtime-data editing are
+not required.
 
 ### Create and navigate maps
 
-1. Select an existing map, or click **+ New Map** and choose the custom map ID,
-   size, and starting game tileset. Existing maps are prepared for 16×16 editing
-   automatically when selected.
-2. Click **+ New PNG** below the tile palette to add a source arranged as 16×16
+1. Select an existing map and click **Edit this map**, or click
+   **Create new map** and choose an ID, size preset, and starting visual style.
+2. Open **More options** and click **+ New PNG** to add a source arranged as 16×16
    tiles. A map can paint from several imported PNG sources and game tilesets.
 3. Add and reorder layers. Layers are exported by default; turn **Out** off to
    keep a reference layer in the project without putting it in the game.
 4. Paint collision and warps, then Save.
 
 **World View** shows the selected map together with connected neighbors; use
-**Back to Editor** to resume editing. **Clear Events** removes objects, signs,
-transfers, and layered warp endpoints without erasing terrain. **Delete Map**
-deletes a project-owned map; source-game maps revert to their original data.
+**Back to Editor** to resume editing. **More actions** contains destructive and
+legacy commands. **Clear Events** removes objects, signs, transfers, and layered
+warp endpoints without erasing terrain. **Delete Map** deletes a project-owned
+map; source-game maps revert to their original data.
+
+Only common tools and settings are shown initially. **More tools** reveals
+selection, collision, warp, trainer, and other specialized tools.
+**More settings** reveals hidden items and badge gates, while **More options**
+contains tileset import, replacement, TMX, and export actions.
 
 The editor keeps the original layer data in `editor_project.lua`. Save also
 generates runtime blocks, collision lists, map records, and a
@@ -135,9 +146,9 @@ carries no copied game graphics. Tile animations require a Gen1Recomp runtime
 that supports the generated `tileset.animatedTiles` records; use the linked
 runtime described under [Tile animations](#tile-animations).
 
-### Terrain mode
+### Paint map mode
 
-Choose **Terrain** above the canvas for tile and passage editing. Its tools are:
+Choose **Paint map** above the canvas for tile and passage editing. Its tools are:
 
 - **Pencil**, **Eraser**, **Fill**, and **Rectangle** for painting.
 - **Picker** to take a tile and layer from the canvas.
@@ -153,9 +164,9 @@ lines; **Passage** overlays collision without changing the active tool. Zoom
 with **− / +**, **Fit**, or the mouse wheel; pan with the Pan tool, middle mouse,
 Space/Alt drag, WASD, or horizontal/modified wheel input.
 
-### Event mode
+### Add events mode
 
-Choose **Events** above the canvas to place and edit map events in the same
+Choose **Add events** above the canvas to place and edit map events in the same
 16×16 coordinate system:
 
 - **Event** — NPC or scripted object.
@@ -170,18 +181,24 @@ it. **Dialog** opens the text associated with the current map or selected event.
 
 ### Property drawers
 
-- **Map** contains the selected map's gameplay settings and event details.
+- **Map setup** contains the selected map's gameplay settings and event details.
 - **Layers** creates, names, reorders, hides, exports, and changes opacity for
   terrain layers. **Eye** affects editor visibility; **Out** controls Save output.
   It also contains safe map resizing. Growth adds space on the right/bottom;
   shrinking reports and removes out-of-bounds terrain and events.
-- **Animate** controls imported-PNG color mode and tile animation frames.
-- **Warps** creates links and lists/deletes stable endpoints on the current map.
+- **Tile animation** controls imported-PNG color mode and animation frames.
+- **Doors & exits** creates links and lists/deletes stable endpoints on the
+  current map.
 
 Tileset color mode is an enum:
 
 - **True color** preserves all PNG colors and is the default for imported art.
 - **Palette** treats the PNG as four-shade graphics and applies the map palette.
+
+The canvas uses the same color rule as Save, including animated frames and
+transparent layers. **Export PNG** copies the selected original source without
+quantization; **Export All** writes every available source. Both export to the
+open mod's `exports/tilesets/` folder.
 
 ### Tile animations
 
@@ -189,7 +206,8 @@ Tile animations are authored from imported PNG sources; game tileset sources
 remain available for painting but cannot define custom animation frames.
 
 1. Select the tile that should act as the animated tile.
-2. Click **Animate tile** below the tile palette, or open the **Animate** drawer.
+2. Click **Animate tile** below the tile palette, or open the
+   **Tile animation** drawer.
 3. Choose **2**, **3**, **4**, **6**, or **8** to create an initial sequence.
    New sequences begin with consecutive tiles in sheet order.
 4. Edit each frame independently:
@@ -215,7 +233,7 @@ launch the mod again so its derived assets can be generated.
 
 ### Warps without indices
 
-Choose **Warps** and select a link type:
+Choose **Doors & exits** and select a link type:
 
 - **Two-way** — source and destination return to each other.
 - **One-way** — the destination is arrival-only and does not immediately fire.
@@ -232,7 +250,7 @@ warps, NPCs, or signs that end up outside the smaller map.
 The **Map** drawer also exposes encounters, connections, palettes, hidden items,
 badge gates, and other classic map metadata. Connections remain in **Map**
 because they describe neighboring-map seams; coordinate transfers belong in
-**Warps**.
+**Doors & exits**.
 
 ### Optional TMX import
 
@@ -307,5 +325,6 @@ Outputs:
 
 - `dist/win/gen1recomp-content-editor-win64.zip`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz`
+- `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz`
 
 Editor + LÖVE runtime + fixtures + sample mods, **no ROM cache**.

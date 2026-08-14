@@ -14,6 +14,8 @@ local SEP = package.config:sub(1, 1)
 local mountedRecomp = nil
 
 local function join(a, b)
+  a, b = tostring(a or ""), tostring(b or "")
+  b = b:gsub("[/\\]", SEP):gsub("^[/\\]+", "")
   if a:sub(-1) == "/" or a:sub(-1) == "\\" then return a .. b end
   return a .. SEP .. b
 end
@@ -109,6 +111,17 @@ end
 function DataSource.isValidRecompRoot(path)
   if type(path) ~= "string" or path == "" then return false end
   path = path:gsub("[/\\]+$", "")
+  -- A fused Windows distribution is a complete Playtest runtime even though
+  -- it has no visible main.lua (the game source is fused into the executable).
+  if fileExists(join(path, "gen1recomp.exe")) then return true end
+  -- A linked Recomp is also the Playtest runtime.  Its ROM cache may live in
+  -- the shared LÖVE save directory, so a genuine source checkout remains a
+  -- valid link even when it has no generated data inside the repository.
+  if fileExists(join(path, "main.lua"))
+      and fileExists(join(path, "src" .. SEP .. "mods" .. SEP .. "Loader.lua"))
+      and fileExists(join(path, "src" .. SEP .. "core" .. SEP .. "LaunchOptions.lua")) then
+    return true
+  end
   -- Legacy un-prefixed cache, or any GameVersion cachePrefix tree
   -- (red/, blue/, yellow/, gold/).
   if fileExists(join(path, "data" .. SEP .. "generated" .. SEP .. "maps.lua")) then
@@ -370,8 +383,7 @@ end
 
 function DataSource.linkRecomp(path)
   if not DataSource.isValidRecompRoot(path) then
-    return nil, "Folder needs data/generated or <version>/data/generated "
-      .. "(import a ROM in Gen1Recomp first)"
+    return nil, "Folder is not a Gen1Recomp checkout or generated-data folder"
   end
   path = path:gsub("[/\\]+$", "")
   local prefs = DataSource.setMode("recomp", path)
@@ -451,6 +463,57 @@ end
 
 function DataSource.mountedRecompRoot()
   return mountedRecomp
+end
+
+-- Resolve the generated-data directory used by external tools such as
+-- modkit. Cache layout knowledge belongs here, alongside mounting/importing,
+-- rather than in the application shell.
+function DataSource.validationDataDir(opts)
+  opts = opts or {}
+  local version = opts.version or "red"
+  local source = opts.source or "fixtures"
+  local prefs = opts.prefs or {}
+  local repoRoot = opts.repoRoot
+  local GameVersion = require("src.core.GameVersion")
+  local prefix = GameVersion.cachePrefix(version) or ""
+
+  local function generated(root, versioned)
+    if not root or root == "" then return nil end
+    local base = root
+    if versioned and prefix ~= "" then base = join(base, prefix) end
+    local candidate = join(join(base, "data"), "generated")
+    if fileExists(join(candidate, "pokemon.lua")) then return candidate end
+    return nil
+  end
+
+  local function versionedGenerated(root)
+    local candidate = generated(root, true)
+    if not candidate and version == "red" then
+      candidate = generated(root, false)
+    end
+    return candidate
+  end
+
+  local recompRoot = prefs.recompRoot or mountedRecomp
+  if source == "recomp" then
+    local candidate = generated(recompRoot, false)
+    if candidate then return candidate, "imported" end
+  elseif source == "local" then
+    local candidate = versionedGenerated(repoRoot)
+    if candidate then return candidate, "imported" end
+  end
+
+  if love and love.filesystem and love.filesystem.getSaveDirectory then
+    local saveRoot = love.filesystem.getSaveDirectory()
+    local candidate = versionedGenerated(saveRoot)
+    if candidate then return candidate, "imported" end
+  end
+
+  local localFallback = versionedGenerated(repoRoot)
+  if localFallback then return localFallback, "imported" end
+  local recompFallback = generated(recompRoot, false)
+  if recompFallback then return recompFallback, "imported" end
+  return nil, "fixture"
 end
 
 local function ensureDir(path)

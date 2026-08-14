@@ -142,11 +142,14 @@ end
 local function windowsCandidates()
   local s = sep()
   local list = {}
+  local source = love and love.filesystem and love.filesystem.getSource
+    and love.filesystem.getSource() or "."
   local pf = os.getenv("ProgramFiles") or "C:\\Program Files"
   local pf86 = os.getenv("ProgramFiles(x86)") or "C:\\Program Files (x86)"
   local localApp = os.getenv("LOCALAPPDATA") or ""
   -- winget DEVCOM.LuaJIT installs here (per-user), not under Program Files.
   local extras = {
+    source .. s .. "tools" .. s .. "tooling" .. s .. "luajit" .. s .. "luajit.exe",
     localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe",
     localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "luajit.exe",
     pf .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe",

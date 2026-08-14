@@ -9,6 +9,7 @@ local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
+local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
 
 local Project = require("Project")
@@ -528,7 +529,8 @@ end
 
 function App.save()
   if not S or not S.path or not S.project then
-    return say("No mod open")
+    say("No mod open")
+    return false
   end
   -- Layered maps are editor source. Compile them into normal map and tileset
   -- records before ModWriter serializes the portable mod.
@@ -536,10 +538,12 @@ function App.save()
     return LayeredMap.compileProject(S)
   end)
   if not okLayered then
-    return say("Save failed: " .. tostring(layeredResult))
+    say("Save failed: " .. tostring(layeredResult))
+    return false
   end
   if layeredResult == false then
-    return say("Save failed: " .. tostring(layeredErr))
+    say("Save failed: " .. tostring(layeredErr))
+    return false
   end
 
   -- Base ROM data so move/item/tileset patches emit diffs + prefer :patch.
@@ -565,8 +569,10 @@ function App.save()
   if ok then
     S.dirty = false
     say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
+    return true
   else
     say("Save failed: " .. tostring(err))
+    return false
   end
 end
 
@@ -588,62 +594,12 @@ local function runShell(cmd)
   return exit == 0, out
 end
 
-local function validateDataDir(root)
-  -- Prefer a real ROM/recomp dataset so vanilla id refs (TACKLE, DOJO, …)
-  -- resolve.  Editor "fixtures" mode is only for stub authoring — it must
-  -- not force fixture-base validate when an imported cache exists.
-  local sep = package.config:sub(1, 1)
-  local source = S and S.dataSource or "fixtures"
-
-  local function tryDir(dir)
-    if not dir or dir == "" then return nil end
-    local f = io.open(dir .. sep .. "pokemon.lua", "rb")
-    if not f then return nil end
-    f:close()
-    return dir
-  end
-
-  if source == "recomp" then
-    local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
-      or DataSource.mountedRecompRoot()
-    if recomp and recomp ~= "" then
-      local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
-      if dir then return dir, "imported" end
-    end
-  end
-
-  if source == "local" then
-    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  local save = love.filesystem.getSaveDirectory()
-  if save and save ~= "" then
-    local dir = tryDir(save .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  -- Fallbacks when the active source's path was missing.
-  do
-    local dir = tryDir(root .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-  local recomp = (S.dataPrefs and S.dataPrefs.recompRoot)
-    or DataSource.mountedRecompRoot()
-  if recomp and recomp ~= "" then
-    local dir = tryDir(recomp .. sep .. "data" .. sep .. "generated")
-    if dir then return dir, "imported" end
-  end
-
-  return nil, "fixture"
-end
-
 function App.validateMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
   if S.dirty then
-    App.save()
+    if not App.save() then return false end
   end
   local id = S.project.id
   local root = repoRoot()
@@ -660,13 +616,19 @@ function App.validateMod()
     say("Installed LuaJIT — validating…")
   end
 
-  local dataDir, base = validateDataDir(root)
+  local dataDir, base = DataSource.validationDataDir({
+    version = S.version,
+    source = S.dataSource,
+    prefs = S.dataPrefs,
+    repoRoot = root,
+  })
   local extraEnv = {}
+  extraEnv.MODKIT_VERSION = S.version or "red"
   if dataDir then
     extraEnv.POKEPORT_DATA_DIR = dataDir
   end
   if base == "fixture" then
-    say("No ROM cache on disk for validate — using fixtures (vanilla ids will fail)")
+    say("No ROM cache — validating structure with fixtures (vanilla references skipped)")
   end
 
   local function runValidate(py)
@@ -693,21 +655,24 @@ local function resolveLoveExe(searchRoots)
   for _, root in ipairs(searchRoots or {}) do
     if root and root ~= "" then
       local candidates = {
+        -- Fused portable distribution (does not take a source-folder arg).
+        { root .. sep .. "gen1recomp.exe", true },
         -- Windows portable / checkout
-        root .. sep .. "love" .. sep .. "love.exe",
-        root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe",
-        root .. sep .. "love.exe",
+        { root .. sep .. "love" .. sep .. "love.exe", false },
+        { root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe", false },
+        { root .. sep .. "love.exe", false },
         -- Linux portable AppImage / binary
-        root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage",
-        root .. sep .. "love" .. sep .. "love",
+        { root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage", false },
+        { root .. sep .. "love" .. sep .. "love", false },
       }
-      for _, path in ipairs(candidates) do
+      for _, candidate in ipairs(candidates) do
+        local path, fused = candidate[1], candidate[2]
         local f = io.open(path, "rb")
-        if f then f:close(); return path end
+        if f then f:close(); return path, fused end
       end
     end
   end
-  return "love"
+  return "love", false
 end
 
 local function linkedRecompRoot()
@@ -724,57 +689,87 @@ function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
-  if anyDirty(S) then App.save() end
+  if anyDirty(S) and not App.save() then return false end
   local id = S.project.id
-  local packRoot = repoRoot()
-  local sep = package.config:sub(1, 1)
-  local source = S.dataSource or "fixtures"
-  -- Prefer Linked Recomp so playtest matches the real game. Mods no longer
-  -- require engine edits (trainer_headers fall back to mods.loaded).
-  local recomp = linkedRecompRoot()
-  local launchRoot = packRoot
-  local usedRecomp = false
-
-  if recomp then
-    local dest = recomp .. sep .. "mods" .. sep .. id
-    local src = S.path or (ModIO.modsRoot() .. sep .. id)
-    local okCopy, copyErr = DataSource.copyTree(src, dest)
-    if not okCopy then
-      return say("Playtest sync failed: " .. tostring(copyErr))
+  -- Older editor saves can already contain the Map Builder transform without
+  -- its required filesystem capability.  Repair that manifest before either
+  -- launching locally or copying it into a linked Recomp install, even when
+  -- the project had no dirty edits for App.save() to rewrite.
+  if S.project.layeredTransform then
+    local wired, wireErr = ModIO.setMapBuilderTransform(
+      S.path or ModIO.modDir(id), S.project.layeredTransform)
+    if not wired then
+      return say("Playtest manifest update failed: " .. tostring(wireErr))
     end
-    launchRoot = recomp
-    usedRecomp = true
+  end
+  local sep = package.config:sub(1, 1)
+  local recomp = linkedRecompRoot()
+  if not recomp then
+    return say("Playtest requires a Linked Recomp folder. "
+      .. "Use Project > Link Recomp, then try again.")
   end
 
+  local dest = recomp .. sep .. "mods" .. sep .. id
+  local src = S.path or (ModIO.modsRoot() .. sep .. id)
+  -- Fused portable builds do not consistently expose Windows junctions to
+  -- PhysFS, even when symlinks are enabled.  Synchronize the open project to
+  -- the selected runtime's real mods directory so its loader always sees it.
+  local okSync, syncErr = DataSource.copyTree(src, dest)
+  if not okSync then
+    return say("Playtest sync failed: " .. tostring(syncErr))
+  end
+
+  local version = S.version or "red"
+  if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
+    version = "red"
+  end
+
+  -- A Playtest is an isolated run of the project open in the editor.  Do not
+  -- inherit mods the player enabled in an earlier normal game session.
   local okEnable, errEnable = pcall(function()
-    local LauncherMods = require("src.mods.LauncherMods")
-    LauncherMods.setEnabled(id, true)
+    local SaveData = require("src.core.SaveData")
+    local options = SaveData.loadOptions()
+    options.mods = options.mods or {}
+    for otherId in pairs(options.mods) do
+      options.mods[otherId] = false
+    end
+    options.mods[id] = true
+    options.modsByVersion = options.modsByVersion or {}
+    local bucket = options.modsByVersion[version] or {}
+    options.modsByVersion[version] = bucket
+    for otherId in pairs(bucket) do
+      bucket[otherId] = false
+    end
+    bucket[id] = true
+    SaveData.saveOptions(options)
   end)
   if not okEnable then
     say("Could not enable mod in options: " .. tostring(errEnable))
     return
   end
 
-  local loveExe = usedRecomp
-    and resolveLoveExe({ launchRoot, packRoot })
-    or resolveLoveExe({ packRoot, launchRoot })
+  local loveExe, fused = resolveLoveExe({ recomp, repoRoot() })
   local cmd
   if sep == "\\" then
-    cmd = string.format('start "" "%s" "%s"', loveExe, launchRoot)
+    if fused then
+      cmd = string.format('start "" "%s" --game=%s', loveExe, version)
+    else
+      cmd = string.format('start "" "%s" "%s" --game=%s',
+        loveExe, recomp, version)
+    end
   else
-    cmd = string.format('"%s" "%s" &', loveExe, launchRoot)
+    if fused then
+      cmd = string.format('"%s" --game=%s &', loveExe, version)
+    else
+      cmd = string.format('"%s" "%s" --game=%s &',
+        loveExe, recomp, version)
+    end
   end
   local ok, err = pcall(os.execute, cmd)
   if not ok then
     return say("Playtest launch failed: " .. tostring(err))
   end
-  if usedRecomp then
-    say("Playtest launched in linked Recomp with mod: " .. id)
-  elseif source == "fixtures" then
-    say("Playtest launched (fixtures - stub data only). Import ROM for full game.")
-  else
-    say("Playtest launched with mod enabled: " .. id)
-  end
+  say("Playtest launched " .. version .. " with selected editor mod: " .. id)
 end
 
 function App.markDirty()

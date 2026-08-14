@@ -369,8 +369,8 @@ function Project.draw(S, x, y, w, h, App)
   if Kit.button(x + btnW + 10 * s, row, btnW, fh, "Playtest", {
       kind = "accent",
       tooltip = validRecompRoot
-        and ("Sync mod into Linked Recomp and launch:\n" .. tostring(recompRoot))
-        or "Enable this mod and launch (Link Recomp to playtest the full game)",
+        and ("Sync the open mod into Linked Recomp and launch:\n" .. tostring(recompRoot))
+        or "Link Recomp first; Playtest does not launch the editor's bundled runtime",
     }) then
     if App.playtestMod then App.playtestMod()
     else S.status = "Implement App.playtestMod() to launch a playtest build" end

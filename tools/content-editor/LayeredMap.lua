@@ -938,9 +938,24 @@ local function generatedTilesetId(project, mapId)
     .. "_LAYERED"
 end
 
-local function paletteForMap(S, map)
-  local name = Preview.mapPaletteName(S, map)
-  return Preview.paletteColors(S, name)
+local function paletteNameForMap(S, map, mapSource)
+  -- Compiling replaces the authored/base tileset id with a generated id. Gen1
+  -- palette defaults are keyed by the original tileset id, so resolve through
+  -- baseTileset when the map does not carry an explicit palette of its own.
+  if type(map.palette) == "string" and map.palette ~= "" then
+    return map.palette
+  end
+  if mapSource and mapSource.baseTileset then
+    local lookup = setmetatable({ tileset = mapSource.baseTileset },
+      { __index = map })
+    return Preview.mapPaletteName(S, lookup)
+  end
+  return Preview.mapPaletteName(S, map)
+end
+
+local function paletteForMap(S, map, mapSource)
+  local name = paletteNameForMap(S, map, mapSource)
+  return Preview.paletteColors(S, name), name
 end
 
 local function usesTrueColor(context, mapSource)
@@ -1137,8 +1152,17 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     end
   end
 
+  local tilesetId = generatedTilesetId(project, mapId)
+  local previousTileset = project.tilesets[tilesetId]
+  -- GFX/Tilesets is allowed to force a generated atlas to TrueColor. Preserve
+  -- that authored override across recompiles instead of replacing it with the
+  -- color modes inferred from the painted sources.
   local trueColor = usesTrueColor(context, mapSource)
-  local paletteColors = trueColor and paletteForMap(S, map) or nil
+    or (previousTileset and previousTileset.trueColor) or false
+  local paletteColors, paletteName = paletteForMap(S, map, mapSource)
+  -- Mixed atlases are emitted as true color, so palette-mode layers must be
+  -- baked. Fully palette-mode atlases keep grayscale pixels for runtime remap.
+  if not trueColor then paletteColors = nil end
   local tiles, tileIds = {}, {}
   local cells = {}
   local animatedTiles = {}
@@ -1283,7 +1307,6 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     return out
   end
 
-  local tilesetId = generatedTilesetId(project, mapId)
   local tileset = {
     id = tilesetId,
     image = atlasRel,
@@ -1306,14 +1329,24 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
   project.tilesets[tilesetId] = tileset
 
   map.tileset = tilesetId
+  -- Preserve the Gen1 palette association that would otherwise be lost when
+  -- map.tileset changes from (for example) CAVERN to MOD_MAP_LAYERED.
+  if not trueColor and (type(map.palette) ~= "string" or map.palette == "") then
+    -- Only stamp an explicit value when changing the tileset actually changes
+    -- resolution (notably CAVERN/CEMETERY). Interiors whose vanilla behavior
+    -- inherits the last outdoor palette must remain unset.
+    local generatedDefault = Preview.mapPaletteName(S, map)
+    if paletteName ~= generatedDefault then map.palette = paletteName end
+  end
   map.width, map.height = width / 2, height / 2
   map.blocks = mapBlocks
   map.borderBlock = 0
   map.warps = warpRecords or {}
-  -- The generated tileset is unique to this map, so its flag is enough for
-  -- the runtime and remains compatible with map schemas that predate the
-  -- optional per-map trueColor field.
-  map.trueColor = nil
+  -- Carry this on both records.  The tileset flag is the canonical link, but
+  -- editor/world previews can temporarily retain an older tileset object
+  -- while a generated map is being rebuilt.  The map-level override makes
+  -- the color contract immediate and is also what TileRenderer checks first.
+  map.trueColor = trueColor and true or nil
   map._layeredSource = mapId
   return map, tileset
 end

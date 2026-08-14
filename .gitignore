@@ -1,0 +1,19 @@
+# Content Editor packages and temporary staging trees
+/dist/
+
+# Local ROM-derived caches and private game data
+/data/generated/
+/assets/generated/
+portable.txt
+*.gb
+*.gbc
+
+# Local content projects; keep only the bundled starter under version control
+/mods/*/
+!/mods/my_content/
+
+# Tool caches
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
