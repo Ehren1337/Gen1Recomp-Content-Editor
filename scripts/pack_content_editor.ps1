@@ -79,13 +79,18 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     }
   }
 
-  # Always ship both launchers when present (harmless on the other OS).
-  foreach ($launcher in @("ContentEditor.bat", "ContentEditor.sh", "ContentEditor.command")) {
-    $src = Join-Path $Root $launcher
-    if (Test-Path $src) {
-      Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $launcher) -Force
-    }
+  $launcher = switch ($Kind) {
+    "windows" { "ContentEditor.bat" }
+    "linux" { "ContentEditor.sh" }
+    "macOS" { "ContentEditor.command" }
+    default { throw "Unsupported package kind: $Kind" }
   }
+  $launcherPath = Join-Path $Root $launcher
+  if (-not (Test-Path $launcherPath)) {
+    throw "Missing $launcher - cannot build the $Kind package."
+  }
+  Copy-Item -LiteralPath $launcherPath `
+    -Destination (Join-Path $Stage $launcher) -Force
 
   $packReadme = Join-Path $Root "tools\content-editor\PACK_README.md"
   if (-not (Test-Path $packReadme)) {
@@ -262,7 +267,20 @@ function Pack-Windows {
   New-ContentEditorStage $Stage "windows"
   Add-WindowsLove $Stage
   if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
-  Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $ZipPath -Force
+  $parent = Split-Path $Stage -Parent
+  $packageName = "gen1recomp-content-editor-win64"
+  $packageStage = Join-Path $parent $packageName
+  if (Test-Path $packageStage) {
+    Remove-Item -LiteralPath $packageStage -Recurse -Force
+  }
+  Rename-Item -LiteralPath $Stage -NewName $packageName
+  try {
+    Compress-Archive -Path $packageStage -DestinationPath $ZipPath -Force
+  } finally {
+    if (Test-Path $packageStage) {
+      Rename-Item -LiteralPath $packageStage -NewName (Split-Path $Stage -Leaf)
+    }
+  }
   $size = (Get-Item $ZipPath).Length
   Write-Host ("Wrote {0} ({1:N1} MB)" -f $ZipPath, ($size / 1MB))
 }
@@ -348,8 +366,23 @@ function Pack-MacOS {
   New-ContentEditorStage $Stage "macOS"
   Add-MacLove $Stage
   if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
-  tar -czf $TarPath -C $Stage .
-  if ($LASTEXITCODE -ne 0) { throw "tar failed with exit $LASTEXITCODE" }
+  $parent = Split-Path $Stage -Parent
+  $packageName = "gen1recomp-content-editor-macos-universal"
+  $packageStage = Join-Path $parent $packageName
+  if (Test-Path $packageStage) {
+    Remove-Item -LiteralPath $packageStage -Recurse -Force
+  }
+  Rename-Item -LiteralPath $Stage -NewName $packageName
+  Push-Location $parent
+  try {
+    tar -czf $TarPath $packageName
+    if ($LASTEXITCODE -ne 0) { throw "tar failed with exit $LASTEXITCODE" }
+  } finally {
+    Pop-Location
+    if (Test-Path $packageStage) {
+      Rename-Item -LiteralPath $packageStage -NewName (Split-Path $Stage -Leaf)
+    }
+  }
   Set-LinuxTarExecBits $TarPath
   $size = (Get-Item $TarPath).Length
   Write-Host ("Wrote {0} ({1:N1} MB)" -f $TarPath, ($size / 1MB))
