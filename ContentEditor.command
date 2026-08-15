@@ -5,8 +5,12 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LOVE="$HERE/love/love.app/Contents/MacOS/love"
 EDITOR_SOURCE="$HERE"
 if [ ! -f "$HERE/main.lua" ]; then
-  if [ ! -f "$HERE/.content-editor-runtime/src/mods/Runtime.lua" ] ||
-     [ ! -f "$HERE/.content-editor-runtime/runtime/gen1recomp/src/core/Input.lua" ]; then
+  if [ ! -f "$HERE/.content-editor-runtime/runtime/gen1recomp/src/mods/Runtime.lua" ] ||
+     [ ! -f "$HERE/.content-editor-runtime/runtime/gen1recomp/src/core/Input.lua" ] ||
+     ! cmp -s "$HERE/tools/content-editor/RuntimeMount.lua" \
+       "$HERE/.content-editor-runtime/tools/content-editor/RuntimeMount.lua" ||
+     ! cmp -s "$HERE/tools/save-editor/Kit.lua" \
+       "$HERE/.content-editor-runtime/tools/save-editor/Kit.lua"; then
     chmod +x "$HERE/scripts/prepare_content_editor.sh" 2>/dev/null || true
     "$HERE/scripts/prepare_content_editor.sh" >/dev/null
   fi

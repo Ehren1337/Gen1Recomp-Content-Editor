@@ -26,6 +26,45 @@ local function trim(value)
   return value and value:gsub("^%s+", ""):gsub("%s+$", "") or ""
 end
 
+-- Windowless Win32 directory enumeration. Repeated `io.popen("dir ...")`
+-- flashes a cmd.exe window every time the editor refreshes its project list.
+local function windowsNames(path, directories, pattern)
+  if package.config:sub(1, 1) ~= "\\" then return nil end
+  local ok, ffi = pcall(require, "ffi")
+  if not ok then return nil end
+  pcall(ffi.cdef, [[
+    typedef unsigned long DWORD;
+    typedef int BOOL;
+    typedef void *HANDLE;
+    typedef struct { DWORD low; DWORD high; } CE_FILETIME;
+    typedef struct {
+      DWORD attributes;
+      CE_FILETIME creation, access, write;
+      DWORD sizeHigh, sizeLow, reserved0, reserved1;
+      char name[260]; char alternate[14];
+    } CE_FIND_DATAA;
+    HANDLE FindFirstFileA(const char *pattern, CE_FIND_DATAA *data);
+    BOOL FindNextFileA(HANDLE handle, CE_FIND_DATAA *data);
+    BOOL FindClose(HANDLE handle);
+  ]])
+  local kernel = ffi.load("kernel32")
+  local data = ffi.new("CE_FIND_DATAA[1]")
+  local query = path:gsub("/", "\\"):gsub("\\+$", "")
+    .. "\\" .. (pattern or "*")
+  local handle = kernel.FindFirstFileA(query, data)
+  if handle == ffi.cast("HANDLE", -1) then return {} end
+  local out = {}
+  repeat
+    local name = ffi.string(data[0].name)
+    local isDirectory = bit.band(tonumber(data[0].attributes), 0x10) ~= 0
+    if name ~= "." and name ~= ".." and isDirectory == directories then
+      out[#out + 1] = name
+    end
+  until kernel.FindNextFileA(handle, data) == 0
+  kernel.FindClose(handle)
+  return out
+end
+
 local function commandOutput(command)
   local pipe = io.popen(command, "r")
   if not pipe then return nil end
@@ -591,21 +630,22 @@ function ModIO.listMods()
   local root = ModIO.modsRoot()
   local out = {}
   local sep = package.config:sub(1, 1)
-  local cmd
+  local names = windowsNames(root, true)
   if sep == "\\" then
-    cmd = string.format('dir /b /ad "%s" 2>nul', root)
+    names = names or {}
   else
-    cmd = string.format('ls -1 "%s" 2>/dev/null', root)
+    names = {}
+    local pipe = io.popen(string.format('ls -1 "%s" 2>/dev/null', root), "r")
+    if not pipe then return out end
+    for line in pipe:lines() do names[#names + 1] = line end
+    pipe:close()
   end
-  local pipe = io.popen(cmd, "r")
-  if not pipe then return out end
-  for line in pipe:lines() do
+  for _, line in ipairs(names) do
     line = trim(line)
     if line ~= "" and line ~= "examples" and ModIO.exists(join(join(root, line), "manifest.json")) then
       out[#out + 1] = line
     end
   end
-  pipe:close()
   table.sort(out)
   return out
 end
@@ -753,12 +793,11 @@ function ModIO.listModLuaFiles(modId)
     return names
   end
   if sep == "\\" then
-    for _, name in ipairs(listNames(string.format('dir /b /a-d "%s\\*.lua" 2>nul', dir))) do
+    for _, name in ipairs(windowsNames(dir, false, "*.lua") or {}) do
       add(name)
     end
-    for _, sub in ipairs(listNames(string.format('dir /b /ad "%s" 2>nul', dir))) do
-      for _, name in ipairs(listNames(
-          string.format('dir /b /a-d "%s\\%s\\*.lua" 2>nul', dir, sub))) do
+    for _, sub in ipairs(windowsNames(dir, true) or {}) do
+      for _, name in ipairs(windowsNames(join(dir, sub), false, "*.lua") or {}) do
         add(sub .. "/" .. name)
       end
     end

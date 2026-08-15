@@ -5,7 +5,9 @@ set "EDITOR_SOURCE=%CD%"
 set "NEED_PREP="
 if not exist "main.lua" (
   set "NEED_PREP=1"
-  if exist ".content-editor-runtime\src\mods\Runtime.lua" if exist ".content-editor-runtime\runtime\gen1recomp\src\core\Input.lua" set "NEED_PREP="
+  if exist ".content-editor-runtime\runtime\gen1recomp\src\mods\Runtime.lua" if exist ".content-editor-runtime\runtime\gen1recomp\src\core\Input.lua" set "NEED_PREP="
+  if not defined NEED_PREP fc /b "tools\content-editor\RuntimeMount.lua" ".content-editor-runtime\tools\content-editor\RuntimeMount.lua" >nul 2>nul || set "NEED_PREP=1"
+  if not defined NEED_PREP fc /b "tools\save-editor\Kit.lua" ".content-editor-runtime\tools\save-editor\Kit.lua" >nul 2>nul || set "NEED_PREP=1"
 )
 if defined NEED_PREP (
   powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\prepare_content_editor.ps1"

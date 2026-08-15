@@ -5,8 +5,12 @@ cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || ec
 ROOT="$PWD"
 EDITOR_SOURCE="$ROOT"
 if [[ ! -f "$ROOT/main.lua" ]]; then
-  if [[ ! -f "$ROOT/.content-editor-runtime/src/mods/Runtime.lua" ||
-        ! -f "$ROOT/.content-editor-runtime/runtime/gen1recomp/src/core/Input.lua" ]]; then
+  if [[ ! -f "$ROOT/.content-editor-runtime/runtime/gen1recomp/src/mods/Runtime.lua" ||
+        ! -f "$ROOT/.content-editor-runtime/runtime/gen1recomp/src/core/Input.lua" ]] ||
+     ! cmp -s "$ROOT/tools/content-editor/RuntimeMount.lua" \
+       "$ROOT/.content-editor-runtime/tools/content-editor/RuntimeMount.lua" ||
+     ! cmp -s "$ROOT/tools/save-editor/Kit.lua" \
+       "$ROOT/.content-editor-runtime/tools/save-editor/Kit.lua"; then
     chmod +x "$ROOT/scripts/prepare_content_editor.sh" 2>/dev/null || true
     "$ROOT/scripts/prepare_content_editor.sh" >/dev/null
   fi
