@@ -810,10 +810,14 @@ function App.playtestMod()
         shQuote(loveExe), shQuote(runtimeRoot), version)
     end
     cmd = string.format(
-      '( env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR %s; '
+      '( if command -v setsid >/dev/null 2>&1; then '
+        .. 'setsid env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR '
+        .. 'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 %s; else '
+        .. 'env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR '
+        .. 'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 %s; fi; '
         .. 'code=$?; printf "\\nplaytest_exit=%%s\\n" "$code"; exit "$code" ) '
         .. '> %s 2>&1 &',
-      launch, shQuote(logPath))
+      launch, launch, shQuote(logPath))
   end
   local osName = love.system and love.system.getOS and love.system.getOS()
   local desktopUnix = osName == "Linux" or osName == "OS X"
