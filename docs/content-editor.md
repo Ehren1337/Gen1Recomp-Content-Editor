@@ -148,7 +148,7 @@ editor root has no bundled LÖVE/Gen1Recomp executable. Normal release packages
 already contain that executable and never require a linked checkout.
 
 The scheduled `Sync Gen1Recomp runtime` workflow checks `bryanthaboi/gen1recomp`
-`dev` daily. New upstream code is merged onto `sync/gen1recomp-runtime`, the
+`main` daily. New upstream code is merged onto `sync/gen1recomp-runtime`, the
 recorded commit is advanced, and a ready-for-review PR is created or refreshed.
 Runtime and package checks must pass before that update is merged into `main`
 and becomes the pin used by later releases.

@@ -24,7 +24,7 @@ jobs:
         id: merge
         env:
           UPSTREAM_REPOSITORY: bryanthaboi/gen1recomp
-          UPSTREAM_REF: dev
+          UPSTREAM_REF: main
         shell: bash
         run: |
           set -euo pipefail
