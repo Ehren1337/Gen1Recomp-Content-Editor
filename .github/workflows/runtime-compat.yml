@@ -53,3 +53,27 @@ jobs:
           fi
           test -f "$(dirname "$launcher")/src/core/StateStack.lua"
           test -f "$(dirname "$launcher")/tests/love_stub.lua"
+
+  macos-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS portable package
+        shell: pwsh
+        run: ./scripts/pack_content_editor.ps1 -Platform macos
+      - name: Verify macOS archive
+        shell: bash
+        run: |
+          archive="$(find dist/macos -name '*.tar.gz' -print -quit)"
+          test -n "$archive"
+          mkdir package
+          tar -xzf "$archive" -C package
+          launcher="$(find package -name ContentEditor.command -print -quit)"
+          root="$(dirname "$launcher")"
+          test -x "$launcher"
+          test -x "$root/love/love.app/Contents/MacOS/love"
+          test -f "$root/tests/love_stub.lua"
+          if grep -IU $'\r' "$launcher"; then
+            echo 'ContentEditor.command contains CRLF line endings' >&2
+            exit 1
+          fi

@@ -665,6 +665,9 @@ local function resolveLoveExe(searchRoots)
         -- Linux portable AppImage / binary
         { root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage", false },
         { root .. sep .. "love" .. sep .. "love", false },
+        -- macOS universal portable package
+        { root .. sep .. "love" .. sep .. "love.app" .. sep .. "Contents"
+            .. sep .. "MacOS" .. sep .. "love", false },
       }
       for _, candidate in ipairs(candidates) do
         local path, fused = candidate[1], candidate[2]
@@ -812,18 +815,18 @@ function App.playtestMod()
         .. '> %s 2>&1 &',
       launch, shQuote(logPath))
   end
-  local linux = love.system and love.system.getOS
-    and love.system.getOS() == "Linux"
-  if linux and love.window and love.window.minimize then
-    -- Linux window managers commonly refuse focus for a background child
-    -- while its parent editor remains active. That leaves the game visible
-    -- but routes keyboard/controller input to the editor. Minimize the editor
-    -- immediately before spawning so the Playtest becomes the input owner.
+  local osName = love.system and love.system.getOS and love.system.getOS()
+  local desktopUnix = osName == "Linux" or osName == "OS X"
+  if desktopUnix and love.window and love.window.minimize then
+    -- Linux window managers and macOS can leave a background child behind its
+    -- active parent. The game is visible in that state but keyboard/controller
+    -- input stays with the editor. Minimize immediately before spawning so
+    -- the Playtest becomes the input owner.
     pcall(love.window.minimize)
   end
   local called, execResult, execWhy, execCode = pcall(os.execute, cmd)
   if not called or execResult == nil or execResult == false then
-    if linux and love.window and love.window.restore then
+    if desktopUnix and love.window and love.window.restore then
       pcall(love.window.restore)
     end
     local detail = called
