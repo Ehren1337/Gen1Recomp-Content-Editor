@@ -192,6 +192,17 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
       -To (Join-Path $Stage "tests\fixture_data") `
       -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
   }
+  # modkit's headless loader requires the LÖVE API shim as well as fixture
+  # data. Keep it in the same tests/ module path used by source checkouts so
+  # LuaJIT can resolve require("tests.love_stub") on every platform.
+  $loveStub = Join-Path $Root "tests\love_stub.lua"
+  if (-not (Test-Path $loveStub)) {
+    throw "Missing tests\love_stub.lua - packaged validation would not run."
+  }
+  $testsStage = Join-Path $Stage "tests"
+  New-Item -ItemType Directory -Force -Path $testsStage | Out-Null
+  Copy-Item -LiteralPath $loveStub `
+    -Destination (Join-Path $testsStage "love_stub.lua") -Force
 
   foreach ($doc in @("content-editor.md", "tiled-map-editing.md")) {
     $src = Join-Path $Root "docs\$doc"

@@ -52,3 +52,4 @@ jobs:
             exit 1
           fi
           test -f "$(dirname "$launcher")/src/core/StateStack.lua"
+          test -f "$(dirname "$launcher")/tests/love_stub.lua"
