@@ -104,8 +104,9 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   $runtimeStage = Join-Path $Stage "runtime"
   New-Item -ItemType Directory -Force -Path $runtimeStage | Out-Null
   $runtimeArchive = Join-Path $runtimeStage "gen1recomp.love"
+  $runtimePayload = @("main.lua", "conf.lua", "src", "data", "assets", "LICENSE.MD")
   & git -C $runtimeSource archive --format=zip `
-    "--output=$runtimeArchive" HEAD -- . ":(exclude)mods"
+    "--output=$runtimeArchive" HEAD -- @runtimePayload
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $runtimeArchive)) {
     throw "Could not build pinned runtime archive."
   }
@@ -254,6 +255,30 @@ function Add-WindowsLove([string]$Stage) {
     -ExcludeDirNames @(".git") -ExcludeFilePatterns @("*.gb", "*.gbc")
 }
 
+function ConvertTo-WindowsFusedRuntime([string]$Stage) {
+  $loveExe = Join-Path $Stage "love\love.exe"
+  $archive = Join-Path $Stage "runtime\gen1recomp.love"
+  $fused = Join-Path $Stage "love\gen1recomp.exe"
+  if (-not (Test-Path $loveExe) -or -not (Test-Path $archive)) {
+    throw "Windows runtime fusion requires love.exe and gen1recomp.love."
+  }
+  $output = [IO.File]::Create($fused)
+  try {
+    foreach ($source in @($loveExe, $archive)) {
+      $input = [IO.File]::OpenRead($source)
+      try { $input.CopyTo($output) } finally { $input.Dispose() }
+    }
+  } finally {
+    $output.Dispose()
+  }
+  Remove-Item -LiteralPath $archive -Force
+  $runtimeDir = Join-Path $Stage "runtime"
+  if ((Test-Path $runtimeDir) -and
+      -not (Get-ChildItem -LiteralPath $runtimeDir -Force | Select-Object -First 1)) {
+    Remove-Item -LiteralPath $runtimeDir -Force
+  }
+}
+
 function Add-LinuxLove([string]$Stage) {
   $cacheDir = Join-Path $Root "dist\_cache"
   New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
@@ -322,6 +347,7 @@ function Pack-Windows {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "windows"
   Add-WindowsLove $Stage
+  ConvertTo-WindowsFusedRuntime $Stage
   if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
   $parent = Split-Path $Stage -Parent
   $packageName = "gen1recomp-content-editor-win64"

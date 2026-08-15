@@ -31,6 +31,9 @@ function PlaytestPaths.pinnedRuntime(root, isValidRoot, isFile)
   end
   local archive = candidate .. ".love"
   if type(isFile) == "function" and isFile(archive) then return archive end
+  local fused = tostring(root or "") .. separator() .. "love"
+    .. separator() .. "gen1recomp.exe"
+  if type(isFile) == "function" and isFile(fused) then return fused end
   return nil
 end
 

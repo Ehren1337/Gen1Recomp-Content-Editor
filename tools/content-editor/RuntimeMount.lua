@@ -38,10 +38,13 @@ function RuntimeMount.mount()
   local source = assert(fs.getSource(), "LÖVE source directory unavailable")
   local root = source:gsub("[/\\]+$", "")
   local archive = root .. separator .. "runtime" .. separator .. "gen1recomp.love"
+  local fused = root .. separator .. "love" .. separator .. "gen1recomp.exe"
   local directory = root .. separator .. "runtime" .. separator .. "gen1recomp"
   local file = io.open(archive, "rb")
-  local runtime = file and archive or directory
+  local fusedFile = not file and io.open(fused, "rb") or nil
+  local runtime = file and archive or (fusedFile and fused or directory)
   if file then file:close() end
+  if fusedFile then fusedFile:close() end
   local mount = resolveMount()
   return mount and mount(runtime) or false
 end

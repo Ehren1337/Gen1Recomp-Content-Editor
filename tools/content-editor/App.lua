@@ -10,6 +10,7 @@ local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
+local ProcessRunner = require("ProcessRunner")
 local PlaytestPaths = require("PlaytestPaths")
 local PlaytestOptions = require("PlaytestOptions")
 local GameVersion = require("src.core.GameVersion")
@@ -588,15 +589,7 @@ local function repoRoot()
 end
 
 local function runShell(cmd)
-  local ok, handle = pcall(io.popen, cmd .. " 2>&1")
-  if not ok or not handle then
-    return false, "shell unavailable: " .. tostring(handle)
-  end
-  local out = handle:read("*a") or ""
-  local okClose, _, code = handle:close()
-  local exit = (type(code) == "number" and code)
-    or (okClose and 0 or 1)
-  return exit == 0, out
+  return ProcessRunner.run(cmd)
 end
 
 function App.validateMod()
@@ -661,6 +654,7 @@ local function resolveLoveExe(searchRoots)
     if root and root ~= "" then
       local candidates = {
         -- Windows portable / checkout
+        { root .. sep .. "love" .. sep .. "gen1recomp.exe", true },
         { root .. sep .. "love" .. sep .. "love.exe", false },
         { root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe", false },
         { root .. sep .. "love.exe", false },
@@ -789,9 +783,10 @@ function App.playtestMod()
     return say("Pinned Playtest runtime is missing — run git submodule update --init")
   end
   local loveExe, fused = resolveLoveExe({ root, runtimeRoot, recomp })
-  local runtimeArchive = runtimeRoot:sub(-5):lower() == ".love"
-  local runtimeWorkDir = runtimeArchive and root or runtimeRoot
-  local runtimeModsBase = runtimeArchive
+  local packagedRuntime = runtimeRoot:lower():match("%.love$")
+    or runtimeRoot:lower():match("gen1recomp%.exe$")
+  local runtimeWorkDir = packagedRuntime and root or runtimeRoot
+  local runtimeModsBase = packagedRuntime
     and love.filesystem.getSaveDirectory() or runtimeRoot
   local runtimeMods = runtimeModsBase .. sep .. "mods" .. sep .. id
   local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
@@ -806,7 +801,7 @@ function App.playtestMod()
       -- `start exe absolute-source` can silently drop the source argument on
       -- some cmd.exe quoting paths, producing LÖVE's "No code to run" screen.
       -- Make the pin the child's working directory and launch `.` instead.
-      local source = runtimeArchive and runtimeRoot or "."
+      local source = packagedRuntime and runtimeRoot or "."
       cmd = PlaytestPaths.windowsLaunch(
         loveExe, source, runtimeWorkDir, version)
     end
