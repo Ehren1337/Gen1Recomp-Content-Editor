@@ -20,28 +20,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Merge current upstream runtime
-        id: merge
+          submodules: true
+      - name: Update pinned upstream runtime
+        id: sync
         env:
-          UPSTREAM_REPOSITORY: bryanthaboi/gen1recomp
           UPSTREAM_REF: main
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add runtime-upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
-          git fetch runtime-upstream "$UPSTREAM_REF"
-          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          git -C runtime/gen1recomp fetch origin "$UPSTREAM_REF"
+          upstream_sha="$(git -C runtime/gen1recomp rev-parse FETCH_HEAD)"
           echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
-          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+          current_sha="$(git -C runtime/gen1recomp rev-parse HEAD)"
+          if [ "$upstream_sha" = "$current_sha" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           branch="sync/gen1recomp-runtime"
           git fetch origin "$branch:refs/remotes/origin/$branch" || true
           git switch -C "$branch"
-          git merge --no-edit "$upstream_sha"
+          git -C runtime/gen1recomp checkout --detach "$upstream_sha"
           python3 - "$upstream_sha" <<'PY'
           import json
           import pathlib
@@ -52,15 +52,15 @@ jobs:
           data['integratedCommit'] = sys.argv[1]
           path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
           PY
-          git add .github/runtime-upstream.json
-          git commit -m "chore: record synced Gen1Recomp runtime" || true
+          git add runtime/gen1recomp .github/runtime-upstream.json
+          git commit -m "chore: update pinned Gen1Recomp runtime"
           git push --force-with-lease="refs/heads/$branch" origin "$branch:$branch"
           echo "changed=true" >> "$GITHUB_OUTPUT"
       - name: Create ready-for-review pull request
-        if: steps.merge.outputs.changed == 'true'
+        if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
         shell: bash
         run: |
           short_sha="${UPSTREAM_SHA:0:12}"

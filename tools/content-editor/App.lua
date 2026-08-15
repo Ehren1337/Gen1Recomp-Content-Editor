@@ -10,6 +10,7 @@ local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
 local PlaytestPaths = require("PlaytestPaths")
+local PlaytestOptions = require("PlaytestOptions")
 local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
 
@@ -578,6 +579,8 @@ function App.save()
 end
 
 local function repoRoot()
+  local configured = os.getenv("POKEPORT_CONTENT_ROOT")
+  if configured and configured ~= "" then return configured end
   local src = love.filesystem.getSource()
   if src and src ~= "" then return src end
   return "."
@@ -656,8 +659,6 @@ local function resolveLoveExe(searchRoots)
   for _, root in ipairs(searchRoots or {}) do
     if root and root ~= "" then
       local candidates = {
-        -- Fused portable distribution (does not take a source-folder arg).
-        { root .. sep .. "gen1recomp.exe", true },
         -- Windows portable / checkout
         { root .. sep .. "love" .. sep .. "love.exe", false },
         { root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe", false },
@@ -687,6 +688,15 @@ local function linkedRecompRoot()
     return recomp:gsub("[/\\]+$", "")
   end
   return nil
+end
+
+-- The game used for Playtest is an exact, reviewable Gen1Recomp checkout.
+-- Keep it separate from the editor host: the editor contains authoring UI and
+-- compatibility helpers, while runtime/gen1recomp remains byte-for-byte at the
+-- commit recorded by Git. Portable packages include this directory, so this
+-- does not introduce a network or local-install requirement for users.
+local function pinnedRuntimeRoot(root)
+  return PlaytestPaths.pinnedRuntime(root, DataSource.isValidRecompRoot)
 end
 
 local function shQuote(value)
@@ -755,18 +765,7 @@ function App.playtestMod()
   local okEnable, errEnable = pcall(function()
     local SaveData = require("src.core.SaveData")
     local options = SaveData.loadOptions()
-    options.mods = options.mods or {}
-    for otherId in pairs(options.mods) do
-      options.mods[otherId] = false
-    end
-    options.mods[id] = true
-    options.modsByVersion = options.modsByVersion or {}
-    local bucket = options.modsByVersion[version] or {}
-    options.modsByVersion[version] = bucket
-    for otherId in pairs(bucket) do
-      bucket[otherId] = false
-    end
-    bucket[id] = true
+    PlaytestOptions.selectOnly(options, id, version)
     SaveData.saveOptions(options)
   end)
   if not okEnable then
@@ -774,26 +773,29 @@ function App.playtestMod()
     return
   end
 
-  -- The package is a complete game runtime. Prefer its pinned, tested source
-  -- and LÖVE binary so Playtest does not depend on a separately installed or
-  -- differently-versioned Recomp checkout. A linked folder is only a binary
-  -- fallback for development checkouts that do not bundle LÖVE.
-  local loveExe, fused, runtimeRoot = resolveLoveExe({ root, recomp })
-  runtimeRoot = runtimeRoot or root
-  if not PlaytestPaths.same(runtimeRoot, root) then
-    local runtimeMods = runtimeRoot .. sep .. "mods" .. sep .. id
-    local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
-    if not okSync then
-      return say("Playtest fallback sync failed: " .. tostring(syncErr))
-    end
+  -- Source and executable are intentionally resolved independently. The
+  -- pinned checkout supplies all game Lua; the outer portable pack supplies
+  -- LÖVE. A linked Recomp is retained only as a development fallback when a
+  -- source checkout has not initialized its submodule yet.
+  local runtimeRoot = pinnedRuntimeRoot(root) or recomp
+  if not runtimeRoot then
+    return say("Pinned Playtest runtime is missing — run git submodule update --init")
+  end
+  local loveExe, fused = resolveLoveExe({ root, runtimeRoot, recomp })
+  local runtimeMods = runtimeRoot .. sep .. "mods" .. sep .. id
+  local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
+  if not okSync then
+    return say("Playtest runtime sync failed: " .. tostring(syncErr))
   end
   local cmd
   if sep == "\\" then
     if fused then
       cmd = string.format('start "" "%s" --game=%s', loveExe, version)
     else
-      cmd = string.format('start "" "%s" "%s" --game=%s',
-        loveExe, runtimeRoot, version)
+      -- `start exe absolute-source` can silently drop the source argument on
+      -- some cmd.exe quoting paths, producing LÖVE's "No code to run" screen.
+      -- Make the pin the child's working directory and launch `.` instead.
+      cmd = PlaytestPaths.windowsLaunch(loveExe, runtimeRoot, version)
     end
   else
     local logPath = playtestLogPath()

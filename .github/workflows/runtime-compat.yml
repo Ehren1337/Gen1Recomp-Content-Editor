@@ -18,16 +18,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: step-security/msvc-dev-cmd@v1
       - uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: luajit-2.1
+      - name: Verify recorded runtime pin
+        shell: bash
+        run: |
+          recorded="$(python -c 'import json; print(json.load(open(".github/runtime-upstream.json"))["integratedCommit"])')"
+          checked_out="$(git -C runtime/gen1recomp rev-parse HEAD)"
+          test "$recorded" = "$checked_out"
       - name: Run runtime compatibility tests
         shell: bash
         run: |
           lua tests/test_state_stack.lua
           lua tests/content-editor/test_manifest_target.lua
           lua tests/content-editor/test_playtest_paths.lua
+          lua tests/content-editor/test_playtest_options.lua
           lua tests/content-editor/test_mapbuilder_manifest.lua
           lua tests/content-editor/test_tileset_export.lua
 
@@ -35,6 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build Linux portable package
         shell: pwsh
         run: ./scripts/pack_content_editor.ps1 -Platform linux
@@ -46,18 +57,24 @@ jobs:
           mkdir package
           tar -xzf "$archive" -C package
           launcher="$(find package -name ContentEditor.sh -print -quit)"
+          root="$(dirname "$launcher")"
           test -x "$launcher"
           if grep -IU $'\r' "$launcher"; then
             echo 'ContentEditor.sh contains CRLF line endings' >&2
             exit 1
           fi
-          test -f "$(dirname "$launcher")/src/core/StateStack.lua"
-          test -f "$(dirname "$launcher")/tests/love_stub.lua"
+          test -f "$root/src/core/StateStack.lua"
+          test -f "$root/tests/love_stub.lua"
+          test -f "$root/runtime/gen1recomp/src/core/Input.lua"
+          test -f "$root/runtime/gen1recomp/src/core/Music.lua"
+          test -f "$root/runtime/gen1recomp/src/core/Sound.lua"
 
   macos-package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build macOS portable package
         shell: pwsh
         run: ./scripts/pack_content_editor.ps1 -Platform macos
@@ -73,6 +90,7 @@ jobs:
           test -x "$launcher"
           test -x "$root/love/love.app/Contents/MacOS/love"
           test -f "$root/tests/love_stub.lua"
+          test -f "$root/runtime/gen1recomp/src/core/Input.lua"
           if grep -IU $'\r' "$launcher"; then
             echo 'ContentEditor.command contains CRLF line endings' >&2
             exit 1

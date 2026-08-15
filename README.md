@@ -12,6 +12,7 @@ Deep reference: [docs/content-editor.md](docs/content-editor.md)
 **From a source checkout**
 
 ```sh
+git submodule update --init --recursive
 love . --content-editor
 love . --content-editor --mod mods/my_content
 ```
@@ -42,11 +43,12 @@ On **Project → GAME DATA** they can **Link Recomp** (reuse an existing
 install’s cache), **Import ROM** (cache in the LÖVE save directory), or
 **Use fixtures** (stub data).
 
-**Playtest is standalone; linking Recomp is not required.** Release packages include the tested Gen1Recomp
-source and LÖVE runtime pinned by `.github/runtime-upstream.json`. Playtest
+**Playtest is standalone; linking Recomp is not required.** Release packages include the exact Gen1Recomp
+submodule revision under `runtime/gen1recomp` and the LÖVE runtime; the same
+revision is recorded by `.github/runtime-upstream.json`. Playtest
 saves/synchronizes the open project, enables only that mod, and boots the ROM
 version selected in the editor. A linked Recomp checkout is used only as an
-executable fallback for source/development layouts that do not bundle LÖVE.
+fallback only when a source clone has not initialized its pinned submodule.
 Selecting a ROM does not change the mod's authored `games`, `gen2compat`, or
 `game_version` manifest compatibility.
 

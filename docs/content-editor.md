@@ -123,17 +123,16 @@ editor installs it via the OS package manager
 works) and sets `MODKIT_LUAJIT`. It does **not** drop `luajit.exe` into the
 LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`.
 
-**Playtest does not require Link Recomp.** It uses the complete Gen1Recomp
-runtime bundled with the editor. The
-runtime source is pinned to the integrated upstream commit recorded in
-`.github/runtime-upstream.json`, so a released editor and its Playtest runtime
-are tested and shipped together instead of depending on whichever Recomp build
-happens to be installed on the machine.
+**Playtest does not require Link Recomp.** It runs the exact upstream checkout
+at `runtime/gen1recomp`, whose Git submodule commit is mirrored in
+`.github/runtime-upstream.json`. Release archives contain ordinary copies of
+that pinned tree, so players need neither Git nor network access. The editor's
+historical Lua snapshot is not the Playtest source of truth.
 
 On each launch, Playtest:
 
-1. saves the open project and synchronizes it to the bundled `mods/<id>` when
-   the project was opened from an external location;
+1. saves the open project and synchronizes it to
+   `runtime/gen1recomp/mods/<id>`;
 2. disables previously enabled mods and enables only the open editor mod;
 3. boots the ROM version currently selected in the editor with `--game`.
 
@@ -142,14 +141,13 @@ rewrite `manifest.json` compatibility fields: `games`, `gen2compat`, and
 `game_version` remain the mod author's declaration. The open editor project
 remains the authoring source of truth.
 
-Link Recomp remains optional for reusing an existing imported ROM cache. Its
-executable is considered only as a development-checkout fallback when the
-editor root has no bundled LÖVE/Gen1Recomp executable. Normal release packages
-already contain that executable and never require a linked checkout.
+Link Recomp remains optional for reusing an existing imported ROM cache. It is
+also a development fallback if `git submodule update --init --recursive` has
+not populated the pin. Normal release packages always include the pin.
 
 The scheduled `Sync Gen1Recomp runtime` workflow checks `bryanthaboi/gen1recomp`
-`main` daily. New upstream code is merged onto `sync/gen1recomp-runtime`, the
-recorded commit is advanced, and a ready-for-review PR is created or refreshed.
+`main` daily. It advances only the submodule and recorded commit on
+`sync/gen1recomp-runtime`, then creates or refreshes a ready-for-review PR.
 Runtime and package checks must pass before that update is merged into `main`
 and becomes the pin used by later releases.
 

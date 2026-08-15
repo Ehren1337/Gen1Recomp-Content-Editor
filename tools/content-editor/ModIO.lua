@@ -164,6 +164,8 @@ local function linuxPickFolder(title, startPath)
 end
 
 function ModIO.repoRoot()
+  local configured = os.getenv("POKEPORT_CONTENT_ROOT")
+  if configured and configured ~= "" then return configured end
   if love and love.filesystem and love.filesystem.getSource then
     return love.filesystem.getSource()
   end

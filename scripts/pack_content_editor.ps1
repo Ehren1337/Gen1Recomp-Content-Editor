@@ -86,10 +86,27 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     ".DS_Store", "Thumbs.db"
   )
 
-  foreach ($f in @(
-    "main.lua", "conf.lua",
-    "README.md", "README.txt", ".gitattributes"
-  )) {
+  # Playtest runs the exact Gen1Recomp submodule revision, not the editor's
+  # historical runtime snapshot. Keep it as ordinary files in release packs
+  # so end users never need Git or network access.
+  $runtimeSource = Join-Path $Root "runtime\gen1recomp"
+  if (-not (Test-Path (Join-Path $runtimeSource "main.lua"))) {
+    throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
+  }
+  $runtimeExcludeDirs = @(
+    ".git", ".github", "dist", "generated", "mods", "node_modules", "__pycache__"
+  )
+  # The editor host also starts from the pin. Editor-owned files copied below
+  # are the only overlay; no root src/ snapshot is staged.
+  Copy-TreeFiltered -From $runtimeSource -To $Stage `
+    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles
+  Copy-TreeFiltered -From $runtimeSource `
+    -To (Join-Path $Stage "runtime\gen1recomp") `
+    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles
+  New-Item -ItemType Directory -Force `
+    -Path (Join-Path $Stage "runtime\gen1recomp\mods") | Out-Null
+
+  foreach ($f in @("README.md", "README.txt", ".gitattributes")) {
     $src = Join-Path $Root $f
     if (Test-Path $src) {
       Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $f) -Force
@@ -124,8 +141,6 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     Copy-Item -LiteralPath $packReadme -Destination (Join-Path $Stage "PACK_README.md") -Force
   }
 
-  Copy-TreeFiltered -From (Join-Path $Root "src") -To (Join-Path $Stage "src") `
-    -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
   Copy-TreeFiltered -From (Join-Path $Root "libs") -To (Join-Path $Stage "libs") `
     -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
 
@@ -191,6 +206,14 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     Copy-TreeFiltered -From $fixSrc `
       -To (Join-Path $Stage "tests\fixture_data") `
       -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
+  }
+
+  foreach ($f in @("main.lua", "conf.lua")) {
+    $src = Join-Path $Root "tools\content-editor\runtime\$f"
+    if (-not (Test-Path $src)) {
+      throw "Missing standalone editor runtime file: $src"
+    }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $f) -Force
   }
   # modkit's headless loader requires the LÖVE API shim as well as fixture
   # data. Keep it in the same tests/ module path used by source checkouts so
