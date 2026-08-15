@@ -131,7 +131,7 @@ function Project.draw(S, x, y, w, h, App)
   local pageTop = row
   w = pageView.contentW or w
 
-  Kit.caption(x, row, "MOD PROJECT")
+  Kit.caption(x, row, "1  PROJECT")
   row = row + 28 * s
   Kit.text("micro", "Create a project or open an existing mod to edit and test.",
     x, row, PAL.muted)
@@ -214,17 +214,26 @@ function Project.draw(S, x, y, w, h, App)
 
   row = cardY + contentH + 20 * s
 
-  Kit.caption(x, row, "GAME")
-  row = row + 28 * s
+  local gameCardY = row
+  local gameCardH = 132 * s
+  Kit.card(x, gameCardY, w, gameCardH, 14 * s)
+  local gameX = x + pad
+  local gameW = w - 2 * pad
+  row = gameCardY + pad
+  Kit.caption(gameX, row, "2  TARGET GAME")
+  row = row + 24 * s
+  Kit.text("micro", "Choose which imported ROM data is edited and which game Playtest boots.",
+    gameX, row, PAL.muted)
+  row = row + 22 * s
   local GameVersion = require("src.core.GameVersion")
   local curVer = S.version or App.dataVersion or "red"
   local gen = (GameVersion.generation and GameVersion.generation(curVer)) or 1
-  local chipW = math.floor((w - 3 * 8 * s) / 4)
+  local chipW = math.floor((gameW - 3 * 8 * s) / 4)
   local order = GameVersion.ORDER or { "red", "blue", "yellow", "gold" }
   for i, vid in ipairs(order) do
     local info = GameVersion.info(vid) or {}
     local label = info.label or vid
-    local bx = x + (i - 1) * (chipW + 8 * s)
+    local bx = gameX + (i - 1) * (chipW + 8 * s)
     local kind = (vid == curVer) and "primary" or "ghost"
     if Kit.button(bx, row, chipW, btnH, label, {
         kind = kind,
@@ -240,11 +249,17 @@ function Project.draw(S, x, y, w, h, App)
       (GameVersion.info(curVer) and GameVersion.info(curVer).displayName) or curVer,
       gen,
       (GameVersion.cachePrefix and GameVersion.cachePrefix(curVer)) or ""),
-    x, row, PAL.muted)
-  row = row + 22 * s
+    gameX, row, PAL.muted)
+  row = gameCardY + gameCardH + 16 * s
 
-  Kit.caption(x, row, "GAME DATA")
-  row = row + 28 * s
+  local dataCardY = row
+  local dataCardH = 220 * s
+  Kit.card(x, dataCardY, w, dataCardH, 14 * s)
+  local dataX = x + pad
+  local dataW = w - 2 * pad
+  row = dataCardY + pad
+  Kit.caption(dataX, row, "3  GAME DATA")
+  row = row + 26 * s
   local src = S.dataSource or "fixtures"
   local persistedPrefs = DataSource.loadPrefs()
   local prefs = S.dataPrefs or persistedPrefs
@@ -262,17 +277,17 @@ function Project.draw(S, x, y, w, h, App)
     local linkState = usingRecomp and "Linked" or "Remembered"
     srcLine = srcLine .. " — " .. linkState .. ": " .. tostring(recompRoot)
   end
-  Kit.text("small", Kit.ellipsize("small", srcLine, w), x, row, PAL.text)
+  Kit.text("small", Kit.ellipsize("small", srcLine, dataW), dataX, row, PAL.text)
   row = row + 22 * s
   Kit.text("micro",
     "Import the selected ROM for complete data, reuse its imported cache, "
       .. "or use fixtures for ROM-free editing. Link Recomp is optional and "
       .. "only reuses data; Playtest uses this editor's bundled runtime.",
-    x, row, PAL.muted)
+    dataX, row, PAL.muted)
   row = row + 32 * s
-  local dsW = 150 * s
   local dsGap = 10 * s
-  if Kit.button(x, row, dsW, btnH, "Link Recomp", {
+  local dsW = math.min(150 * s, math.floor((dataW - 2 * dsGap) / 3))
+  if Kit.button(dataX, row, dsW, btnH, "Link Recomp", {
       kind = "primary",
       tooltip = "Use data/generated (or red|blue|yellow|gold/) from a Gen1Recomp install",
     }) then
@@ -280,7 +295,7 @@ function Project.draw(S, x, y, w, h, App)
       App.linkRecompFolder(path)
     end, recompRoot)
   end
-  if Kit.button(x + dsW + dsGap, row, dsW, btnH, "Import ROM", {
+  if Kit.button(dataX + dsW + dsGap, row, dsW, btnH, "Import ROM", {
       kind = "accent",
       tooltip = "Import US Red/Blue/Yellow (.gb, 1 MiB) or Gold (.gbc, 2 MiB)\n"
         .. "into the versioned save-directory cache",
@@ -289,14 +304,14 @@ function Project.draw(S, x, y, w, h, App)
       "Game Boy ROM (*.gb;*.gbc)|*.gb;*.gbc|All (*.*)|*.*",
       function(path) App.importRomFile(path) end)
   end
-  if Kit.button(x + 2 * (dsW + dsGap), row, dsW, btnH, "Use fixtures", {
+  if Kit.button(dataX + 2 * (dsW + dsGap), row, dsW, btnH, "Use fixtures", {
       kind = "ghost",
       tooltip = "ROM-free stub data for authoring without a cache",
     }) then
     App.useFixturesData()
   end
   row = row + btnH + 8 * s
-  if Kit.button(x, row, dsW, btnH, "Clear cache", {
+  if Kit.button(dataX, row, dsW, btnH, "Clear cache", {
       kind = "danger",
       tooltip = "Delete save-directory ROM caches (red|blue|yellow|gold/…)\n"
         .. "and flush editor image caches, then reload data.\n"
@@ -305,7 +320,7 @@ function Project.draw(S, x, y, w, h, App)
     if App.clearCache then App.clearCache() end
   end
   local remembered = recompRoot ~= nil
-  if Kit.button(x + dsW + dsGap, row, dsW, btnH, "Use last link", {
+  if Kit.button(dataX + dsW + dsGap, row, dsW, btnH, "Use last link", {
       kind = "accent",
       enabled = validRecompRoot and not usingRecomp,
       tooltip = remembered
@@ -320,7 +335,7 @@ function Project.draw(S, x, y, w, h, App)
     App.linkRecompFolder(recompRoot)
   end
   local importedReady = DataSource.hasImportedCache(curVer)
-  if Kit.button(x + 2 * (dsW + dsGap), row, dsW, btnH,
+  if Kit.button(dataX + 2 * (dsW + dsGap), row, dsW, btnH,
       "Use imported ROM", {
         kind = "accent",
         enabled = importedReady and src ~= "imported",
@@ -332,14 +347,14 @@ function Project.draw(S, x, y, w, h, App)
       }) then
     App.useImportedData()
   end
-  row = row + btnH + 20 * s
+  row = dataCardY + dataCardH + 18 * s
 
   -- Validate / Playtest share the OVERVIEW caption row so they stay on screen.
   -- GAME DATA + the overview card already fill a 1080p content pane; drawing
   -- the buttons under that card puts them behind the status bar.
   local fh = 28 * s
   local btnW = 120 * s
-  Kit.caption(x, row, "OVERVIEW")
+  Kit.caption(x, row, "4  CHECK & RUN")
   if S.project then
     if Kit.button(x + w - 2 * btnW - 10 * s, row, btnW, fh, "Validate", {
         kind = "primary",
@@ -390,7 +405,9 @@ function Project.draw(S, x, y, w, h, App)
     "Save writes editor_project.lua + main.lua. MANIFEST / CODE tabs edit files under mods/.",
     x + 20 * s, row + 90 * s, PAL.muted)
 
-  row = row + overviewH + 12 * s
+  row = row + overviewH + 16 * s
+  Kit.caption(x, row, "VALIDATION RESULT")
+  row = row + 24 * s
   if S.validateOutput and S.validateOutput ~= "" then
     local lines = lastValidateLines(S.validateOutput, 6)
     for _, line in ipairs(lines) do
@@ -401,12 +418,22 @@ function Project.draw(S, x, y, w, h, App)
       row = row + 14 * s
     end
     row = row + 4 * s
+  else
+    Kit.text("micro", "Not run yet. Select Validate to check this mod against the active game data.",
+      x, row, PAL.faint)
+    row = row + 20 * s
   end
 
   -- The whole Project workflow scrolls as one page. Keep this settings card
   -- at its natural height instead of squeezing it into whatever viewport
   -- space remains, which previously hid validation and made the form
   -- impossible to reach on shorter windows.
+  Kit.caption(x, row, "ADVANCED MOD OVERRIDES")
+  row = row + 24 * s
+  Kit.text("micro",
+    "Optional new-game defaults and engine limits. Leave unchanged to use the selected ROM's values.",
+    x, row, PAL.muted)
+  row = row + 24 * s
   local formY = row
   local lowerH = S._projectSettingsH or (520 * s)
   Kit.card(x, formY, w, lowerH, 14 * s)
@@ -424,8 +451,12 @@ function Project.draw(S, x, y, w, h, App)
     fy = fy + fh + 8 * s
   end
 
-  Kit.caption(viewX, fy, "BOOT")
+  Kit.caption(viewX, fy, "NEW-GAME START")
   fy = fy + 24 * s
+  Kit.text("micro",
+    "Overrides the initial map, position, names, money, and healing return point for a new game.",
+    viewX, fy, PAL.muted)
+  fy = fy + 22 * s
 
   row("Start map", function(fx, fy_, fw, fh_)
     local cur = tostring(bootField(S, "startMap") or "")
@@ -465,7 +496,7 @@ function Project.draw(S, x, y, w, h, App)
     if v ~= cur then setBoot(S, "rivalName", v, App) end
   end)
 
-  row("Start $", function(fx, fy_, fw, fh_)
+  row("Starting money", function(fx, fy_, fw, fh_)
     local cur = bootField(S, "startMoney") or 0
     local v = RegList.num(App, "pr_boot_money", fx, fy_, 100 * s, fh_, cur)
     if v ~= cur then setBoot(S, "startMoney", v, App) end
@@ -492,6 +523,10 @@ function Project.draw(S, x, y, w, h, App)
   fy = fy + secGap
   Kit.caption(viewX, fy, "CONSTANTS")
   fy = fy + 24 * s
+  Kit.text("micro",
+    "Optional rules and capacity limits. Unchanged fields continue using the selected ROM's defaults.",
+    viewX, fy, PAL.muted)
+  fy = fy + 22 * s
 
   if Generation.isGen2(S) then
     row("Shiny rate", function(fx, fy_, fw, fh_)
@@ -600,6 +635,10 @@ function Project.draw(S, x, y, w, h, App)
   Kit.caption(viewX, fy, "TRADES / SHOPS")
   fy = fy + 24 * s
   Kit.text("micro",
+    "Open the dedicated editors for in-game trades and shop inventories.",
+    viewX, fy, PAL.muted)
+  fy = fy + 22 * s
+  Kit.text("micro",
     "Use the TRADES and SHOPS tabs to edit in-game trades and mart stock.",
     viewX, fy, PAL.muted)
   fy = fy + 20 * s
@@ -616,6 +655,10 @@ function Project.draw(S, x, y, w, h, App)
   if not Generation.isGen2(S) then
     Kit.caption(viewX, fy, "FLY ORDER")
     fy = fy + 24 * s
+    Kit.text("micro",
+      "Controls the order and availability of destinations shown by the Fly menu.",
+      viewX, fy, PAL.muted)
+    fy = fy + 22 * s
     Kit.text("micro",
       "field.flyOrder (Town Map / Fly menu) and landing spots in field.flyWarps.",
       viewX, fy, PAL.muted)
@@ -697,6 +740,10 @@ function Project.draw(S, x, y, w, h, App)
     -- order) plus landing spots in gen2Landmarks.spawns; no field registry.
     Kit.caption(viewX, fy, "FLY POINTS")
     fy = fy + 24 * s
+    Kit.text("micro",
+      "Maps each Fly landmark to the spawn and landing position used on arrival.",
+      viewX, fy, PAL.muted)
+    fy = fy + 22 * s
     Kit.text("micro",
       "FieldMoves.FLYPOINTS order (landmark/spawn/flag) and landing spots"
         .. " (map/x/y) from gen2Landmarks.spawns.",
