@@ -23,9 +23,19 @@ end)
 assert(pinned ~= nil)
 assert(PlaytestPaths.pinnedRuntime(root, function() return false end) == nil)
 
+local archive = PlaytestPaths.pinnedRuntime(root, function() return false end,
+  function(path) return path:match("gen1recomp%.love$") ~= nil end)
+assert(archive and archive:match("gen1recomp%.love$"))
+
 local command = PlaytestPaths.windowsLaunch(
   "C:\\pack\\love\\love.exe", "C:\\pack\\runtime\\gen1recomp", "red")
 assert(command:find('cd /d "C:\\pack\\runtime\\gen1recomp"', 1, true))
-assert(command:find('"C:\\pack\\love\\love.exe" . --game=red', 1, true))
+assert(command:find('"C:\\pack\\love\\love.exe" "." --game=red', 1, true))
+
+local archiveCommand = PlaytestPaths.windowsLaunch(
+  "C:\\pack\\love\\love.exe", "C:\\pack\\runtime\\gen1recomp.love",
+  "C:\\pack", "gold")
+assert(archiveCommand:find('cd /d "C:\\pack"', 1, true))
+assert(archiveCommand:find('"C:\\pack\\runtime\\gen1recomp.love" --game=gold', 1, true))
 
 print("ok playtest paths")

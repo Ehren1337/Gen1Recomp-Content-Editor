@@ -23,18 +23,24 @@ function PlaytestPaths.same(a, b)
   return normalize(a) == normalize(b)
 end
 
-function PlaytestPaths.pinnedRuntime(root, isValidRoot)
+function PlaytestPaths.pinnedRuntime(root, isValidRoot, isFile)
   local candidate = tostring(root or "") .. separator()
     .. "runtime" .. separator() .. "gen1recomp"
   if type(isValidRoot) == "function" and isValidRoot(candidate) then
     return candidate
   end
+  local archive = candidate .. ".love"
+  if type(isFile) == "function" and isFile(archive) then return archive end
   return nil
 end
 
-function PlaytestPaths.windowsLaunch(loveExe, runtimeRoot, version)
-  return string.format('cd /d "%s" && start "" "%s" . --game=%s',
-    runtimeRoot, loveExe, version)
+function PlaytestPaths.windowsLaunch(loveExe, runtimeSource, workDir, version)
+  local source = runtimeSource
+  if version == nil then
+    version, workDir, source = workDir, runtimeSource, "."
+  end
+  return string.format('cd /d "%s" && start "" "%s" "%s" --game=%s',
+    workDir, loveExe, source, version)
 end
 
 return PlaytestPaths

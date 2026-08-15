@@ -2,6 +2,12 @@
 -- assembled from the pinned Gen1Recomp checkout; only tools/ is editor-owned.
 local EditorApp
 
+local function mountPinnedRuntime()
+  if not require("tools.content-editor.RuntimeMount").mount() then
+    error("Could not mount the pinned runtime from runtime/gen1recomp")
+  end
+end
+
 local function addEditorRequirePath()
   local paths = table.concat({
     "tools/content-editor/?.lua",
@@ -24,6 +30,7 @@ end
 
 function love.load(args)
   love.graphics.setDefaultFilter("nearest", "nearest")
+  mountPinnedRuntime()
   addEditorRequirePath()
   local version = os.getenv("POKEPORT_VERSION") or "red"
   require("src.core.GameVersion").set(version)

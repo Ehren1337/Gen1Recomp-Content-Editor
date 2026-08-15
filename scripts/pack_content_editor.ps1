@@ -99,42 +99,16 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   $runtimeExcludeDirs = @(
     ".git", ".github", "dist", "generated", "node_modules", "__pycache__"
   )
-  # The editor host also starts from the pin. Editor-owned files copied below
-  # are the only overlay; no root src/ snapshot is staged.
-  Copy-TreeFiltered -From $runtimeSource -To $Stage `
-    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles `
-    -RootExcludeDirNames @("mods")
-  $runtimePatches = Get-ChildItem -LiteralPath (Join-Path $Root "runtime\patches") `
-    -Filter "*.patch" | Sort-Object Name
-  foreach ($patch in $runtimePatches) {
-    $relativeStage = [IO.Path]::GetRelativePath($Root, $Stage).Replace("\", "/")
-    & git -C $Root apply --check --directory=$relativeStage $patch.FullName
-    if ($LASTEXITCODE -ne 0) {
-      throw "Runtime patch no longer applies: $($patch.Name)"
-    }
-    & git -C $Root apply --directory=$relativeStage $patch.FullName
-    if ($LASTEXITCODE -ne 0) {
-      throw "Could not apply runtime patch: $($patch.Name)"
-    }
+  # Release packs carry one immutable LÖVE archive, not a loose source tree.
+  # Source checkouts retain the submodule directory for review and pinning.
+  $runtimeStage = Join-Path $Stage "runtime"
+  New-Item -ItemType Directory -Force -Path $runtimeStage | Out-Null
+  $runtimeArchive = Join-Path $runtimeStage "gen1recomp.love"
+  & git -C $runtimeSource archive --format=zip `
+    "--output=$runtimeArchive" HEAD -- . ":(exclude)mods"
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $runtimeArchive)) {
+    throw "Could not build pinned runtime archive."
   }
-  Copy-TreeFiltered -From $runtimeSource `
-    -To (Join-Path $Stage "runtime\gen1recomp") `
-    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles `
-    -RootExcludeDirNames @("mods")
-  foreach ($patch in $runtimePatches) {
-    $relativeRuntime = [IO.Path]::GetRelativePath(
-      $Root, (Join-Path $Stage "runtime\gen1recomp")).Replace("\", "/")
-    & git -C $Root apply --check --directory=$relativeRuntime $patch.FullName
-    if ($LASTEXITCODE -ne 0) {
-      throw "Nested runtime patch no longer applies: $($patch.Name)"
-    }
-    & git -C $Root apply --directory=$relativeRuntime $patch.FullName
-    if ($LASTEXITCODE -ne 0) {
-      throw "Could not patch nested runtime: $($patch.Name)"
-    }
-  }
-  New-Item -ItemType Directory -Force `
-    -Path (Join-Path $Stage "runtime\gen1recomp\mods") | Out-Null
 
   foreach ($f in @("README.md", "README.txt", ".gitattributes")) {
     $src = Join-Path $Root $f

@@ -697,7 +697,13 @@ end
 -- commit recorded by Git. Portable packages include this directory, so this
 -- does not introduce a network or local-install requirement for users.
 local function pinnedRuntimeRoot(root)
-  return PlaytestPaths.pinnedRuntime(root, DataSource.isValidRecompRoot)
+  return PlaytestPaths.pinnedRuntime(root, DataSource.isValidRecompRoot,
+    function(path)
+      local file = io.open(path, "rb")
+      if not file then return false end
+      file:close()
+      return true
+    end)
 end
 
 local function shQuote(value)
@@ -783,7 +789,11 @@ function App.playtestMod()
     return say("Pinned Playtest runtime is missing — run git submodule update --init")
   end
   local loveExe, fused = resolveLoveExe({ root, runtimeRoot, recomp })
-  local runtimeMods = runtimeRoot .. sep .. "mods" .. sep .. id
+  local runtimeArchive = runtimeRoot:sub(-5):lower() == ".love"
+  local runtimeWorkDir = runtimeArchive and root or runtimeRoot
+  local runtimeModsBase = runtimeArchive
+    and love.filesystem.getSaveDirectory() or runtimeRoot
+  local runtimeMods = runtimeModsBase .. sep .. "mods" .. sep .. id
   local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
   if not okSync then
     return say("Playtest runtime sync failed: " .. tostring(syncErr))
@@ -796,7 +806,9 @@ function App.playtestMod()
       -- `start exe absolute-source` can silently drop the source argument on
       -- some cmd.exe quoting paths, producing LÖVE's "No code to run" screen.
       -- Make the pin the child's working directory and launch `.` instead.
-      cmd = PlaytestPaths.windowsLaunch(loveExe, runtimeRoot, version)
+      local source = runtimeArchive and runtimeRoot or "."
+      cmd = PlaytestPaths.windowsLaunch(
+        loveExe, source, runtimeWorkDir, version)
     end
   else
     local logPath = playtestLogPath()

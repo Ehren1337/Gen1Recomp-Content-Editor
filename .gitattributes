@@ -5,7 +5,6 @@
 ContentEditor.sh text eol=lf
 ContentEditor.command text eol=lf
 scripts/*.sh text eol=lf
-runtime/patches/*.patch text eol=lf
 
 # Windows launcher remains native to cmd.exe.
 ContentEditor.bat text eol=crlf
