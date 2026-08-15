@@ -3,6 +3,13 @@ set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LOVE="$HERE/love/love.app/Contents/MacOS/love"
+EDITOR_SOURCE="$HERE"
+if [ ! -f "$HERE/main.lua" ]; then
+  chmod +x "$HERE/scripts/prepare_content_editor.sh" 2>/dev/null || true
+  "$HERE/scripts/prepare_content_editor.sh" >/dev/null
+  EDITOR_SOURCE="$HERE/.content-editor-runtime"
+  export POKEPORT_CONTENT_ROOT="$HERE"
+fi
 
 # Packs built on Windows often extract without +x.
 chmod +x "$0" 2>/dev/null || true
@@ -16,11 +23,11 @@ if [ ! -x "$LOVE" ]; then
   exit 1
 fi
 
-if [ ! -f "$HERE/main.lua" ]; then
-  echo "main.lua is missing from $HERE" >&2
+if [ ! -f "$EDITOR_SOURCE/main.lua" ]; then
+  echo "main.lua is missing from $EDITOR_SOURCE" >&2
   echo "Run ContentEditor.command from the extracted pack folder." >&2
   echo "Do not open love.app directly — that yields 'No code to run'." >&2
   exit 1
 fi
 
-exec "$LOVE" "$HERE" --content-editor "$@"
+exec "$LOVE" "$EDITOR_SOURCE" --content-editor "$@"

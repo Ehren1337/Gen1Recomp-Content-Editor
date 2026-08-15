@@ -1,4 +1,4 @@
-package.path = "tools/content-editor/?.lua;" .. package.path
+package.path = "runtime/gen1recomp/?.lua;tools/content-editor/?.lua;" .. package.path
 
 love = {
   filesystem = {

@@ -1,4 +1,5 @@
--- Content editor app shell.  Launch with `love . --content-editor`.
+-- Content editor app shell. Launch through a ContentEditor platform script;
+-- source checkouts first assemble the pinned runtime into an ignored tree.
 -- Reuses the save-editor Kit/Theme via the shared require path.
 
 local Data = require("src.core.Data")
