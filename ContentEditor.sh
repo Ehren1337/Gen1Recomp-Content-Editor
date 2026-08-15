@@ -2,6 +2,14 @@
 # Gen1Recomp Content Editor - Linux launcher
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")"
+ROOT="$PWD"
+EDITOR_SOURCE="$ROOT"
+if [[ ! -f "$ROOT/main.lua" ]]; then
+  chmod +x "$ROOT/scripts/prepare_content_editor.sh" 2>/dev/null || true
+  "$ROOT/scripts/prepare_content_editor.sh" >/dev/null
+  EDITOR_SOURCE="$ROOT/.content-editor-runtime"
+  export POKEPORT_CONTENT_ROOT="$ROOT"
+fi
 
 # Packs built on Windows often extract without +x. Fix before -x checks.
 chmod +x "$0" 2>/dev/null || true
@@ -28,4 +36,4 @@ else
   exit 1
 fi
 
-exec "$LOVE" . --content-editor "$@"
+exec "$LOVE" "$EDITOR_SOURCE" --content-editor "$@"

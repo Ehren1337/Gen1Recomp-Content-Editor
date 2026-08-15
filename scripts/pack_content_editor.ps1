@@ -86,9 +86,8 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     ".DS_Store", "Thumbs.db"
   )
 
-  # Playtest runs the exact Gen1Recomp submodule revision, not the editor's
-  # historical runtime snapshot. Keep it as ordinary files in release packs
-  # so end users never need Git or network access.
+  # Playtest runs the exact Gen1Recomp submodule revision. Keep it as ordinary
+  # files in release packs so end users never need Git or network access.
   $runtimeSource = Join-Path $Root "runtime\gen1recomp"
   if (-not (Test-Path (Join-Path $runtimeSource "main.lua"))) {
     throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
@@ -175,20 +174,6 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   foreach ($mf in $manifests) {
     Copy-Item -LiteralPath $mf.FullName `
       -Destination (Join-Path $toolsStage $mf.Name) -Force
-  }
-
-  $dataStage = Join-Path $Stage "data"
-  New-Item -ItemType Directory -Force -Path $dataStage | Out-Null
-  if (Test-Path (Join-Path $Root "data\scripts")) {
-    Copy-TreeFiltered -From (Join-Path $Root "data\scripts") `
-      -To (Join-Path $dataStage "scripts") `
-      -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
-  }
-  foreach ($pf in @("palettes_gbc.lua", "palettes_yellow.lua")) {
-    $src = Join-Path $Root "data\$pf"
-    if (Test-Path $src) {
-      Copy-Item -LiteralPath $src -Destination (Join-Path $dataStage $pf) -Force
-    }
   }
 
   $assetsStage = Join-Path $Stage "assets"
