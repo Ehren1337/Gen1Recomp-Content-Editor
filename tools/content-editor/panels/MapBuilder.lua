@@ -967,10 +967,10 @@ end
 
 local function drawTilePalette(S, source, x, y, w, h, App)
   Kit.card(x, y, w, h, 10 * Kit.scale)
-  Kit.text("caption", "TILESETS", x + 10 * Kit.scale, y + 8 * Kit.scale, PAL.heading)
-  if Kit.button(x + w - 90 * Kit.scale, y + 5 * Kit.scale,
-      80 * Kit.scale, 24 * Kit.scale, "Import PNG", {
-        kind = "good", tooltip = "Add a custom PNG arranged as 16x16 tiles",
+  Kit.text("caption", "TILESET SOURCES", x + 10 * Kit.scale, y + 8 * Kit.scale, PAL.heading)
+  if Kit.button(x + w - 126 * Kit.scale, y + 5 * Kit.scale,
+      116 * Kit.scale, 24 * Kit.scale, "+ Custom PNG", {
+        kind = "good", tooltip = "Copy a mod-owned 16x16 PNG into this project",
       }) then importTileset(S, App) end
 
   local ids = source and LayeredMap.sourceIds(S, source.id) or sortedKeys(
@@ -998,11 +998,21 @@ local function drawTilePalette(S, source, x, y, w, h, App)
     S.builderSourceId, S.builderTile, S.builderTileOffset = ids[sourceIndex], 0, 0
   end
 
-  Kit.text("micro", string.format("source %d / %d", sourceIndex, #ids),
-    x + 10 * Kit.scale, sy + 25 * Kit.scale, PAL.faint)
-
   local descriptor = LayeredMap.sourceDescriptor(S, S.builderSourceId)
-  local gridY = sy + 42 * Kit.scale
+  local isCustom = descriptor and not descriptor.runtimeTileset
+  local ownership = isCustom and "CUSTOM MOD SOURCE" or "RUNTIME REFERENCE"
+  local ownershipColor = isCustom and PAL.green or PAL.blue
+  Kit.text("micro", ownership, x + 10 * Kit.scale, sy + 27 * Kit.scale,
+    ownershipColor)
+  Kit.textRight("micro", string.format("%d / %d", sourceIndex, #ids),
+    x + w - 10 * Kit.scale, sy + 27 * Kit.scale, PAL.faint)
+  local ownershipHelp = isCustom
+    and "Editable PNG saved with this mod"
+    or "Read-only blocks from the selected ROM"
+  Kit.text("micro", ownershipHelp, x + 10 * Kit.scale, sy + 43 * Kit.scale,
+    PAL.muted)
+
+  local gridY = sy + 62 * Kit.scale
   local footerH = (S.builderSourceOptions and 90 or 34) * Kit.scale
   local gridH = math.max(20 * Kit.scale,
     h - (gridY - y) - footerH - 8 * Kit.scale)
@@ -1054,10 +1064,10 @@ local function drawTilePalette(S, source, x, y, w, h, App)
   local bw = (w - 20 * Kit.scale) / 2
   local custom = descriptor and not descriptor.runtimeTileset
   if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
-      custom and "Animate selected" or "Edit game tileset", { kind = "accent",
+      custom and "Edit custom source" or "View runtime details", { kind = "accent",
         tooltip = custom
-          and "Create or edit an animation for the selected tile"
-          or "Open this game tileset in the graphics editor" }) then
+          and "Edit color mode and animation for this mod-owned PNG"
+          or "Open the ROM-backed tileset; editing there creates a mod replacement" }) then
     if custom then
       S.builderPane = "tileset"
     elseif descriptor and descriptor.runtimeTileset then
@@ -1075,9 +1085,9 @@ local function drawTilePalette(S, source, x, y, w, h, App)
   if S.builderSourceOptions then
     fy = fy + 28 * Kit.scale
     if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
-        custom and "Replace image" or "Import tile image", { kind = "good",
+        custom and "Replace custom PNG" or "Create custom source", { kind = "good",
           tooltip = custom and "Replace this source without changing painted cells"
-            or "Add your own 16x16 tile image" }) then
+            or "Import a mod-owned PNG; the runtime reference remains unchanged" }) then
       if custom then replaceTileSource(S, App, descriptor)
       else importTileset(S, App) end
     end
@@ -1427,11 +1437,14 @@ local function drawTilesetPane(S, x, y, w, h, App)
     PAL.muted)
   y = y + 24 * Kit.scale
   if source.runtimeTileset then
-    Kit.text("micro", "Animations require an imported PNG source.", x, y, PAL.muted)
-    Kit.text("micro", "Use + New PNG below the tile palette, then select a tile.",
+    Kit.text("micro", "RUNTIME REFERENCE · read-only data from the selected ROM",
+      x, y, PAL.blue)
+    Kit.text("micro", "Use + Custom PNG to create editable, mod-owned artwork.",
       x, y + 17 * Kit.scale, PAL.caption)
     return
   end
+  Kit.text("micro", "CUSTOM MOD SOURCE · saved with this project", x, y, PAL.green)
+  y = y + 24 * Kit.scale
   Kit.text("micro", "Color mode", x, y + 5 * Kit.scale, PAL.caption)
   local cx = x + 82 * Kit.scale
   for _, option in ipairs({

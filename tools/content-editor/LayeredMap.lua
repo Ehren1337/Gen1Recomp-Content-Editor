@@ -510,7 +510,7 @@ function LayeredMap.sourceDescriptor(S, sourceId)
     if not tileset then return nil end
     return {
       id = sourceId,
-      name = tilesetId .. " (game blocks)",
+      name = tilesetId,
       image = tileset.image,
       colorMode = tileset.trueColor and "true_color" or "palette",
       runtimeTileset = tilesetId,
@@ -1096,7 +1096,9 @@ local function emitTransform(context)
     "return function(ctx)",
     "  local baseImages = {}",
     "  for _, relative in ipairs(BASES) do",
-    "    if not ctx.exists(relative) then return end",
+    "    if not ctx.exists(relative) then",
+    "      error(\"missing selected-ROM tileset asset: \" .. relative)",
+    "    end",
     "    baseImages[relative] = ctx.readImage(relative)",
     "  end",
     "  for _, output in ipairs(OUTPUTS) do",
@@ -1131,6 +1133,50 @@ local function emitTransform(context)
   local ok, err = ModIO.writeText(path, table.concat(lines, "\n"))
   if not ok then return false, err end
   return ModIO.setMapBuilderTransform(context.S.path, "mapbuilder_transforms.lua")
+end
+
+-- Materialize the freshly emitted recipe immediately for editor previews.
+-- The game runs the same sandboxed transform on load, but waiting for a
+-- Playtest leaves Map Editor and World Viewer pointing at a derived atlas
+-- that does not exist yet. The proxy exposes only the physical recipe file;
+-- ROM inputs and derived outputs still use LÖVE's mounted filesystem.
+local function materializeTransform(S)
+  local AssetTransform = require("src.mods.AssetTransform")
+  local recipeName = "mapbuilder_transforms.lua"
+  local recipePath = S.path .. package.config:sub(1, 1) .. recipeName
+  local recipeKey = "__content_editor_open_mod__/" .. recipeName
+  local fs = {}
+
+  function fs.read(path, ...)
+    if path == recipeKey then
+      local file, err = io.open(recipePath, "rb")
+      if not file then return nil, err end
+      local contents = file:read("*a")
+      file:close()
+      return contents
+    end
+    return love.filesystem.read(path, ...)
+  end
+
+  function fs.getInfo(path, ...)
+    return love.filesystem.getInfo(path, ...)
+  end
+
+  function fs.createDirectory(path)
+    return love.filesystem.createDirectory(path)
+  end
+
+  function fs.write(path, data, ...)
+    return love.filesystem.write(path, data, ...)
+  end
+
+  return AssetTransform.runFor({
+    path = "__content_editor_open_mod__",
+    manifest = {
+      id = S.project.id,
+      assets_transforms = recipeName,
+    },
+  }, fs, true)
 end
 
 -- Map assembly --------------------------------------------------------------
@@ -1395,11 +1441,20 @@ function LayeredMap.compileProject(S)
   end
   local transformed, transformErr = emitTransform(context)
   if not transformed then return false, transformErr end
+  local materialized, materializeErr = materializeTransform(S)
+  if not materialized then return false, materializeErr end
   project.layeredTransform = "mapbuilder_transforms.lua"
   if S.manifestDraft and S.browseModId == project.id then
     S.manifestDraft.assets_transforms = project.layeredTransform
   end
+  -- The atlas may have been missing when the current map/world canvases were
+  -- first built. Drop every image/tileset/map view cache after materializing
+  -- it so all editor views pick up the new file without a restart or tab hop.
+  pcall(function() require("src.render.Assets").invalidate() end)
   pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  S._liveTilesets = nil
+  S._mapNeedsRebuild = S.mapId or S.builderMapId
+  S._worldFitKey = nil
   Preview.invalidate()
   return true, string.format("compiled %d layered map(s)", compiled)
 end
