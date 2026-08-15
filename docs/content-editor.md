@@ -123,13 +123,35 @@ editor installs it via the OS package manager
 works) and sets `MODKIT_LUAJIT`. It does **not** drop `luajit.exe` into the
 LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`.
 
-**Playtest** requires a linked Recomp folder. It synchronizes the currently
-open editor project into that runtime's `mods/<id>`, enables only that mod for
-the playtest, and launches the editor's selected game version. The open editor
-project remains the authoring source of truth; each Playtest refreshes the
-runtime copy before launch.
-Imported caches and fixtures remain available for authoring and previews, but
-the editor pack itself is not used as the playtest runtime.
+**Playtest does not require Link Recomp.** It uses the complete Gen1Recomp
+runtime bundled with the editor. The
+runtime source is pinned to the integrated upstream commit recorded in
+`.github/runtime-upstream.json`, so a released editor and its Playtest runtime
+are tested and shipped together instead of depending on whichever Recomp build
+happens to be installed on the machine.
+
+On each launch, Playtest:
+
+1. saves the open project and synchronizes it to the bundled `mods/<id>` when
+   the project was opened from an external location;
+2. disables previously enabled mods and enables only the open editor mod;
+3. boots the ROM version currently selected in the editor with `--game`.
+
+Selecting Red, Blue, Yellow, or Gold controls that Playtest launch. It does not
+rewrite `manifest.json` compatibility fields: `games`, `gen2compat`, and
+`game_version` remain the mod author's declaration. The open editor project
+remains the authoring source of truth.
+
+Link Recomp remains optional for reusing an existing imported ROM cache. Its
+executable is considered only as a development-checkout fallback when the
+editor root has no bundled LÖVE/Gen1Recomp executable. Normal release packages
+already contain that executable and never require a linked checkout.
+
+The scheduled `Sync Gen1Recomp runtime` workflow checks `bryanthaboi/gen1recomp`
+`dev` daily. New upstream code is merged onto `sync/gen1recomp-runtime`, the
+recorded commit is advanced, and a ready-for-review PR is created or refreshed.
+Runtime and package checks must pass before that update is merged into `main`
+and becomes the pin used by later releases.
 
 ## Pack for sharing
 
