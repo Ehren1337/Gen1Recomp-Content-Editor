@@ -4,7 +4,9 @@ Author mods for Gen1Recomp (maps, Pokémon, trainers, dialog, and more).
 
 This pack ships **without** a ROM cache (`data/generated`). That keeps it
 legal to redistribute. On first launch you get stub fixture data until you
-link a Gen1Recomp install or import your own ROM.
+link a Gen1Recomp install or import your own ROM. The pack is portable: data
+created after extraction stays under `love/` rather than the normal OS save
+directory, and normal installed-game mods are isolated from Playtest.
 
 ## Run
 
@@ -94,8 +96,17 @@ On **Project**, under Overview:
   (Program Files — not AppData; Defender flags AppData LuaJIT as SuspLua);
   **Linux** tries a passwordless `apt`/`dnf`/`pacman` install, else install
   manually (`sudo apt install luajit`) or set `MODKIT_LUAJIT`.
-- **Playtest** — linked Recomp syncs `mods\<id>` into that install and launches
-  it; imported/local cache launches this pack; fixtures warn about stub data.
+- **Playtest** — saves and synchronizes only the open mod into the bundled
+  pinned runtime, then launches the ROM selected in the editor. Link Recomp is
+  an optional data-source fallback, not a Playtest requirement.
+
+## Portable data
+
+`love/portable.txt` makes the editor and bundled game share package-local ROM
+caches, options, saves, derived assets, and `love/mods/<id>`. The launchers use
+the isolated identity `gen1recomp-content-editor-portable`, so mods from the
+normal OS Gen1Recomp save directory are not loaded. The downloaded archive
+contains none of that personal data; the folders appear only after use.
 
 ## Share your mod
 

@@ -36,7 +36,7 @@ assembled and launch directly.
 .\scripts\pack_content_editor.ps1 -Platform windows
 ```
 
-Outputs (no ROM cache):
+Outputs (no ROM cache or user saves):
 
 - `dist/win/gen1recomp-content-editor-win64.zip` → `ContentEditor.bat`
 - `dist/linux/gen1recomp-content-editor-linux64.tar.gz` → `./ContentEditor.sh`
@@ -44,8 +44,14 @@ Outputs (no ROM cache):
 - macOS: `dist/macos/gen1recomp-content-editor-macos-universal.tar.gz` →
   `./ContentEditor.command`
 
+Portable packages include `love/portable.txt`. ROM caches, saves, options,
+derived assets, and Playtest mods created after extraction stay under the
+package's `love/` directory. A dedicated LÖVE identity prevents mods from a
+normal `%APPDATA%`/XDG/macOS Gen1Recomp installation from leaking into the
+portable editor. Source checkouts retain the normal platform save directory.
+
 On **Project → GAME DATA** they can **Link Recomp** (reuse an existing
-install’s cache), **Import ROM** (cache in the LÖVE save directory), or
+install’s cache), **Import ROM** (cache in the active portable/save root), or
 **Use fixtures** (stub data).
 
 **Playtest is standalone; linking Recomp is not required.** Release packages include the exact Gen1Recomp
@@ -53,7 +59,7 @@ submodule revision under `runtime/gen1recomp` and the LÖVE runtime; the same
 revision is recorded by `.github/runtime-upstream.json`. Playtest
 saves/synchronizes the open project, enables only that mod, and boots the ROM
 version selected in the editor. A linked Recomp checkout is used only as an
-fallback only when a source clone has not initialized its pinned submodule.
+fallback when a source clone has not initialized its pinned submodule.
 Selecting a ROM does not change the mod's authored `games`, `gen2compat`, or
 `game_version` manifest compatibility.
 
