@@ -4,11 +4,10 @@ In-game LÖVE editor that authors **mod folders** — never the ROM cache under
 `data/generated/`. Launch:
 
 ```sh
-git submodule update --init --recursive
-./ContentEditor.sh
-./ContentEditor.sh --mod mods/my_content
+love . --content-editor
+love . --content-editor --mod mods/my_content
 # or
-ContentEditor.bat --mod mods/my_content
+POKEPORT_CONTENT_EDITOR=1 love .
 ```
 
 On Windows with the bundled runtime:
@@ -127,8 +126,8 @@ LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`
 **Playtest does not require Link Recomp.** It runs the exact upstream checkout
 at `runtime/gen1recomp`, whose Git submodule commit is mirrored in
 `.github/runtime-upstream.json`. Release archives contain ordinary copies of
-that pinned tree, so players need neither Git nor network access. No duplicate
-game-runtime snapshot is tracked in the editor repository.
+that pinned tree, so players need neither Git nor network access. The editor's
+historical Lua snapshot is not the Playtest source of truth.
 
 On each launch, Playtest:
 

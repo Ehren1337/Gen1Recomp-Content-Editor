@@ -30,21 +30,6 @@ jobs:
           recorded="$(python -c 'import json; print(json.load(open(".github/runtime-upstream.json"))["integratedCommit"])')"
           checked_out="$(git -C runtime/gen1recomp rev-parse HEAD)"
           test "$recorded" = "$checked_out"
-          test ! -e src
-          test ! -e main.lua
-      - name: Assemble source editor workspace
-        shell: pwsh
-        run: |
-          ./scripts/prepare_content_editor.ps1 | Out-Null
-          if (-not (Test-Path .content-editor-runtime/src/core/Input.lua)) { exit 1 }
-          if (-not (Test-Path .content-editor-runtime/tools/content-editor/App.lua)) { exit 1 }
-      - name: Verify POSIX source assembly
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          bash scripts/prepare_content_editor.sh >/dev/null
-          test -f .content-editor-runtime/src/core/Input.lua
-          test -f .content-editor-runtime/tools/content-editor/App.lua
       - name: Run runtime compatibility tests
         shell: bash
         run: |

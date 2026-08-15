@@ -1,6 +1,5 @@
 # Content Editor packages and temporary staging trees
 /dist/
-/.content-editor-runtime/
 
 # Local ROM-derived caches and private game data
 /data/generated/

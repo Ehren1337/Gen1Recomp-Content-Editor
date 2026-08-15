@@ -13,20 +13,15 @@ Deep reference: [docs/content-editor.md](docs/content-editor.md)
 
 ```sh
 git submodule update --init --recursive
-./ContentEditor.sh
-./ContentEditor.sh --mod mods/my_content
+love . --content-editor
+love . --content-editor --mod mods/my_content
 ```
 
-Windows:
+Windows (bundled runtime):
 
 ```powershell
-.\ContentEditor.bat
-.\ContentEditor.bat --mod mods/my_content
+.\love\love-11.5-win64\love.exe . --content-editor
 ```
-
-Source launchers assemble the ignored `.content-editor-runtime/` workspace
-from the pin and overlay editor-owned tools. Portable packages are already
-assembled and launch directly.
 
 **Portable pack (share with others)**
 

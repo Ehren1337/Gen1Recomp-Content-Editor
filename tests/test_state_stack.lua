@@ -1,5 +1,3 @@
-package.path = "runtime/gen1recomp/?.lua;" .. package.path
-
 package.preload["src.mods.Runtime"] = function()
   return {
     wants = function() return false end,
