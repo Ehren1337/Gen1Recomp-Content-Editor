@@ -13,13 +13,13 @@ jobs:
   package:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Build portable packages
         shell: pwsh
         run: ./scripts/pack_content_editor.ps1 -Platform all
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: content-editor-packages
           path: |
@@ -33,7 +33,7 @@ jobs:
           "RELEASE_TAG=content-editor-v0.1.${{ github.run_number }}" >> $env:GITHUB_ENV
       - name: Publish tagged release assets
         if: startsWith(github.ref, 'refs/tags/content-editor-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/win/*.zip
@@ -41,7 +41,7 @@ jobs:
             dist/macos/*.tar.gz
       - name: Publish automatic main release
         if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Content Editor v0.1.${{ github.run_number }}
