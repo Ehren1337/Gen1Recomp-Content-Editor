@@ -214,17 +214,17 @@ function Project.draw(S, x, y, w, h, App)
 
   row = cardY + contentH + 20 * s
 
+  Kit.caption(x, row, "2  TARGET GAME")
+  row = row + 28 * s
+  Kit.text("micro", "Controls the ROM data used by the editor and the game Playtest boots.",
+    x, row, PAL.muted)
+  row = row + 22 * s
   local gameCardY = row
-  local gameCardH = 132 * s
+  local gameCardH = 86 * s
   Kit.card(x, gameCardY, w, gameCardH, 14 * s)
   local gameX = x + pad
   local gameW = w - 2 * pad
   row = gameCardY + pad
-  Kit.caption(gameX, row, "2  TARGET GAME")
-  row = row + 24 * s
-  Kit.text("micro", "Choose which imported ROM data is edited and which game Playtest boots.",
-    gameX, row, PAL.muted)
-  row = row + 22 * s
   local GameVersion = require("src.core.GameVersion")
   local curVer = S.version or App.dataVersion or "red"
   local gen = (GameVersion.generation and GameVersion.generation(curVer)) or 1
@@ -252,14 +252,18 @@ function Project.draw(S, x, y, w, h, App)
     gameX, row, PAL.muted)
   row = gameCardY + gameCardH + 16 * s
 
+  Kit.caption(x, row, "3  GAME DATA")
+  row = row + 28 * s
+  Kit.text("micro",
+    "Choose where editor previews and validation read game data. This does not change the Playtest runtime.",
+    x, row, PAL.muted)
+  row = row + 22 * s
   local dataCardY = row
-  local dataCardH = 220 * s
+  local dataCardH = 140 * s
   Kit.card(x, dataCardY, w, dataCardH, 14 * s)
   local dataX = x + pad
   local dataW = w - 2 * pad
   row = dataCardY + pad
-  Kit.caption(dataX, row, "3  GAME DATA")
-  row = row + 26 * s
   local src = S.dataSource or "fixtures"
   local persistedPrefs = DataSource.loadPrefs()
   local prefs = S.dataPrefs or persistedPrefs
@@ -279,12 +283,9 @@ function Project.draw(S, x, y, w, h, App)
   end
   Kit.text("small", Kit.ellipsize("small", srcLine, dataW), dataX, row, PAL.text)
   row = row + 22 * s
-  Kit.text("micro",
-    "Import the selected ROM for complete data, reuse its imported cache, "
-      .. "or use fixtures for ROM-free editing. Link Recomp is optional and "
-      .. "only reuses data; Playtest uses this editor's bundled runtime.",
+  Kit.text("micro", "Imported ROM = complete data  •  Fixtures = samples  •  Link Recomp = optional reuse",
     dataX, row, PAL.muted)
-  row = row + 32 * s
+  row = row + 24 * s
   local dsGap = 10 * s
   local dsW = math.min(150 * s, math.floor((dataW - 2 * dsGap) / 3))
   if Kit.button(dataX, row, dsW, btnH, "Link Recomp", {
@@ -349,33 +350,11 @@ function Project.draw(S, x, y, w, h, App)
   end
   row = dataCardY + dataCardH + 18 * s
 
-  -- Validate / Playtest share the OVERVIEW caption row so they stay on screen.
-  -- GAME DATA + the overview card already fill a 1080p content pane; drawing
-  -- the buttons under that card puts them behind the status bar.
   local fh = 28 * s
-  local btnW = 120 * s
   Kit.caption(x, row, "4  CHECK & RUN")
-  if S.project then
-    if Kit.button(x + w - 2 * btnW - 10 * s, row, btnW, fh, "Validate", {
-        kind = "primary",
-        tooltip = "Run python tools/modkit.py validate on this mod",
-      }) then
-      if App.validateMod then App.validateMod()
-      else S.status = "Implement App.validateMod() to run modkit validate from the editor" end
-    end
-    if Kit.button(x + w - btnW, row, btnW, fh, "Playtest", {
-        kind = "accent",
-        tooltip = "Launch the bundled game runtime with only this mod enabled\n"
-          .. "using the ROM version selected in the editor",
-      }) then
-      if App.playtestMod then App.playtestMod()
-      else S.status = "Implement App.playtestMod() to launch a playtest build" end
-    end
-  end
   row = row + 28 * s
   Kit.text("micro",
-    "Validate checks the open mod against the selected game's data. "
-      .. "Playtest saves it, enables only this mod, and boots the selected game.",
+    "Validate finds content errors. Playtest saves and launches only this mod with the selected game.",
     x, row, PAL.muted)
   row = row + 22 * s
 
@@ -394,16 +373,34 @@ function Project.draw(S, x, y, w, h, App)
     return n
   end
 
-  local overviewH = 120 * s
+  local overviewH = 164 * s
   Kit.card(x, row, w, overviewH, 14 * s)
   Kit.text("title", p.name or p.id, x + 20 * s, row + 16 * s, PAL.heading)
   Kit.text("small", string.format(
     "Pokemon %d    Items %d    Maps %d    Tilesets %d",
     count(p.pokemon), count(p.items), count(p.maps), count(p.tilesets)),
-    x + 20 * s, row + 56 * s, PAL.text)
+    x + 20 * s, row + 52 * s, PAL.text)
   Kit.text("micro",
     "Save writes editor_project.lua + main.lua. MANIFEST / CODE tabs edit files under mods/.",
-    x + 20 * s, row + 90 * s, PAL.muted)
+    x + 20 * s, row + 78 * s, PAL.muted)
+  local actionGap = 10 * s
+  local actionW = math.floor((w - 40 * s - actionGap) / 2)
+  if Kit.button(x + 20 * s, row + 108 * s,
+      actionW, 36 * s, "Validate mod", {
+        kind = "primary",
+        tooltip = "Check this mod against the selected game's current data",
+      }) then
+    if App.validateMod then App.validateMod()
+    else S.status = "Implement App.validateMod() to run modkit validate from the editor" end
+  end
+  if Kit.button(x + 20 * s + actionW + actionGap, row + 108 * s,
+      actionW, 36 * s, "Playtest mod", {
+        kind = "accent",
+        tooltip = "Save and launch the bundled runtime with only this mod enabled",
+      }) then
+    if App.playtestMod then App.playtestMod()
+    else S.status = "Implement App.playtestMod() to launch a playtest build" end
+  end
 
   row = row + overviewH + 16 * s
   Kit.caption(x, row, "VALIDATION RESULT")
@@ -428,12 +425,35 @@ function Project.draw(S, x, y, w, h, App)
   -- at its natural height instead of squeezing it into whatever viewport
   -- space remains, which previously hid validation and made the form
   -- impossible to reach on shorter windows.
+  if S._projectAdvancedFor ~= p.id then
+    S._projectAdvancedFor = p.id
+    S.projectAdvancedOpen = false
+  end
   Kit.caption(x, row, "ADVANCED MOD OVERRIDES")
+  local advancedW = 144 * s
+  if Kit.button(x + w - advancedW, row - 4 * s, advancedW, 28 * s,
+      S.projectAdvancedOpen and "Hide settings" or "Show settings", {
+        kind = S.projectAdvancedOpen and "accent" or "ghost",
+        tooltip = "Show optional new-game, limits, trade/shop, and Fly overrides",
+      }) then
+    S.projectAdvancedOpen = not S.projectAdvancedOpen
+  end
   row = row + 24 * s
   Kit.text("micro",
-    "Optional new-game defaults and engine limits. Leave unchanged to use the selected ROM's values.",
+    "Optional new-game, rules, capacity, trade/shop, and Fly settings. Most mods do not need these.",
     x, row, PAL.muted)
   row = row + 24 * s
+  if not S.projectAdvancedOpen then
+    local closedH = 62 * s
+    Kit.card(x, row, w, closedH, 14 * s)
+    Kit.text("small", "ROM defaults remain active", x + pad, row + 12 * s, PAL.text)
+    Kit.text("micro",
+      "Open only when the mod intentionally changes how a new game starts or global limits.",
+      x + pad, row + 36 * s, PAL.muted)
+    row = row + closedH + pad
+    FormPane.finish(S, "projectPageScroll", pageTop, row, pageView)
+    return
+  end
   local formY = row
   local lowerH = S._projectSettingsH or (520 * s)
   Kit.card(x, formY, w, lowerH, 14 * s)
