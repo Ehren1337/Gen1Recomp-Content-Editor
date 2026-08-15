@@ -686,6 +686,20 @@ local function linkedRecompRoot()
   return nil
 end
 
+local function shQuote(value)
+  return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function playtestLogPath()
+  local ok, path = pcall(function()
+    return love.filesystem.getSaveDirectory()
+  end)
+  if ok and path and path ~= "" then
+    return path:gsub("[/\\]+$", "") .. "/playtest.log"
+  end
+  return "playtest.log"
+end
+
 function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -779,19 +793,50 @@ function App.playtestMod()
         loveExe, runtimeRoot, version)
     end
   else
+    local logPath = playtestLogPath()
+    -- A Linux editor launched from an AppImage inherits paths pointing into
+    -- that mounted image. Starting another AppImage with those variables can
+    -- make its loader resolve libraries from the parent mount and exit before
+    -- LÖVE starts. Run the Playtest with the host environment restored and
+    -- persist the asynchronous child's real exit status for diagnostics.
+    local launch
     if fused then
-      cmd = string.format('"%s" --game=%s &', loveExe, version)
+      launch = string.format('%s --game=%s', shQuote(loveExe), version)
     else
-      cmd = string.format('"%s" "%s" --game=%s &',
-        loveExe, runtimeRoot, version)
+      launch = string.format('%s %s --game=%s',
+        shQuote(loveExe), shQuote(runtimeRoot), version)
     end
+    cmd = string.format(
+      '( env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR %s; '
+        .. 'code=$?; printf "\\nplaytest_exit=%%s\\n" "$code"; exit "$code" ) '
+        .. '> %s 2>&1 &',
+      launch, shQuote(logPath))
   end
-  local ok, err = pcall(os.execute, cmd)
-  if not ok then
-    return say("Playtest launch failed: " .. tostring(err))
+  local linux = love.system and love.system.getOS
+    and love.system.getOS() == "Linux"
+  if linux and love.window and love.window.minimize then
+    -- Linux window managers commonly refuse focus for a background child
+    -- while its parent editor remains active. That leaves the game visible
+    -- but routes keyboard/controller input to the editor. Minimize the editor
+    -- immediately before spawning so the Playtest becomes the input owner.
+    pcall(love.window.minimize)
+  end
+  local called, execResult, execWhy, execCode = pcall(os.execute, cmd)
+  if not called or execResult == nil or execResult == false then
+    if linux and love.window and love.window.restore then
+      pcall(love.window.restore)
+    end
+    local detail = called
+      and (tostring(execWhy or "exit") .. " " .. tostring(execCode or ""))
+      or tostring(execResult)
+    return say("Playtest launch failed: " .. detail)
+  end
+  local detail = ""
+  if sep ~= "\\" then
+    detail = " — log: " .. playtestLogPath()
   end
   say("Standalone Playtest launched " .. version
-    .. " with selected editor mod: " .. id)
+    .. " with selected editor mod: " .. id .. detail)
 end
 
 function App.markDirty()
