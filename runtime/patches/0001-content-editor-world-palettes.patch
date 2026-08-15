@@ -1,0 +1,125 @@
+diff --git a/src/render/PaletteFX.lua b/src/render/PaletteFX.lua
+index 90fb6580..fdae8f67 100644
+--- a/src/render/PaletteFX.lua
++++ b/src/render/PaletteFX.lua
+@@ -604,6 +604,70 @@ PaletteFX.TILE_ALIASES = {
+ local ROOF_GROUP = 6
+ local ROUTE_6_SAFFRON = { mapId = "ROUTE_6", useMapId = "SAFFRON_CITY", cellYBelow = 2 }
+ 
++-- pokered-gbc LoadTilesetPalette slot names (group index 0–7).
++PaletteFX.WORLD_GROUP_NAMES = {
++  "GRAY", "RED", "GREEN", "BLUE", "YELLOW", "BROWN", "ROOF", "TEXT",
++}
++
++-- Sparse mod/editor overrides: tilesetId -> { [1..8] = 4×{r,g,b} or nil }.
++-- Applied in worldGroupColors without mutating the cached palettes_gbc pack.
++local worldGroupOverrides = nil
++
++local function cloneGroup4(src)
++  if type(src) ~= "table" then return nil end
++  local out = {}
++  for i = 1, 4 do
++    local c = src[i] or { 0, 0, 0 }
++    if c.r then out[i] = { c.r, c.g, c.b }
++    else out[i] = { c[1] or 0, c[2] or 0, c[3] or 0 } end
++  end
++  return out
++end
++
++local function cloneGroups8(src)
++  if type(src) ~= "table" then return nil end
++  local out = {}
++  for i = 1, 8 do out[i] = cloneGroup4(src[i]) or {
++    { 255, 255, 255 }, { 168, 168, 168 }, { 88, 88, 88 }, { 0, 0, 0 },
++  } end
++  return out
++end
++
++-- Drop RED++ baked atlases + live maps after world palette overrides change.
++local function invalidateWorldColorCaches()
++  pcall(function()
++    local TileRenderer = require("src.render.TileRenderer")
++    if TileRenderer.clearGbcAtlasCache then TileRenderer.clearGbcAtlasCache() end
++    if TileRenderer.invalidate then TileRenderer.invalidate() end
++  end)
++  pcall(function()
++    require("src.world.MapLoader").invalidateAll()
++  end)
++  pcall(function()
++    require("src.render.SpriteRenderer").invalidate()
++  end)
++end
++
++-- overrides: { [tilesetId] = { [1..8] = 4×{r,g,b} } } or nil to clear.
++function PaletteFX.setWorldGroupOverrides(overrides)
++  if type(overrides) ~= "table" or not next(overrides) then
++    worldGroupOverrides = nil
++  else
++    local clean = {}
++    for ts, groups in pairs(overrides) do
++      if type(ts) == "string" and type(groups) == "table" then
++        clean[ts] = cloneGroups8(groups)
++      end
++    end
++    worldGroupOverrides = next(clean) and clean or nil
++  end
++  invalidateWorldColorCaches()
++end
++
++function PaletteFX.worldGroupOverrides()
++  return worldGroupOverrides
++end
++
+ -- whether the extracted pack has real per-tile GBC data for this tileset
+ -- (false for a mod tileset with no pokered-gbc counterpart, or when the
+ -- pack failed to load at all)
+@@ -613,6 +677,14 @@ function PaletteFX.hasWorldTileset(tileset)
+   return (w and w.tileGroups[tileset]) ~= nil
+ end
+ 
++-- Vanilla (pack) 8×4 colors for a tileset, or nil.
++function PaletteFX.vanillaWorldGroupColors(tileset)
++  local pack = PaletteFX.gbcPack()
++  local base = pack and pack.world and pack.world.groupColors
++    and pack.world.groupColors[tileset]
++  return cloneGroups8(base)
++end
++
+ -- the palette-group (0-7) a tile GRAPHIC id resolves to in this tileset,
+ -- with the current map's tile-id exceptions (if any) applied first
+ function PaletteFX.worldGroupAt(tileset, mapId, tileId)
+@@ -636,6 +708,12 @@ function PaletteFX.worldGroupColors(data, tileset, mapId, playerCellY)
+   local w = pack and pack.world
+   local base = w and w.groupColors[tileset]
+   if not base then return nil end
++  local ov = worldGroupOverrides and worldGroupOverrides[tileset]
++  if ov then
++    local merged = {}
++    for i = 1, 8 do merged[i] = ov[i] or base[i] end
++    base = merged
++  end
+   if not w.roofGroup[tileset] then return darkGroups(base) end
+   local roofMapId = mapId
+   if mapId == ROUTE_6_SAFFRON.mapId and playerCellY
+diff --git a/src/render/TileRenderer.lua b/src/render/TileRenderer.lua
+index f616d252..060360b7 100644
+--- a/src/render/TileRenderer.lua
++++ b/src/render/TileRenderer.lua
+@@ -943,12 +943,17 @@ end
+ -- TileRenderer.new re-resolves through the asset search path.  Live
+ -- instances keep the batches they already built; MapLoader.invalidateAll
+ -- is what drops those (14 §cache-invalidation contract).
++function TileRenderer.clearGbcAtlasCache()
++  gbcAtlasCache = {}
++end
++
+ function TileRenderer.invalidate()
+   imageCache = {}
+   shiftVariants = {}
+   frameImages = {}
+   toggleImages = {}
+   stripData = {}
++  gbcAtlasCache = {}
+ end
+ 
+ Assets.register(TileRenderer.invalidate)

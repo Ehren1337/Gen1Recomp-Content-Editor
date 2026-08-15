@@ -36,6 +36,28 @@ Copy-Filtered $Runtime $Stage @(
   ".git", ".github", "dist", "generated", "mods",
   "node_modules", "__pycache__"
 )
+$patches = Get-ChildItem -LiteralPath (Join-Path $Root "runtime\patches") `
+  -Filter "*.patch" | Sort-Object Name
+foreach ($patch in $patches) {
+  & git -C $Root apply --check --directory=.content-editor-runtime $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "Runtime patch no longer applies: $($patch.Name)" }
+  & git -C $Root apply --directory=.content-editor-runtime $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "Could not apply runtime patch: $($patch.Name)" }
+}
+$nestedRuntime = Join-Path $Stage "runtime\gen1recomp"
+Copy-Filtered $Runtime $nestedRuntime @(
+  ".git", ".github", "dist", "generated", "mods",
+  "node_modules", "__pycache__"
+)
+New-Item -ItemType Directory -Force -Path (Join-Path $nestedRuntime "mods") | Out-Null
+foreach ($patch in $patches) {
+  & git -C $Root apply --check `
+    --directory=.content-editor-runtime/runtime/gen1recomp $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "Nested runtime patch no longer applies: $($patch.Name)" }
+  & git -C $Root apply `
+    --directory=.content-editor-runtime/runtime/gen1recomp $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "Could not patch nested runtime: $($patch.Name)" }
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage "mods") | Out-Null
 
 Copy-Filtered (Join-Path $Root "tools\content-editor") `

@@ -30,6 +30,13 @@ jobs:
           recorded="$(python -c 'import json; print(json.load(open(".github/runtime-upstream.json"))["integratedCommit"])')"
           checked_out="$(git -C runtime/gen1recomp rev-parse HEAD)"
           test "$recorded" = "$checked_out"
+      - name: Verify runtime overlay provenance
+        shell: bash
+        run: |
+          test -z "$(git ls-files src data main.lua conf.lua)"
+          for patch in runtime/patches/*.patch; do
+            git -C runtime/gen1recomp apply --check "../../$patch"
+          done
           test ! -e src
           test ! -e main.lua
       - name: Assemble source editor workspace
@@ -83,6 +90,10 @@ jobs:
           test -f "$root/runtime/gen1recomp/src/core/Input.lua"
           test -f "$root/runtime/gen1recomp/src/core/Music.lua"
           test -f "$root/runtime/gen1recomp/src/core/Sound.lua"
+          grep -q 'function PaletteFX.setWorldGroupOverrides' \
+            "$root/src/render/PaletteFX.lua"
+          grep -q 'function PaletteFX.setWorldGroupOverrides' \
+            "$root/runtime/gen1recomp/src/render/PaletteFX.lua"
 
   macos-package:
     runs-on: ubuntu-latest
@@ -106,6 +117,10 @@ jobs:
           test -x "$root/love/love.app/Contents/MacOS/love"
           test -f "$root/tests/love_stub.lua"
           test -f "$root/runtime/gen1recomp/src/core/Input.lua"
+          grep -q 'function PaletteFX.setWorldGroupOverrides' \
+            "$root/src/render/PaletteFX.lua"
+          grep -q 'function PaletteFX.setWorldGroupOverrides' \
+            "$root/runtime/gen1recomp/src/render/PaletteFX.lua"
           if grep -IU $'\r' "$launcher"; then
             echo 'ContentEditor.command contains CRLF line endings' >&2
             exit 1
