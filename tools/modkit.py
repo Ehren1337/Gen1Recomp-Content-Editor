@@ -37,11 +37,13 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 MODKIT_VERSION = "1.0.0"
@@ -65,6 +67,39 @@ def luajit_env():
 
 # Backward compatibility for callers that inspect the module-level setting.
 LUAJIT = os.environ.get("MODKIT_LUAJIT", "luajit")
+
+
+@contextmanager
+def runtime_tree(repo):
+    """Yield a filesystem engine root for LuaJIT-based validation.
+
+    Source checkouts use the pinned submodule directly. Release packages keep
+    the same pin in a .love (zip) archive, which LuaJIT cannot import from, so
+    extract it only for the duration of the headless command.
+    """
+    candidates = [repo, os.path.join(repo, "runtime", "gen1recomp")]
+    for candidate in candidates:
+        loader = os.path.join(candidate, "src", "mods", "Loader.lua")
+        if os.path.isfile(loader):
+            yield candidate
+            return
+    archives = [
+        os.path.join(repo, "runtime", "gen1recomp.love"),
+        os.path.join(repo, "love", "gen1recomp.exe"),
+    ]
+    archive = next((path for path in archives if os.path.isfile(path)), None)
+    if not archive:
+        raise FileNotFoundError(
+            "pinned runtime missing (expected runtime/gen1recomp or "
+            "a packaged Gen1Recomp artifact)")
+    with tempfile.TemporaryDirectory(prefix="modkit-runtime-") as extracted:
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(extracted)
+        packaged_tests = os.path.join(repo, "tests")
+        if os.path.isdir(packaged_tests):
+            shutil.copytree(packaged_tests, os.path.join(extracted, "tests"),
+                            dirs_exist_ok=True)
+        yield extracted
 
 IMAGE_EXTS = {".png"}
 ASSET_EXTS = {".png", ".wav", ".bin"}
@@ -734,31 +769,36 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
         findings.append(Finding("MK100", "error",
                                 f"unknown validation ROM version: {version}"))
         return
-    base = resolve_base(repo, base)
-    if base == "fixture" and version == "gold":
-        findings.append(Finding(
-            "MK100", "error",
-            "Gold validation requires the selected Gold ROM cache; "
-            "import Gold in the Content Editor or link a runtime with Gold data"))
-        return
-    source = IMPORTED_BASE if base == "imported" else FIXTURE_BASE
-    driver = DRIVER_TEMPLATE % (lua_quote(version), source,
-                                "{\n" + entries + "}")
-    with tempfile.NamedTemporaryFile("w", suffix=".lua", delete=False,
-                                     encoding="utf-8") as handle:
-        handle.write(driver)
-        driver_path = handle.name
     try:
-        proc = subprocess.run(luajit_cmd(driver_path), cwd=repo,
-                              capture_output=True, text=True, timeout=120,
-                              env=luajit_env())
+        with runtime_tree(repo) as engine_root:
+            base = resolve_base(engine_root, base)
+            if base == "fixture" and version == "gold":
+                if notes is not None:
+                    notes.append(
+                        "Gold loader checks not run: no selected Gold ROM "
+                        "cache is available; manifest, files, and other "
+                        "ROM-independent checks still ran")
+                return
+            source = IMPORTED_BASE if base == "imported" else FIXTURE_BASE
+            driver = DRIVER_TEMPLATE % (lua_quote(version), source,
+                                        "{\n" + entries + "}")
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".lua", delete=False,
+                    encoding="utf-8") as handle:
+                handle.write(driver)
+                driver_path = handle.name
+            try:
+                proc = subprocess.run(
+                    luajit_cmd(driver_path), cwd=engine_root,
+                    capture_output=True, text=True, timeout=120,
+                    env=luajit_env())
+            finally:
+                os.unlink(driver_path)
     except FileNotFoundError:
         findings.append(Finding("MK100", "error",
                                 f"cannot run {luajit_exe()} (install luajit or "
                                 "set MODKIT_LUAJIT)"))
         return
-    finally:
-        os.unlink(driver_path)
     if proc.returncode != 0:
         findings.append(Finding("MK100", "error",
                                 "loader driver crashed: "

@@ -4,10 +4,11 @@ In-game LÖVE editor that authors **mod folders** — never the ROM cache under
 `data/generated/`. Launch:
 
 ```sh
-love . --content-editor
-love . --content-editor --mod mods/my_content
+git submodule update --init --recursive
+./ContentEditor.sh
+./ContentEditor.sh --mod mods/my_content
 # or
-POKEPORT_CONTENT_EDITOR=1 love .
+ContentEditor.bat --mod mods/my_content
 ```
 
 On Windows with the bundled runtime:
@@ -123,13 +124,44 @@ editor installs it via the OS package manager
 works) and sets `MODKIT_LUAJIT`. It does **not** drop `luajit.exe` into the
 LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`.
 
-**Playtest** requires a linked Recomp folder. It synchronizes the currently
-open editor project into that runtime's `mods/<id>`, enables only that mod for
-the playtest, and launches the editor's selected game version. The open editor
-project remains the authoring source of truth; each Playtest refreshes the
-runtime copy before launch.
-Imported caches and fixtures remain available for authoring and previews, but
-the editor pack itself is not used as the playtest runtime.
+**Playtest does not require Link Recomp.** It runs the exact upstream checkout
+at `runtime/gen1recomp`, whose Git submodule commit is mirrored in
+`.github/runtime-upstream.json`. Release archives contain a minimal immutable
+runtime archive (fused into the Windows Playtest executable), so players need
+neither Git nor network access. No duplicate game-runtime snapshot is tracked
+in the editor repository.
+
+On each launch, Playtest:
+
+1. saves the open project and synchronizes it to the pinned runtime's mod root;
+2. disables previously enabled mods and enables only the open editor mod;
+3. boots the ROM version currently selected in the editor with `--game`.
+
+Selecting Red, Blue, Yellow, or Gold controls that Playtest launch. It does not
+rewrite `manifest.json` compatibility fields: `games`, `gen2compat`, and
+`game_version` remain the mod author's declaration. The open editor project
+remains the authoring source of truth.
+
+Link Recomp remains optional for reusing an existing imported ROM cache. It is
+also a development fallback if `git submodule update --init --recursive` has
+not populated the pin. Normal release packages always include the pin.
+
+### Portable release storage
+
+Release packages include `love/portable.txt`. Both the editor and bundled
+Playtest runtime therefore use the package's `love/` directory for imported
+ROM caches, saves, options, derived assets, and the synchronized Playtest mod.
+The launchers select the dedicated identity
+`gen1recomp-content-editor-portable`, preventing mods from the user's normal
+Gen1Recomp AppData/XDG/macOS save directory from appearing in a portable run.
+The distributable archive itself remains clean: it contains the marker but no
+ROM-derived data, personal saves, options, or user mods.
+
+The scheduled `Sync Gen1Recomp runtime` workflow checks `bryanthaboi/gen1recomp`
+`main` daily. It advances only the submodule and recorded commit on
+`sync/gen1recomp-runtime`, then creates or refreshes a ready-for-review PR.
+Runtime and package checks must pass before that update is merged into `main`
+and becomes the pin used by later releases.
 
 ## Pack for sharing
 
@@ -185,7 +217,13 @@ under **More options** below the tile palette.
 
 ### Custom tilesets and colors
 
-**+ New PNG** copies a sheet into `assets/mapbuilder/sources/`. Its width and
+The tile-source list labels every source as either **RUNTIME REFERENCE** or
+**CUSTOM MOD SOURCE**. Runtime references are read-only blocks and pixels from
+the selected ROM; opening one in GFX and choosing **Replace in mod** creates a
+mod-owned replacement without modifying the imported cache. Custom sources
+and replacements are stored with the project and can be edited or removed.
+
+**+ Custom PNG** copies a sheet into `assets/mapbuilder/sources/`. Its width and
 height must be multiples of 16 pixels. Use the arrow buttons to switch between
 the original game block source and any number of imported sheets; maps may
 paint tiles from all of them.
@@ -278,8 +316,12 @@ stable warp links. Save also writes:
 - a generated tileset record with blocks and collision lists
 - a normal map patch/register record with resolved warps
 
-On first game load, the transform recipe builds the flattened atlas and
-animation frames under `save/mod-derived/<mod-id>/mapbuilder/`. Base-game
+Save immediately runs the transform recipe so Map Editor and World Viewer can
+show the flattened atlas without restarting. Playtest runs the same recipe as
+needed and stores the flattened atlas and animation frames under
+`save/mod-derived/<mod-id>/mapbuilder/`. A missing selected-ROM tileset input
+now fails Save explicitly instead of stamping an empty transform as complete.
+Base-game
 pixels are sampled from that player's imported cache; they are never copied
 into the shared mod. Imported custom PNGs remain normal mod assets.
 

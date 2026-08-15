@@ -1,0 +1,4 @@
+[submodule "runtime/gen1recomp"]
+	path = runtime/gen1recomp
+	url = https://github.com/bryanthaboi/gen1recomp.git
+	branch = main

@@ -1,0 +1,78 @@
+name: Sync Gen1Recomp runtime
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-gen1recomp-runtime
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: true
+      - name: Update pinned upstream runtime
+        id: sync
+        env:
+          UPSTREAM_REF: main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C runtime/gen1recomp fetch origin "$UPSTREAM_REF"
+          upstream_sha="$(git -C runtime/gen1recomp rev-parse FETCH_HEAD)"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          current_sha="$(git -C runtime/gen1recomp rev-parse HEAD)"
+          if [ "$upstream_sha" = "$current_sha" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="sync/gen1recomp-runtime"
+          git fetch origin "$branch:refs/remotes/origin/$branch" || true
+          git switch -C "$branch"
+          git -C runtime/gen1recomp checkout --detach "$upstream_sha"
+          python3 - "$upstream_sha" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path('.github/runtime-upstream.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          data['integratedCommit'] = sys.argv[1]
+          path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+          PY
+          git add runtime/gen1recomp .github/runtime-upstream.json
+          git commit -m "chore: update pinned Gen1Recomp runtime"
+          git push --force-with-lease="refs/heads/$branch" origin "$branch:$branch"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Create ready-for-review pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          short_sha="${UPSTREAM_SHA:0:12}"
+          existing="$(gh pr list --head sync/gen1recomp-runtime --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" \
+              --title "chore: sync Gen1Recomp runtime ${short_sha}" \
+              --body "Automated daily sync of bryanthaboi/gen1recomp@${UPSTREAM_SHA}. Runtime compatibility and Linux package checks must pass before merge."
+          else
+            gh pr create \
+              --base main \
+              --head sync/gen1recomp-runtime \
+              --title "chore: sync Gen1Recomp runtime ${short_sha}" \
+              --body "Automated daily sync of bryanthaboi/gen1recomp@${UPSTREAM_SHA}. Runtime compatibility and Linux package checks must pass before merge."
+          fi

@@ -1,4 +1,5 @@
--- Content editor app shell.  Launch with `love . --content-editor`.
+-- Content editor app shell. Launch through a ContentEditor platform script;
+-- source checkouts first assemble the pinned runtime into an ignored tree.
 -- Reuses the save-editor Kit/Theme via the shared require path.
 
 local Data = require("src.core.Data")
@@ -9,6 +10,9 @@ local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
+local ProcessRunner = require("ProcessRunner")
+local PlaytestPaths = require("PlaytestPaths")
+local PlaytestOptions = require("PlaytestOptions")
 local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
 
@@ -564,7 +568,7 @@ function App.save()
     base.tilesets = tilesets
   end
   ModIO._emitBaseData = base
-  local ok, err = ModIO.save(S.path, S.project)
+  local ok, err = ModIO.save(S.path, S.project, S.version)
   ModIO._emitBaseData = nil
   if ok then
     S.dirty = false
@@ -577,21 +581,15 @@ function App.save()
 end
 
 local function repoRoot()
+  local configured = os.getenv("POKEPORT_CONTENT_ROOT")
+  if configured and configured ~= "" then return configured end
   local src = love.filesystem.getSource()
   if src and src ~= "" then return src end
   return "."
 end
 
 local function runShell(cmd)
-  local ok, handle = pcall(io.popen, cmd .. " 2>&1")
-  if not ok or not handle then
-    return false, "shell unavailable: " .. tostring(handle)
-  end
-  local out = handle:read("*a") or ""
-  local okClose, _, code = handle:close()
-  local exit = (type(code) == "number" and code)
-    or (okClose and 0 or 1)
-  return exit == 0, out
+  return ProcessRunner.run(cmd)
 end
 
 function App.validateMod()
@@ -655,24 +653,26 @@ local function resolveLoveExe(searchRoots)
   for _, root in ipairs(searchRoots or {}) do
     if root and root ~= "" then
       local candidates = {
-        -- Fused portable distribution (does not take a source-folder arg).
-        { root .. sep .. "gen1recomp.exe", true },
         -- Windows portable / checkout
+        { root .. sep .. "love" .. sep .. "gen1recomp.exe", true },
         { root .. sep .. "love" .. sep .. "love.exe", false },
         { root .. sep .. "love" .. sep .. "love-11.5-win64" .. sep .. "love.exe", false },
         { root .. sep .. "love.exe", false },
         -- Linux portable AppImage / binary
         { root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage", false },
         { root .. sep .. "love" .. sep .. "love", false },
+        -- macOS universal portable package
+        { root .. sep .. "love" .. sep .. "love.app" .. sep .. "Contents"
+            .. sep .. "MacOS" .. sep .. "love", false },
       }
       for _, candidate in ipairs(candidates) do
         local path, fused = candidate[1], candidate[2]
         local f = io.open(path, "rb")
-        if f then f:close(); return path, fused end
+        if f then f:close(); return path, fused, root end
       end
     end
   end
-  return "love", false
+  return "love", false, nil
 end
 
 local function linkedRecompRoot()
@@ -683,6 +683,80 @@ local function linkedRecompRoot()
     return recomp:gsub("[/\\]+$", "")
   end
   return nil
+end
+
+-- The game used for Playtest is an exact, reviewable Gen1Recomp checkout.
+-- Keep it separate from the editor host: the editor contains authoring UI and
+-- compatibility helpers, while runtime/gen1recomp remains byte-for-byte at the
+-- commit recorded by Git. Portable packages include this directory, so this
+-- does not introduce a network or local-install requirement for users.
+local function pinnedRuntimeRoot(root)
+  return PlaytestPaths.pinnedRuntime(root, DataSource.isValidRecompRoot,
+    function(path)
+      local file = io.open(path, "rb")
+      if not file then return false end
+      file:close()
+      return true
+    end)
+end
+
+local function shQuote(value)
+  return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function playtestLogPath()
+  local ok, path = pcall(function()
+    return love.filesystem.getSaveDirectory()
+  end)
+  if ok and path and path ~= "" then
+    return path:gsub("[/\\]+$", "") .. "/playtest.log"
+  end
+  return "playtest.log"
+end
+
+local function packagedPortableRoot(root, sep)
+  local candidate = root .. sep .. "love"
+  local marker = io.open(candidate .. sep .. "portable.txt", "rb")
+  if not marker then return nil end
+  marker:close()
+  return candidate
+end
+
+-- SaveData accepts an injected love.filesystem-shaped adapter. Portable packs
+-- need this explicit physical root because an unfused Windows editor can
+-- report its mounted source instead of love.exe's directory to PhysFS.
+local function physicalRootFs(root, sep)
+  local function full(name)
+    return root .. sep .. tostring(name):gsub("/", sep)
+  end
+  return {
+    getInfo = function(name)
+      local file = io.open(full(name), "rb")
+      if not file then return nil end
+      file:close()
+      return { type = "file" }
+    end,
+    read = function(name)
+      local file, err = io.open(full(name), "rb")
+      if not file then return nil, err end
+      local contents = file:read("*a")
+      file:close()
+      return contents
+    end,
+    write = function(name, contents)
+      local file, err = io.open(full(name), "wb")
+      if not file then return false, err end
+      local ok, writeErr = file:write(contents)
+      local closeOk, closeErr = file:close()
+      if not ok then return false, writeErr end
+      if not closeOk then return false, closeErr end
+      return true
+    end,
+    remove = function(name)
+      os.remove(full(name))
+      return true
+    end,
+  }
 end
 
 function App.playtestMod()
@@ -703,73 +777,147 @@ function App.playtestMod()
     end
   end
   local sep = package.config:sub(1, 1)
+  local root = repoRoot()
   local recomp = linkedRecompRoot()
-  if not recomp then
-    return say("Playtest requires a Linked Recomp folder. "
-      .. "Use Project > Link Recomp, then try again.")
-  end
-
-  local dest = recomp .. sep .. "mods" .. sep .. id
-  local src = S.path or (ModIO.modsRoot() .. sep .. id)
-  -- Fused portable builds do not consistently expose Windows junctions to
-  -- PhysFS, even when symlinks are enabled.  Synchronize the open project to
-  -- the selected runtime's real mods directory so its loader always sees it.
-  local okSync, syncErr = DataSource.copyTree(src, dest)
-  if not okSync then
-    return say("Playtest sync failed: " .. tostring(syncErr))
-  end
-
+  local src = PlaytestPaths.absoluteFromRoot(
+    S.path or (ModIO.modsRoot() .. sep .. id), root)
+  local portableRoot = packagedPortableRoot(root, sep)
   local version = S.version or "red"
   if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
     version = "red"
+  end
+
+  -- Refresh editor-owned metadata without changing manifest compatibility.
+  -- The selected ROM controls this launch only; games/gen2compat remain the
+  -- user's declaration for the mod as a whole.
+  local okTarget, targetErr = ModIO.setManifestTarget(
+    src, version, S.project.name)
+  if not okTarget then
+    return say("Playtest target update failed: " .. tostring(targetErr))
+  end
+
+  local bundledMods = root .. sep .. "mods" .. sep .. id
+  if not PlaytestPaths.same(src, bundledMods) then
+    -- A project opened from an external/linked location must be copied into
+    -- the bundled runtime's source tree. Projects created by this editor are
+    -- already there, so the common path performs no redundant copy.
+    local okSync, syncErr = DataSource.copyTree(src, bundledMods)
+    if not okSync then
+      return say("Playtest sync failed: " .. tostring(syncErr))
+    end
   end
 
   -- A Playtest is an isolated run of the project open in the editor.  Do not
   -- inherit mods the player enabled in an earlier normal game session.
   local okEnable, errEnable = pcall(function()
     local SaveData = require("src.core.SaveData")
-    local options = SaveData.loadOptions()
-    options.mods = options.mods or {}
-    for otherId in pairs(options.mods) do
-      options.mods[otherId] = false
-    end
-    options.mods[id] = true
-    options.modsByVersion = options.modsByVersion or {}
-    local bucket = options.modsByVersion[version] or {}
-    options.modsByVersion[version] = bucket
-    for otherId in pairs(bucket) do
-      bucket[otherId] = false
-    end
-    bucket[id] = true
-    SaveData.saveOptions(options)
+    local optionsFs = portableRoot and physicalRootFs(portableRoot, sep) or nil
+    local options = SaveData.loadOptions(optionsFs)
+    PlaytestOptions.selectOnly(options, id, version)
+    SaveData.saveOptions(options, optionsFs)
   end)
   if not okEnable then
     say("Could not enable mod in options: " .. tostring(errEnable))
     return
   end
 
-  local loveExe, fused = resolveLoveExe({ recomp, repoRoot() })
+  -- Source and executable are intentionally resolved independently. The
+  -- pinned checkout supplies all game Lua; the outer portable pack supplies
+  -- LÖVE. A linked Recomp is retained only as a development fallback when a
+  -- source checkout has not initialized its submodule yet.
+  local runtimeRoot = pinnedRuntimeRoot(root) or recomp
+  if not runtimeRoot then
+    return say("Pinned Playtest runtime is missing — run git submodule update --init")
+  end
+  local loveExe, fused = resolveLoveExe({ root, runtimeRoot, recomp })
+  local packagedRuntime = runtimeRoot:lower():match("%.love$")
+    or runtimeRoot:lower():match("gen1recomp%.exe$")
+  local runtimeWorkDir = packagedRuntime and root or runtimeRoot
+  local runtimeModsBase = runtimeRoot
+  if packagedRuntime then
+    -- Portable release packs place portable.txt beside the LÖVE binaries.
+    -- The editor and fused game must copy/read mods from that same physical
+    -- root; falling back to the LOVE identity keeps source/non-portable runs
+    -- compatible with existing installations.
+    local SaveData = require("src.core.SaveData")
+    local portableBase = portableRoot or SaveData.portableBaseDir()
+    if sep == "\\" and loveExe ~= "love" then
+      -- On Windows an unfused editor is launched as `love.exe <pack-root>`.
+      -- Some LÖVE builds report the mounted source rather than the binary
+      -- directory to SaveData.gameFolders(), so portableBase can be nil even
+      -- though love/portable.txt exists. The fused Playtest executable and
+      -- marker are siblings; deriving that directory is unambiguous and also
+      -- prevents a fallback into the legacy pokemon-love2d AppData identity.
+      portableBase = loveExe:match("^(.*)[/\\][^/\\]+$") or portableBase
+    end
+    runtimeModsBase = portableBase or love.filesystem.getSaveDirectory()
+  end
+  local runtimeMods = runtimeModsBase .. sep .. "mods" .. sep .. id
+  local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
+  if not okSync then
+    return say("Playtest runtime sync failed: " .. tostring(syncErr))
+  end
   local cmd
   if sep == "\\" then
     if fused then
       cmd = string.format('start "" "%s" --game=%s', loveExe, version)
     else
-      cmd = string.format('start "" "%s" "%s" --game=%s',
-        loveExe, recomp, version)
+      -- `start exe absolute-source` can silently drop the source argument on
+      -- some cmd.exe quoting paths, producing LÖVE's "No code to run" screen.
+      -- Make the pin the child's working directory and launch `.` instead.
+      local source = packagedRuntime and runtimeRoot or "."
+      cmd = PlaytestPaths.windowsLaunch(
+        loveExe, source, runtimeWorkDir, version)
     end
   else
+    local logPath = playtestLogPath()
+    -- A Linux editor launched from an AppImage inherits paths pointing into
+    -- that mounted image. Starting another AppImage with those variables can
+    -- make its loader resolve libraries from the parent mount and exit before
+    -- LÖVE starts. Run the Playtest with the host environment restored and
+    -- persist the asynchronous child's real exit status for diagnostics.
+    local launch
     if fused then
-      cmd = string.format('"%s" --game=%s &', loveExe, version)
+      launch = string.format('%s --game=%s', shQuote(loveExe), version)
     else
-      cmd = string.format('"%s" "%s" --game=%s &',
-        loveExe, recomp, version)
+      launch = string.format('%s %s --game=%s',
+        shQuote(loveExe), shQuote(runtimeRoot), version)
     end
+    cmd = string.format(
+      '( if command -v setsid >/dev/null 2>&1; then '
+        .. 'setsid env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR '
+        .. 'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 %s; else '
+        .. 'env -u LD_LIBRARY_PATH -u APPIMAGE -u APPDIR '
+        .. 'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 %s; fi; '
+        .. 'code=$?; printf "\\nplaytest_exit=%%s\\n" "$code"; exit "$code" ) '
+        .. '> %s 2>&1 &',
+      launch, launch, shQuote(logPath))
   end
-  local ok, err = pcall(os.execute, cmd)
-  if not ok then
-    return say("Playtest launch failed: " .. tostring(err))
+  local osName = love.system and love.system.getOS and love.system.getOS()
+  local desktopUnix = osName == "Linux" or osName == "OS X"
+  if desktopUnix and love.window and love.window.minimize then
+    -- Linux window managers and macOS can leave a background child behind its
+    -- active parent. The game is visible in that state but keyboard/controller
+    -- input stays with the editor. Minimize immediately before spawning so
+    -- the Playtest becomes the input owner.
+    pcall(love.window.minimize)
   end
-  say("Playtest launched " .. version .. " with selected editor mod: " .. id)
+  local called, execResult, execWhy, execCode = pcall(os.execute, cmd)
+  if not called or execResult == nil or execResult == false then
+    if desktopUnix and love.window and love.window.restore then
+      pcall(love.window.restore)
+    end
+    local detail = called
+      and (tostring(execWhy or "exit") .. " " .. tostring(execCode or ""))
+      or tostring(execResult)
+    return say("Playtest launch failed: " .. detail)
+  end
+  local detail = ""
+  if sep ~= "\\" then
+    detail = " — log: " .. playtestLogPath()
+  end
+  say("Standalone Playtest launched " .. version
+    .. " with selected editor mod: " .. id .. detail)
 end
 
 function App.markDirty()

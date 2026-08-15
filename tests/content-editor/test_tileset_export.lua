@@ -1,4 +1,5 @@
-package.path = "tools/content-editor/?.lua;tools/content-editor/panels/?.lua;"
+package.path = "runtime/gen1recomp/?.lua;"
+  .. "tools/content-editor/?.lua;tools/content-editor/panels/?.lua;"
   .. "tools/save-editor/?.lua;tools/save-editor/panels/?.lua;"
   .. package.path
 
