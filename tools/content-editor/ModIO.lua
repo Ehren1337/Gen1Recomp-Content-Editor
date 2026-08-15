@@ -359,9 +359,9 @@ function ModIO.save(modDir, project, version)
     os.remove(schemasPath)
   end
 
-  -- Keep editor-owned manifest fields aligned with the selected ROM target.
-  -- Content generated from Gold maps/tilesets is not valid on Red merely
-  -- because both runtimes share the same mod API.
+  -- Keep the generated display name aligned with the project. Compatibility
+  -- is user-authored manifest metadata: selecting a ROM for editing or
+  -- playtesting must not narrow a cross-generation mod's declared support.
   local manifestPath = join(modDir, "manifest.json")
   if ModIO.exists(manifestPath) then
     local mh = io.open(manifestPath, "rb")
@@ -371,12 +371,6 @@ function ModIO.save(modDir, project, version)
       local manifest, decodeErr = Json.decode(text)
       if not manifest then return false, decodeErr end
       if project.name then manifest.name = project.name end
-      if version then
-        local Generation = require("Generation")
-        local target = { version = version }
-        manifest.games = Generation.manifestGames(target)
-        manifest.gen2compat = Generation.isGen2(target)
-      end
       local mw, manifestErr = io.open(manifestPath, "wb")
       if not mw then return false, manifestErr end
       mw:write(ModIO.encodeManifest(manifest))
@@ -706,10 +700,9 @@ function ModIO.setManifestTarget(modDir, version, name)
   local manifest, decodeErr = Json.decode(body)
   if not manifest then return false, decodeErr end
   if name then manifest.name = name end
-  local Generation = require("Generation")
-  local target = { version = version }
-  manifest.games = Generation.manifestGames(target)
-  manifest.gen2compat = Generation.isGen2(target)
+  -- `version` selects the runtime used by Playtest. It does not describe the
+  -- complete compatibility surface of the mod, so preserve games and
+  -- gen2compat exactly as authored in the manifest.
   return ModIO.writeText(path, ModIO.encodeManifest(manifest))
 end
 

@@ -713,9 +713,9 @@ function App.playtestMod()
     version = "red"
   end
 
-  -- Existing projects may predate version-scoped manifests. Ensure a Gold
-  -- project cannot be loaded against Red (or vice versa) even when Playtest
-  -- did not need to save any dirty editor fields first.
+  -- Refresh editor-owned metadata without changing manifest compatibility.
+  -- The selected ROM controls this launch only; games/gen2compat remain the
+  -- user's declaration for the mod as a whole.
   local okTarget, targetErr = ModIO.setManifestTarget(
     src, version, S.project.name)
   if not okTarget then
