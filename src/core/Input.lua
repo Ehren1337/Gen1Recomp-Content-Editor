@@ -32,6 +32,25 @@ local STICK_OFF = 0.3
 
 -- Raw joystick defaults + NX overrides live in src/core/GamepadMap.lua
 -- (see RAW_BUTTON_BINDINGS / NX_RAW_BUTTON_BINDINGS and #620 / #632).
+--
+-- SELECT ON A PLAYSTATION PAD, checked rather than assumed.  There is no
+-- button called "select" in SDL's game-controller vocabulary: the small
+-- left-hand menu button is `back` on every family, and GamepadMap's
+-- DEFAULT_GAMEPAD_BINDINGS maps it to GB SELECT.  The DualSense's CREATE
+-- button (and the DualShock 4's SHARE) is that button -- the controller
+-- database LOVE 11.5 ships spells the DualSense row
+-- "PS5 Controller,a:b1,b:b2,back:b8,...,misc1:b13,start:b9" -- so a
+-- recognized pad delivers it here as gamepadpressed(_, "back") and needs no
+-- entry of its own.  What it also has, and what LOVE 11.x has no name for at
+-- all, is the TOUCHPAD click (SDL_CONTROLLER_BUTTON_TOUCHPAD) and the mute
+-- key (`misc1`): neither reaches love.gamepadpressed, so neither can be bound,
+-- and a player reaching for the touchpad expecting SELECT will find nothing.
+-- Not a mapping this file can add -- the event never arrives.
+--
+-- An unrecognized PlayStation pad falls to the raw path instead, where SHARE /
+-- CREATE is generic-HID button 9 and RAW_BUTTON_BINDINGS[9] is already
+-- "select".  Both roads reach SELECT; the one road that did not was Gold's,
+-- where src/core/Game2.lua used to answer `back` with love.event.quit().
 
 local HAT_DIRECTIONS = {
   u = { "up" }, d = { "down" }, l = { "left" }, r = { "right" },
@@ -100,6 +119,34 @@ function Input:reset()
   self.stickAxis = { x = 0, y = 0 }
   self.stickDir = nil
   self.hatDirs = {}
+  self.captureArmed = false
+  self.captureEvents = nil
+end
+
+function Input:armCapture()
+  self.captureArmed = true
+  self.captureEvents = {}
+end
+
+function Input:disarmCapture()
+  self.captureArmed = false
+  self.captureEvents = nil
+end
+
+function Input:takeCaptureEvents()
+  local ev = self.captureEvents
+  self.captureEvents = self.captureArmed and {} or nil
+  return ev
+end
+
+local function noteCapture(self, kind, phase, value)
+  if not self.captureArmed then return end
+  local ev = self.captureEvents
+  if not ev then
+    ev = {}
+    self.captureEvents = ev
+  end
+  ev[#ev + 1] = { kind = kind, phase = phase, value = value }
 end
 
 -- Multiple physical sources (W + Up, d-pad + stick, etc.) can claim the
@@ -135,6 +182,7 @@ local function release(self, btn, source)
 end
 
 function Input:keypressed(key)
+  noteCapture(self, "key", "pressed", key)
   local btn = self.keyBindings[key]
   if btn then
     press(self, btn, "key:" .. key)
@@ -142,6 +190,7 @@ function Input:keypressed(key)
 end
 
 function Input:keyreleased(key)
+  noteCapture(self, "key", "released", key)
   local btn = self.keyBindings[key]
   if btn then
     release(self, btn, "key:" .. key)
@@ -186,7 +235,23 @@ function Input:overlayReleased(btn)
   release(self, btn, "touch:" .. btn)
 end
 
+-- Programmatic mod input (#807).  mod.input taps and holds land here under
+-- loader-issued "mod:<id>:<n>" source names, riding the same per-source
+-- bookkeeping as every physical path above, so releasing one can never
+-- clear a hold a key, stick, hat, the overlay, or another mod still owns.
+-- A tap is a sourcePress immediately followed by its sourceRelease: the
+-- queued edge survives into the next step, and the emptied source map
+-- keeps the hold from being revived (see Input:step's sources == {} rule).
+function Input:sourcePress(btn, source)
+  press(self, btn, source)
+end
+
+function Input:sourceRelease(btn, source)
+  release(self, btn, source)
+end
+
 function Input:gamepadpressed(joystick, button)
+  noteCapture(self, "pad", "pressed", button)
   local btn = self.padBindings[button]
   if btn then
     press(self, btn, "pad:" .. button)
@@ -194,6 +259,7 @@ function Input:gamepadpressed(joystick, button)
 end
 
 function Input:gamepadreleased(joystick, button)
+  noteCapture(self, "pad", "released", button)
   local btn = self.padBindings[button]
   if btn then
     release(self, btn, "pad:" .. button)
@@ -215,12 +281,14 @@ end
 
 function Input:joystickpressed(joystick, button)
   if GamepadMap.ignoreRawForJoystick(joystick) then return end
+  noteCapture(self, "joy", "pressed", button)
   local btn = self.joyBindings[button]
   if btn then press(self, btn, "joy:" .. button) end
 end
 
 function Input:joystickreleased(joystick, button)
   if GamepadMap.ignoreRawForJoystick(joystick) then return end
+  noteCapture(self, "joy", "released", button)
   local btn = self.joyBindings[button]
   if btn then release(self, btn, "joy:" .. button) end
 end
@@ -286,59 +354,65 @@ function Input:joystickhat(joystick, hat, direction)
   self.hatDirs[hat] = dirs
 end
 
+-- Lifecycle resets (focus/visibility flips, joystick add/remove, resume)
+-- wipe held state because a release can be swallowed while the OS owns the
+-- event stream.  A direction the player is STILL holding never re-fires
+-- keypressed/gamepadpressed after the wipe either, so a spurious reset --
+-- macOS re-enumerating a Bluetooth pad fires joystickadded with no hotplug,
+-- and the blanket reset took unrelated keyboard holds down with it --
+-- parked the player in place until every direction was released and
+-- pressed again (#799).  Rebuild holds from the devices' ground truth
+-- instead: only what is physically down right now comes back, so the
+-- swallowed-release hazards the resets guard against stay cleared.
+-- Deliberately separate from reset(): the soft-reset chord path in
+-- Game:step needs the clean slate (re-arming A there would read it as a
+-- title-menu choice).
 function Input:reconcile()
-  local keyboard = love and love.keyboard
-  if keyboard and keyboard.isDown then
+  local kb = love and love.keyboard
+  if kb and kb.isDown then
     for key, btn in pairs(self.keyBindings) do
-      local ok, down = pcall(keyboard.isDown, key)
+      local ok, down = pcall(kb.isDown, key)
       if ok and down then press(self, btn, "key:" .. key) end
     end
   end
-
-  local joystickApi = love and love.joystick
-  if not (joystickApi and joystickApi.getJoysticks) then return end
-  local ok, joysticks = pcall(joystickApi.getJoysticks)
+  local js = love and love.joystick
+  if not (js and js.getJoysticks) then return end
+  local ok, joysticks = pcall(js.getJoysticks)
   if not ok or type(joysticks) ~= "table" then return end
-  for _, joystick in ipairs(joysticks) do
-    if GamepadMap.ignoreRawForJoystick(joystick) then
-      if joystick.isGamepadDown then
+  for _, j in ipairs(joysticks) do
+    if GamepadMap.ignoreRawForJoystick(j) then
+      -- SDL-recognized pad: buttons + left stick, the gamepad surfaces
+      if j.isGamepadDown then
         for button, btn in pairs(self.padBindings) do
-          local readOk, down = pcall(
-            joystick.isGamepadDown, joystick, button)
-          if readOk and down then press(self, btn, "pad:" .. button) end
+          local ok2, down = pcall(j.isGamepadDown, j, button)
+          if ok2 and down then press(self, btn, "pad:" .. button) end
         end
       end
-      if joystick.getGamepadAxis then
+      if j.getGamepadAxis then
         for _, axis in ipairs({ "leftx", "lefty" }) do
-          local readOk, value = pcall(
-            joystick.getGamepadAxis, joystick, axis)
-          if readOk and type(value) == "number" then
-            self:gamepadaxis(joystick, axis, value)
-          end
+          local ok2, v = pcall(j.getGamepadAxis, j, axis)
+          if ok2 and type(v) == "number" then self:gamepadaxis(j, axis, v) end
         end
       end
     else
-      if joystick.isDown then
+      -- raw stick (#620/#632): the surfaces the joystick* events feed
+      if j.isDown then
         for index, btn in pairs(self.joyBindings) do
-          local readOk, down = pcall(joystick.isDown, joystick, index)
-          if readOk and down then press(self, btn, "joy:" .. index) end
+          local ok2, down = pcall(j.isDown, j, index)
+          if ok2 and down then press(self, btn, "joy:" .. index) end
         end
       end
-      if joystick.getAxis then
+      if j.getAxis then
         for _, axis in ipairs({ 1, 2 }) do
-          local readOk, value = pcall(joystick.getAxis, joystick, axis)
-          if readOk and type(value) == "number" then
-            self:joystickaxis(joystick, axis, value)
-          end
+          local ok2, v = pcall(j.getAxis, j, axis)
+          if ok2 and type(v) == "number" then self:joystickaxis(j, axis, v) end
         end
       end
-      if joystick.getHatCount and joystick.getHat then
-        local countOk, count = pcall(joystick.getHatCount, joystick)
-        for hat = 1, (countOk and count) or 0 do
-          local readOk, direction = pcall(joystick.getHat, joystick, hat)
-          if readOk and direction then
-            self:joystickhat(joystick, hat, direction)
-          end
+      if j.getHatCount and j.getHat then
+        local ok2, count = pcall(j.getHatCount, j)
+        for hat = 1, (ok2 and count) or 0 do
+          local ok3, dir = pcall(j.getHat, j, hat)
+          if ok3 and dir then self:joystickhat(j, hat, dir) end
         end
       end
     end
