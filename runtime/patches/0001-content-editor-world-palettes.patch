@@ -5,7 +5,7 @@ index 90fb6580..fdae8f67 100644
 @@ -604,6 +604,70 @@ PaletteFX.TILE_ALIASES = {
  local ROOF_GROUP = 6
  local ROUTE_6_SAFFRON = { mapId = "ROUTE_6", useMapId = "SAFFRON_CITY", cellYBelow = 2 }
- 
+
 +-- pokered-gbc LoadTilesetPalette slot names (group index 0–7).
 +PaletteFX.WORLD_GROUP_NAMES = {
 +  "GRAY", "RED", "GREEN", "BLUE", "YELLOW", "BROWN", "ROOF", "TEXT",
@@ -76,7 +76,7 @@ index 90fb6580..fdae8f67 100644
 @@ -613,6 +677,14 @@ function PaletteFX.hasWorldTileset(tileset)
    return (w and w.tileGroups[tileset]) ~= nil
  end
- 
+
 +-- Vanilla (pack) 8×4 colors for a tileset, or nil.
 +function PaletteFX.vanillaWorldGroupColors(tileset)
 +  local pack = PaletteFX.gbcPack()
@@ -121,5 +121,5 @@ index f616d252..060360b7 100644
    stripData = {}
 +  gbcAtlasCache = {}
  end
- 
+
  Assets.register(TileRenderer.invalidate)
