@@ -1,6 +1,7 @@
 @echo off
 title Gen1Recomp Content Editor
 cd /d "%~dp0"
+if exist "love\portable.txt" set "POKEPORT_IDENTITY=gen1recomp-content-editor-portable"
 set "EDITOR_SOURCE=%CD%"
 set "NEED_PREP="
 if not exist "main.lua" (

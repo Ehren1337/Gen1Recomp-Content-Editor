@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")"
 ROOT="$PWD"
+if [[ -f "$ROOT/love/portable.txt" ]]; then
+  export POKEPORT_IDENTITY="gen1recomp-content-editor-portable"
+fi
 EDITOR_SOURCE="$ROOT"
 if [[ ! -f "$ROOT/main.lua" ]]; then
   if [[ ! -f "$ROOT/.content-editor-runtime/runtime/gen1recomp/src/mods/Runtime.lua" ||

@@ -2,6 +2,9 @@
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$HERE/love/portable.txt" ]; then
+  export POKEPORT_IDENTITY="gen1recomp-content-editor-portable"
+fi
 LOVE="$HERE/love/love.app/Contents/MacOS/love"
 EDITOR_SOURCE="$HERE"
 if [ ! -f "$HERE/main.lua" ]; then

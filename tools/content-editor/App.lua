@@ -714,6 +714,51 @@ local function playtestLogPath()
   return "playtest.log"
 end
 
+local function packagedPortableRoot(root, sep)
+  local candidate = root .. sep .. "love"
+  local marker = io.open(candidate .. sep .. "portable.txt", "rb")
+  if not marker then return nil end
+  marker:close()
+  return candidate
+end
+
+-- SaveData accepts an injected love.filesystem-shaped adapter. Portable packs
+-- need this explicit physical root because an unfused Windows editor can
+-- report its mounted source instead of love.exe's directory to PhysFS.
+local function physicalRootFs(root, sep)
+  local function full(name)
+    return root .. sep .. tostring(name):gsub("/", sep)
+  end
+  return {
+    getInfo = function(name)
+      local file = io.open(full(name), "rb")
+      if not file then return nil end
+      file:close()
+      return { type = "file" }
+    end,
+    read = function(name)
+      local file, err = io.open(full(name), "rb")
+      if not file then return nil, err end
+      local contents = file:read("*a")
+      file:close()
+      return contents
+    end,
+    write = function(name, contents)
+      local file, err = io.open(full(name), "wb")
+      if not file then return false, err end
+      local ok, writeErr = file:write(contents)
+      local closeOk, closeErr = file:close()
+      if not ok then return false, writeErr end
+      if not closeOk then return false, closeErr end
+      return true
+    end,
+    remove = function(name)
+      os.remove(full(name))
+      return true
+    end,
+  }
+end
+
 function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -736,6 +781,7 @@ function App.playtestMod()
   local recomp = linkedRecompRoot()
   local src = PlaytestPaths.absoluteFromRoot(
     S.path or (ModIO.modsRoot() .. sep .. id), root)
+  local portableRoot = packagedPortableRoot(root, sep)
   local version = S.version or "red"
   if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
     version = "red"
@@ -765,9 +811,10 @@ function App.playtestMod()
   -- inherit mods the player enabled in an earlier normal game session.
   local okEnable, errEnable = pcall(function()
     local SaveData = require("src.core.SaveData")
-    local options = SaveData.loadOptions()
+    local optionsFs = portableRoot and physicalRootFs(portableRoot, sep) or nil
+    local options = SaveData.loadOptions(optionsFs)
     PlaytestOptions.selectOnly(options, id, version)
-    SaveData.saveOptions(options)
+    SaveData.saveOptions(options, optionsFs)
   end)
   if not okEnable then
     say("Could not enable mod in options: " .. tostring(errEnable))
@@ -786,8 +833,25 @@ function App.playtestMod()
   local packagedRuntime = runtimeRoot:lower():match("%.love$")
     or runtimeRoot:lower():match("gen1recomp%.exe$")
   local runtimeWorkDir = packagedRuntime and root or runtimeRoot
-  local runtimeModsBase = packagedRuntime
-    and love.filesystem.getSaveDirectory() or runtimeRoot
+  local runtimeModsBase = runtimeRoot
+  if packagedRuntime then
+    -- Portable release packs place portable.txt beside the LÖVE binaries.
+    -- The editor and fused game must copy/read mods from that same physical
+    -- root; falling back to the LOVE identity keeps source/non-portable runs
+    -- compatible with existing installations.
+    local SaveData = require("src.core.SaveData")
+    local portableBase = portableRoot or SaveData.portableBaseDir()
+    if sep == "\\" and loveExe ~= "love" then
+      -- On Windows an unfused editor is launched as `love.exe <pack-root>`.
+      -- Some LÖVE builds report the mounted source rather than the binary
+      -- directory to SaveData.gameFolders(), so portableBase can be nil even
+      -- though love/portable.txt exists. The fused Playtest executable and
+      -- marker are siblings; deriving that directory is unambiguous and also
+      -- prevents a fallback into the legacy pokemon-love2d AppData identity.
+      portableBase = loveExe:match("^(.*)[/\\][^/\\]+$") or portableBase
+    end
+    runtimeModsBase = portableBase or love.filesystem.getSaveDirectory()
+  end
   local runtimeMods = runtimeModsBase .. sep .. "mods" .. sep .. id
   local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
   if not okSync then

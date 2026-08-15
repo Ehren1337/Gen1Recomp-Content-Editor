@@ -7,7 +7,8 @@
 #   gen1recomp-content-editor-linux64.tar.gz
 #   gen1recomp-content-editor-macos-universal.tar.gz
 #
-# Excludes data/generated, assets/generated, *.gb/*.gbc, portable.txt.
+# Excludes ROM-derived data and user saves. Release launchers include an empty
+# portable marker beside LÖVE so new data remains inside the extracted pack.
 
 param(
   [ValidateSet("windows", "linux", "macos", "all")]
@@ -255,6 +256,16 @@ function Add-WindowsLove([string]$Stage) {
     -ExcludeDirNames @(".git") -ExcludeFilePatterns @("*.gb", "*.gbc")
 }
 
+function Enable-PortablePersistence([string]$Stage) {
+  # Both the editor's love.exe and the fused Playtest executable live here.
+  # SaveData checks the executable directory before the mounted source, so a
+  # single marker gives both processes the same persistence root.
+  $loveDir = Join-Path $Stage "love"
+  New-Item -ItemType Directory -Force -Path $loveDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $loveDir "portable.txt") `
+    -Value "Gen1Recomp Content Editor portable persistence" -Encoding ascii
+}
+
 function ConvertTo-WindowsFusedRuntime([string]$Stage) {
   $loveExe = Join-Path $Stage "love\love.exe"
   $archive = Join-Path $Stage "runtime\gen1recomp.love"
@@ -348,6 +359,7 @@ function Pack-Windows {
   New-ContentEditorStage $Stage "windows"
   Add-WindowsLove $Stage
   ConvertTo-WindowsFusedRuntime $Stage
+  Enable-PortablePersistence $Stage
   if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
   $parent = Split-Path $Stage -Parent
   $packageName = "gen1recomp-content-editor-win64"
@@ -419,6 +431,7 @@ function Pack-Linux {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "linux"
   Add-LinuxLove $Stage
+  Enable-PortablePersistence $Stage
   Write-LinuxReadme $Stage
 
   if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
@@ -453,6 +466,7 @@ function Pack-MacOS {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "macOS"
   Add-MacLove $Stage
+  Enable-PortablePersistence $Stage
   if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
   $parent = Split-Path $Stage -Parent
   $packageName = "gen1recomp-content-editor-macos-universal"
