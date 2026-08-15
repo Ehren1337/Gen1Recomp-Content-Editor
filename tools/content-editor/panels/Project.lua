@@ -124,10 +124,18 @@ end
 function Project.draw(S, x, y, w, h, App)
   local s = Kit.scale
   local pad = 16 * s
-  local row = y
+  FormPane.track(S, "projectPageScroll",
+    S.project and S.project.id or "no-project")
+  local row, pageView = FormPane.begin(
+    S, "projectPageScroll", x, y, w, h)
+  local pageTop = row
+  w = pageView.contentW or w
 
   Kit.caption(x, row, "MOD PROJECT")
   row = row + 28 * s
+  Kit.text("micro", "Create a project or open an existing mod to edit and test.",
+    x, row, PAL.muted)
+  row = row + 22 * s
 
   local cardY = row
   local innerX = x + pad
@@ -257,9 +265,9 @@ function Project.draw(S, x, y, w, h, App)
   Kit.text("small", Kit.ellipsize("small", srcLine, w), x, row, PAL.text)
   row = row + 22 * s
   Kit.text("micro",
-    "Shareable packs ship without a ROM cache. Link your Gen1Recomp folder "
-      .. "or Import a ROM (cache stays in the save directory, not this pack). "
-      .. "Playtest uses this editor package's bundled game runtime.",
+    "Import the selected ROM for complete data, reuse its imported cache, "
+      .. "or use fixtures for ROM-free editing. Link Recomp is optional and "
+      .. "only reuses data; Playtest uses this editor's bundled runtime.",
     x, row, PAL.muted)
   row = row + 32 * s
   local dsW = 150 * s
@@ -350,9 +358,16 @@ function Project.draw(S, x, y, w, h, App)
     end
   end
   row = row + 28 * s
+  Kit.text("micro",
+    "Validate checks the open mod against the selected game's data. "
+      .. "Playtest saves it, enables only this mod, and boots the selected game.",
+    x, row, PAL.muted)
+  row = row + 22 * s
 
   if not S.project then
     Kit.emptyBox(x, row, w, 120 * s, "No mod open")
+    FormPane.finish(S, "projectPageScroll", pageTop,
+      row + 120 * s + pad, pageView)
     return
   end
 
@@ -388,19 +403,18 @@ function Project.draw(S, x, y, w, h, App)
     row = row + 4 * s
   end
 
-  local lowerH = y + h - row - 8 * s
-  if lowerH < 80 * s then return end
-
-  Kit.card(x, row, w, lowerH, 14 * s)
+  -- The whole Project workflow scrolls as one page. Keep this settings card
+  -- at its natural height instead of squeezing it into whatever viewport
+  -- space remains, which previously hid validation and made the form
+  -- impossible to reach on shorter windows.
+  local formY = row
+  local lowerH = S._projectSettingsH or (520 * s)
+  Kit.card(x, formY, w, lowerH, 14 * s)
   local scrollPad = 12 * s
   local viewX = x + scrollPad
-  local viewY = row + scrollPad
+  local viewY = formY + scrollPad
   local viewW = w - 2 * scrollPad
-  local viewH = lowerH - 2 * scrollPad
-  FormPane.track(S, "projectFormScroll", p.id or "project")
-  local fy, view = FormPane.begin(S, "projectFormScroll", viewX, viewY, viewW, viewH)
-  viewW = view.contentW or viewW
-  local contentTop = fy
+  local fy = viewY
   local labelW = 120 * s
   local secGap = 20 * s
 
@@ -755,7 +769,10 @@ function Project.draw(S, x, y, w, h, App)
     end
   end
 
-  FormPane.finish(S, "projectFormScroll", contentTop, fy, view)
+  lowerH = math.max(120 * s, fy - formY + scrollPad)
+  S._projectSettingsH = lowerH
+  row = formY + lowerH + pad
+  FormPane.finish(S, "projectPageScroll", pageTop, row, pageView)
 end
 
 return Project
