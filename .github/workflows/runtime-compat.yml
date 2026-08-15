@@ -27,6 +27,7 @@ jobs:
         run: |
           lua tests/test_state_stack.lua
           lua tests/content-editor/test_manifest_target.lua
+          lua tests/content-editor/test_playtest_paths.lua
           lua tests/content-editor/test_mapbuilder_manifest.lua
           lua tests/content-editor/test_tileset_export.lua
 

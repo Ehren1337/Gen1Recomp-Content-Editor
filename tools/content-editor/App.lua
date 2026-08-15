@@ -9,6 +9,7 @@ local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
 local LuaJitTool = require("LuaJitTool")
+local PlaytestPaths = require("PlaytestPaths")
 local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
 
@@ -685,16 +686,6 @@ local function linkedRecompRoot()
   return nil
 end
 
-local function samePath(a, b)
-  local function normalize(path)
-    path = tostring(path or ""):gsub("[/\\]+", package.config:sub(1, 1))
-      :gsub("[/\\]+$", "")
-    if package.config:sub(1, 1) == "\\" then path = path:lower() end
-    return path
-  end
-  return normalize(a) == normalize(b)
-end
-
 function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -715,7 +706,8 @@ function App.playtestMod()
   local sep = package.config:sub(1, 1)
   local root = repoRoot()
   local recomp = linkedRecompRoot()
-  local src = S.path or (ModIO.modsRoot() .. sep .. id)
+  local src = PlaytestPaths.absoluteFromRoot(
+    S.path or (ModIO.modsRoot() .. sep .. id), root)
   local version = S.version or "red"
   if not (GameVersion.VERSIONS and GameVersion.VERSIONS[version]) then
     version = "red"
@@ -731,7 +723,7 @@ function App.playtestMod()
   end
 
   local bundledMods = root .. sep .. "mods" .. sep .. id
-  if not samePath(src, bundledMods) then
+  if not PlaytestPaths.same(src, bundledMods) then
     -- A project opened from an external/linked location must be copied into
     -- the bundled runtime's source tree. Projects created by this editor are
     -- already there, so the common path performs no redundant copy.
@@ -771,7 +763,7 @@ function App.playtestMod()
   -- fallback for development checkouts that do not bundle LÖVE.
   local loveExe, fused, runtimeRoot = resolveLoveExe({ root, recomp })
   runtimeRoot = runtimeRoot or root
-  if not samePath(runtimeRoot, root) then
+  if not PlaytestPaths.same(runtimeRoot, root) then
     local runtimeMods = runtimeRoot .. sep .. "mods" .. sep .. id
     local okSync, syncErr = DataSource.copyTree(src, runtimeMods)
     if not okSync then
