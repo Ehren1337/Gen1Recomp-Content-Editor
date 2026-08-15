@@ -26,17 +26,21 @@ function Copy-TreeFiltered {
     [string]$From,
     [string]$To,
     [string[]]$ExcludeDirNames = @(),
-    [string[]]$ExcludeFilePatterns = @()
+    [string[]]$ExcludeFilePatterns = @(),
+    [string[]]$RootExcludeDirNames = @(),
+    [int]$Depth = 0
   )
   if (-not (Test-Path $From)) { return }
   New-Item -ItemType Directory -Force -Path $To | Out-Null
   Get-ChildItem -LiteralPath $From -Force | ForEach-Object {
     $name = $_.Name
     if ($_.PSIsContainer) {
-      if ($ExcludeDirNames -contains $name) { return }
+      if ($ExcludeDirNames -contains $name -or
+          ($Depth -eq 0 -and $RootExcludeDirNames -contains $name)) { return }
       Copy-TreeFiltered -From $_.FullName -To (Join-Path $To $name) `
         -ExcludeDirNames $ExcludeDirNames `
-        -ExcludeFilePatterns $ExcludeFilePatterns
+        -ExcludeFilePatterns $ExcludeFilePatterns `
+        -RootExcludeDirNames $RootExcludeDirNames -Depth ($Depth + 1)
     } else {
       foreach ($pat in $ExcludeFilePatterns) {
         if ($name -like $pat) { return }
@@ -93,12 +97,13 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
   }
   $runtimeExcludeDirs = @(
-    ".git", ".github", "dist", "generated", "mods", "node_modules", "__pycache__"
+    ".git", ".github", "dist", "generated", "node_modules", "__pycache__"
   )
   # The editor host also starts from the pin. Editor-owned files copied below
   # are the only overlay; no root src/ snapshot is staged.
   Copy-TreeFiltered -From $runtimeSource -To $Stage `
-    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles
+    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles `
+    -RootExcludeDirNames @("mods")
   $runtimePatches = Get-ChildItem -LiteralPath (Join-Path $Root "runtime\patches") `
     -Filter "*.patch" | Sort-Object Name
   foreach ($patch in $runtimePatches) {
@@ -114,7 +119,8 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   }
   Copy-TreeFiltered -From $runtimeSource `
     -To (Join-Path $Stage "runtime\gen1recomp") `
-    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles
+    -ExcludeDirNames $runtimeExcludeDirs -ExcludeFilePatterns $excludeFiles `
+    -RootExcludeDirNames @("mods")
   foreach ($patch in $runtimePatches) {
     $relativeRuntime = [IO.Path]::GetRelativePath(
       $Root, (Join-Path $Stage "runtime\gen1recomp")).Replace("\", "/")

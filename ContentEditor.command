@@ -5,8 +5,11 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LOVE="$HERE/love/love.app/Contents/MacOS/love"
 EDITOR_SOURCE="$HERE"
 if [ ! -f "$HERE/main.lua" ]; then
-  chmod +x "$HERE/scripts/prepare_content_editor.sh" 2>/dev/null || true
-  "$HERE/scripts/prepare_content_editor.sh" >/dev/null
+  if [ ! -f "$HERE/.content-editor-runtime/src/mods/Runtime.lua" ] ||
+     [ ! -f "$HERE/.content-editor-runtime/runtime/gen1recomp/src/core/Input.lua" ]; then
+    chmod +x "$HERE/scripts/prepare_content_editor.sh" 2>/dev/null || true
+    "$HERE/scripts/prepare_content_editor.sh" >/dev/null
+  fi
   EDITOR_SOURCE="$HERE/.content-editor-runtime"
   export POKEPORT_CONTENT_ROOT="$HERE"
 fi

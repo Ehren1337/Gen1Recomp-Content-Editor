@@ -86,10 +86,12 @@ jobs:
             exit 1
           fi
           test -f "$root/src/core/StateStack.lua"
+          test -f "$root/src/mods/Runtime.lua"
           test -f "$root/tests/love_stub.lua"
           test -f "$root/runtime/gen1recomp/src/core/Input.lua"
           test -f "$root/runtime/gen1recomp/src/core/Music.lua"
           test -f "$root/runtime/gen1recomp/src/core/Sound.lua"
+          test -f "$root/runtime/gen1recomp/src/mods/Runtime.lua"
           grep -q 'function PaletteFX.setWorldGroupOverrides' \
             "$root/src/render/PaletteFX.lua"
           grep -q 'function PaletteFX.setWorldGroupOverrides' \
@@ -116,7 +118,9 @@ jobs:
           test -x "$launcher"
           test -x "$root/love/love.app/Contents/MacOS/love"
           test -f "$root/tests/love_stub.lua"
+          test -f "$root/src/mods/Runtime.lua"
           test -f "$root/runtime/gen1recomp/src/core/Input.lua"
+          test -f "$root/runtime/gen1recomp/src/mods/Runtime.lua"
           grep -q 'function PaletteFX.setWorldGroupOverrides' \
             "$root/src/render/PaletteFX.lua"
           grep -q 'function PaletteFX.setWorldGroupOverrides' \

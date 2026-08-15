@@ -18,14 +18,21 @@ if (Test-Path -LiteralPath $Stage) {
 }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 
-function Copy-Filtered([string]$From, [string]$To, [string[]]$Excluded = @()) {
+function Copy-Filtered(
+  [string]$From,
+  [string]$To,
+  [string[]]$Excluded = @(),
+  [string[]]$RootExcluded = @(),
+  [int]$Depth = 0
+) {
   if (-not (Test-Path -LiteralPath $From)) { return }
   New-Item -ItemType Directory -Force -Path $To | Out-Null
   Get-ChildItem -LiteralPath $From -Force | ForEach-Object {
     if ($Excluded -contains $_.Name) { return }
+    if ($Depth -eq 0 -and $RootExcluded -contains $_.Name) { return }
     $destination = Join-Path $To $_.Name
     if ($_.PSIsContainer) {
-      Copy-Filtered $_.FullName $destination $Excluded
+      Copy-Filtered $_.FullName $destination $Excluded $RootExcluded ($Depth + 1)
     } elseif (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
       Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
     }
@@ -33,9 +40,11 @@ function Copy-Filtered([string]$From, [string]$To, [string[]]$Excluded = @()) {
 }
 
 Copy-Filtered $Runtime $Stage @(
-  ".git", ".github", "dist", "generated", "mods",
+  ".git", ".github", "dist", "generated",
   "node_modules", "__pycache__"
-)
+) @("mods")
+# Only the runtime's top-level mods folder is mutable user content. `src/mods`
+# contains Loader, Runtime, manifests, schemas, and save support and is kept.
 $patches = Get-ChildItem -LiteralPath (Join-Path $Root "runtime\patches") `
   -Filter "*.patch" | Sort-Object Name
 foreach ($patch in $patches) {
@@ -46,9 +55,9 @@ foreach ($patch in $patches) {
 }
 $nestedRuntime = Join-Path $Stage "runtime\gen1recomp"
 Copy-Filtered $Runtime $nestedRuntime @(
-  ".git", ".github", "dist", "generated", "mods",
+  ".git", ".github", "dist", "generated",
   "node_modules", "__pycache__"
-)
+) @("mods")
 New-Item -ItemType Directory -Force -Path (Join-Path $nestedRuntime "mods") | Out-Null
 foreach ($patch in $patches) {
   & git -C $Root apply --check `
