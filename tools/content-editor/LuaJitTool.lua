@@ -5,6 +5,7 @@
 -- into Program Files; on Linux we use PATH or apt when available.
 
 local LuaJitTool = {}
+local ProcessRunner = require("ProcessRunner")
 
 local function sep()
   return package.config:sub(1, 1)
@@ -34,26 +35,14 @@ end
 
 local function ensureDir(path)
   if isWindows() then
-    os.execute('mkdir "' .. path .. '" 2>nul')
+    ProcessRunner.run('mkdir "' .. path .. '" 2>nul')
   else
     os.execute('mkdir -p "' .. path .. '"')
   end
 end
 
 local function runShell(cmd)
-  local full = cmd
-  if not cmd:find("2>&1", 1, true) then
-    full = cmd .. " 2>&1"
-  end
-  local ok, handle = pcall(io.popen, full)
-  if not ok or not handle then
-    return false, "shell unavailable: " .. tostring(handle)
-  end
-  local out = handle:read("*a") or ""
-  local okClose, _, code = handle:close()
-  local exit = (type(code) == "number" and code)
-    or (okClose and 0 or 1)
-  return exit == 0, out
+  return ProcessRunner.run(cmd)
 end
 
 local function saveToolsRoot()

@@ -1595,11 +1595,28 @@ function Gfx.draw(S, x, y, w, h, App)
     e[key] = value
     syncTilesetLive(S, id, e)
   end
-  Kit.caption(formX, modeY, "TILESET EDITOR · "
-    .. id .. (owned and "" or "  (vanilla)"))
+  Kit.caption(formX, modeY, "TILESET EDITOR · " .. id)
   local fy, view, viewX, viewW = RegList.beginForm(S, formX, listY, formW, listH,
     "gfxFormScroll", "ts|" .. id, owned and 44 * s or 12 * s)
   local contentTop = fy
+  local ownershipLabel, ownershipHelp, ownershipColor
+  if not owned then
+    ownershipLabel = "RUNTIME REFERENCE"
+    ownershipHelp = "Read-only data from the selected ROM · editing creates a custom replacement"
+    ownershipColor = PAL.blue
+  elseif rec._isNew then
+    ownershipLabel = "CUSTOM TILESET"
+    ownershipHelp = "Mod-owned tileset · image and metadata are saved with this project"
+    ownershipColor = PAL.green
+  else
+    ownershipLabel = "CUSTOM REPLACEMENT"
+    ownershipHelp = "Mod-owned override of runtime tileset " .. id
+    ownershipColor = PAL.yellow
+  end
+  Kit.text("small", ownershipLabel, viewX, fy, ownershipColor)
+  Kit.text("micro", Kit.ellipsize("micro", ownershipHelp, viewW),
+    viewX, fy + 18 * s, PAL.muted)
+  fy = fy + 40 * s
   local prev = 72 * s
   local tsPals = (not gen2) and Preview.paletteIds(S) or {}
   if not gen2 then
@@ -1724,8 +1741,12 @@ function Gfx.draw(S, x, y, w, h, App)
   row("Image", function(fx, fy_, fw, fh_)
     Kit.text("micro", Kit.ellipsize("micro", tostring(rec.image or ""), fw - 100 * s),
       fx, fy_ + 8 * s, PAL.muted)
-    if Kit.button(fx + fw - 96 * s, fy_, 96 * s, fh_, "Browse", {
-        kind = "ghost", tooltip = "Import tileset PNG → assets/tilesets/",
+    if Kit.button(fx + fw - 128 * s, fy_, 128 * s, fh_,
+        owned and "Replace PNG" or "Replace in mod", {
+        kind = owned and "ghost" or "accent",
+        tooltip = owned
+          and "Replace this mod-owned PNG in assets/tilesets/"
+          or "Create a custom replacement and copy its PNG into this mod",
       }) then
       local tid = id
       App.pickFile("Tileset PNG", "PNG (*.png)|*.png|All|*.*",
@@ -1845,8 +1866,8 @@ function Gfx.draw(S, x, y, w, h, App)
     fy = drawTileFlagPainter(S, App, rec, ensure, id, viewX, fy, viewW, s, tsPal)
   end
   FormPane.finish(S, "gfxFormScroll", contentTop, fy, view)
-  if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 120 * s, 32 * s,
-      "Revert", { kind = "danger" }) then
+  if owned and Kit.button(formX + 12 * s, listY + listH - 40 * s, 152 * s, 32 * s,
+      rec._isNew and "Delete custom" or "Remove replacement", { kind = "danger" }) then
     local dropped = proj[id]
     proj[id] = nil
     if S.data and S.data.tilesets and S.data.tilesets[id] == dropped then

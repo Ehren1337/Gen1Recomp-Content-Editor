@@ -4394,11 +4394,14 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
         return
       end
       drawBlockThumb(S, id, 1, cx + 4 * s, ry + (rowH - thumb) / 2, thumb)
-      local label = Kit.ellipsize("mono", id, math.max(8, innerW - thumb - 16 * s))
+      local label = Kit.ellipsize("mono", id,
+        math.max(8, innerW - thumb - 58 * s))
       Kit.text("mono", label, cx + 4 * s + thumb + 6 * s, ry + 8 * s,
         on and PAL.heading
           or (localSlot and PAL.green)
           or (modded and PAL.text or PAL.muted))
+      Kit.textRight("micro", modded and "MOD" or "ROM", cx + innerW - 6 * s,
+        ry + 9 * s, modded and PAL.green or PAL.blue)
       ry = ry + rowH + 3 * s
     end
     Kit.popClip()
@@ -4427,15 +4430,21 @@ function Maps.drawTilesetPicker(S, x, y, w, h, App)
     end
     S.status = "Clone failed: " .. tostring(err)
   end
-  if Kit.button(cx, by + row1 + btnGap, listW, row1, "Replace PNG", {
+  local focusedOwned = focusId and S.project.tilesets
+    and S.project.tilesets[focusId] ~= nil
+  if Kit.button(cx, by + row1 + btnGap, listW, row1,
+      focusedOwned and "Replace custom PNG" or "Create custom replacement", {
       kind = "accent",
-      tooltip = "Import a PNG over this tileset's image (assets/tilesets/)",
+      tooltip = focusedOwned
+        and "Replace the PNG already owned by this mod"
+        or "Keep the runtime tileset id but override its PNG inside this mod",
     }) then
     importTilesetPng(S, App, focusId, { rebuildBlocks = false })
   end
-  if Kit.button(cx, by + (row1 + btnGap) * 2, listW, row1, "+ New from PNG", {
+  if Kit.button(cx, by + (row1 + btnGap) * 2, listW, row1,
+      "+ Separate custom tileset", {
       kind = "ghost",
-      tooltip = "Register a new tileset from a PNG sheet",
+      tooltip = "Register a new mod-owned tileset with its own id and PNG",
     }) then
     importTilesetPng(S, App, nil, { createNew = true, rebuildBlocks = true })
   end

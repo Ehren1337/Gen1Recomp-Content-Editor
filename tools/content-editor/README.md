@@ -29,8 +29,9 @@ Gen1Recomp runtime with `animatedTiles` support; the development runtime used by
 this project is `D:\decomp\gen1recomp` (`src/render/TileRenderer.lua`).
 
 ```sh
-love . --content-editor
-love . --content-editor --mod mods/my_content
+git submodule update --init --recursive
+./ContentEditor.sh
+./ContentEditor.sh --mod mods/my_content
 ```
 
 Windows (bundled runtime in this checkout):

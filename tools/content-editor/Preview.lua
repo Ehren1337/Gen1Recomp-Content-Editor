@@ -1,6 +1,7 @@
 -- Draw image previews for content-editor panels (pokemon, trainers, …).
 
 local Theme = require("Theme")
+local WorldPaletteOverrides = require("WorldPaletteOverrides")
 local PAL = Theme.PAL
 
 local Preview = {}
@@ -178,6 +179,7 @@ end
 function Preview.syncGbcWorldRuntime(S)
   local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
   if not (ok and PaletteFX) then return end
+  WorldPaletteOverrides.install(PaletteFX)
   local use = Preview.useGbcPalettes(S)
   if use then
     if PaletteFX.setMode then PaletteFX.setMode("redpp") end
@@ -220,6 +222,7 @@ Preview.GBC_GROUP_NAMES = {
 function Preview.hasTilesetGbcGroups(S, tilesetId)
   if type(tilesetId) ~= "string" or tilesetId == "" then return false end
   local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+  if ok and PaletteFX then WorldPaletteOverrides.install(PaletteFX) end
   return ok and PaletteFX and PaletteFX.hasWorldTileset
     and PaletteFX.hasWorldTileset(tilesetId) and true or false
 end

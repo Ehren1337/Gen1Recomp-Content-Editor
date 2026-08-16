@@ -7,7 +7,8 @@
 #   gen1recomp-content-editor-linux64.tar.gz
 #   gen1recomp-content-editor-macos-universal.tar.gz
 #
-# Excludes data/generated, assets/generated, *.gb/*.gbc, portable.txt.
+# Excludes ROM-derived data and user saves. Release launchers include an empty
+# portable marker beside LÖVE so new data remains inside the extracted pack.
 
 param(
   [ValidateSet("windows", "linux", "macos", "all")]
@@ -26,17 +27,21 @@ function Copy-TreeFiltered {
     [string]$From,
     [string]$To,
     [string[]]$ExcludeDirNames = @(),
-    [string[]]$ExcludeFilePatterns = @()
+    [string[]]$ExcludeFilePatterns = @(),
+    [string[]]$RootExcludeDirNames = @(),
+    [int]$Depth = 0
   )
   if (-not (Test-Path $From)) { return }
   New-Item -ItemType Directory -Force -Path $To | Out-Null
   Get-ChildItem -LiteralPath $From -Force | ForEach-Object {
     $name = $_.Name
     if ($_.PSIsContainer) {
-      if ($ExcludeDirNames -contains $name) { return }
+      if ($ExcludeDirNames -contains $name -or
+          ($Depth -eq 0 -and $RootExcludeDirNames -contains $name)) { return }
       Copy-TreeFiltered -From $_.FullName -To (Join-Path $To $name) `
         -ExcludeDirNames $ExcludeDirNames `
-        -ExcludeFilePatterns $ExcludeFilePatterns
+        -ExcludeFilePatterns $ExcludeFilePatterns `
+        -RootExcludeDirNames $RootExcludeDirNames -Depth ($Depth + 1)
     } else {
       foreach ($pat in $ExcludeFilePatterns) {
         if ($name -like $pat) { return }
@@ -86,10 +91,28 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     ".DS_Store", "Thumbs.db"
   )
 
-  foreach ($f in @(
-    "main.lua", "conf.lua",
-    "README.md", "README.txt", ".gitattributes"
-  )) {
+  # Playtest runs the exact Gen1Recomp submodule revision. Keep it as ordinary
+  # files in release packs so end users never need Git or network access.
+  $runtimeSource = Join-Path $Root "runtime\gen1recomp"
+  if (-not (Test-Path (Join-Path $runtimeSource "main.lua"))) {
+    throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
+  }
+  $runtimeExcludeDirs = @(
+    ".git", ".github", "dist", "generated", "node_modules", "__pycache__"
+  )
+  # Release packs carry one immutable LÖVE archive, not a loose source tree.
+  # Source checkouts retain the submodule directory for review and pinning.
+  $runtimeStage = Join-Path $Stage "runtime"
+  New-Item -ItemType Directory -Force -Path $runtimeStage | Out-Null
+  $runtimeArchive = Join-Path $runtimeStage "gen1recomp.love"
+  $runtimePayload = @("main.lua", "conf.lua", "src", "data", "assets", "LICENSE.MD")
+  & git -C $runtimeSource archive --format=zip `
+    "--output=$runtimeArchive" HEAD -- @runtimePayload
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $runtimeArchive)) {
+    throw "Could not build pinned runtime archive."
+  }
+
+  foreach ($f in @("README.md", "README.txt", ".gitattributes")) {
     $src = Join-Path $Root $f
     if (Test-Path $src) {
       Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $f) -Force
@@ -124,8 +147,6 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     Copy-Item -LiteralPath $packReadme -Destination (Join-Path $Stage "PACK_README.md") -Force
   }
 
-  Copy-TreeFiltered -From (Join-Path $Root "src") -To (Join-Path $Stage "src") `
-    -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
   Copy-TreeFiltered -From (Join-Path $Root "libs") -To (Join-Path $Stage "libs") `
     -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
 
@@ -162,20 +183,6 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
       -Destination (Join-Path $toolsStage $mf.Name) -Force
   }
 
-  $dataStage = Join-Path $Stage "data"
-  New-Item -ItemType Directory -Force -Path $dataStage | Out-Null
-  if (Test-Path (Join-Path $Root "data\scripts")) {
-    Copy-TreeFiltered -From (Join-Path $Root "data\scripts") `
-      -To (Join-Path $dataStage "scripts") `
-      -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
-  }
-  foreach ($pf in @("palettes_gbc.lua", "palettes_yellow.lua")) {
-    $src = Join-Path $Root "data\$pf"
-    if (Test-Path $src) {
-      Copy-Item -LiteralPath $src -Destination (Join-Path $dataStage $pf) -Force
-    }
-  }
-
   $assetsStage = Join-Path $Stage "assets"
   New-Item -ItemType Directory -Force -Path $assetsStage | Out-Null
   foreach ($sub in @("launcher", "logo", "switch", "touch")) {
@@ -192,6 +199,25 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
       -To (Join-Path $Stage "tests\fixture_data") `
       -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
   }
+
+  foreach ($f in @("main.lua", "conf.lua")) {
+    $src = Join-Path $Root "tools\content-editor\runtime\$f"
+    if (-not (Test-Path $src)) {
+      throw "Missing standalone editor runtime file: $src"
+    }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $Stage $f) -Force
+  }
+  # modkit's headless loader requires the LÖVE API shim as well as fixture
+  # data. Keep it in the same tests/ module path used by source checkouts so
+  # LuaJIT can resolve require("tests.love_stub") on every platform.
+  $loveStub = Join-Path $Root "tests\love_stub.lua"
+  if (-not (Test-Path $loveStub)) {
+    throw "Missing tests\love_stub.lua - packaged validation would not run."
+  }
+  $testsStage = Join-Path $Stage "tests"
+  New-Item -ItemType Directory -Force -Path $testsStage | Out-Null
+  Copy-Item -LiteralPath $loveStub `
+    -Destination (Join-Path $testsStage "love_stub.lua") -Force
 
   foreach ($doc in @("content-editor.md", "tiled-map-editing.md")) {
     $src = Join-Path $Root "docs\$doc"
@@ -228,6 +254,40 @@ function Add-WindowsLove([string]$Stage) {
   }
   Copy-TreeFiltered -From $loveSrc -To (Join-Path $Stage "love") `
     -ExcludeDirNames @(".git") -ExcludeFilePatterns @("*.gb", "*.gbc")
+}
+
+function Enable-PortablePersistence([string]$Stage) {
+  # Both the editor's love.exe and the fused Playtest executable live here.
+  # SaveData checks the executable directory before the mounted source, so a
+  # single marker gives both processes the same persistence root.
+  $loveDir = Join-Path $Stage "love"
+  New-Item -ItemType Directory -Force -Path $loveDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $loveDir "portable.txt") `
+    -Value "Gen1Recomp Content Editor portable persistence" -Encoding ascii
+}
+
+function ConvertTo-WindowsFusedRuntime([string]$Stage) {
+  $loveExe = Join-Path $Stage "love\love.exe"
+  $archive = Join-Path $Stage "runtime\gen1recomp.love"
+  $fused = Join-Path $Stage "love\gen1recomp.exe"
+  if (-not (Test-Path $loveExe) -or -not (Test-Path $archive)) {
+    throw "Windows runtime fusion requires love.exe and gen1recomp.love."
+  }
+  $output = [IO.File]::Create($fused)
+  try {
+    foreach ($source in @($loveExe, $archive)) {
+      $input = [IO.File]::OpenRead($source)
+      try { $input.CopyTo($output) } finally { $input.Dispose() }
+    }
+  } finally {
+    $output.Dispose()
+  }
+  Remove-Item -LiteralPath $archive -Force
+  $runtimeDir = Join-Path $Stage "runtime"
+  if ((Test-Path $runtimeDir) -and
+      -not (Get-ChildItem -LiteralPath $runtimeDir -Force | Select-Object -First 1)) {
+    Remove-Item -LiteralPath $runtimeDir -Force
+  }
 }
 
 function Add-LinuxLove([string]$Stage) {
@@ -298,6 +358,8 @@ function Pack-Windows {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "windows"
   Add-WindowsLove $Stage
+  ConvertTo-WindowsFusedRuntime $Stage
+  Enable-PortablePersistence $Stage
   if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
   $parent = Split-Path $Stage -Parent
   $packageName = "gen1recomp-content-editor-win64"
@@ -341,7 +403,8 @@ with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
 shutil.move(tmp, src)
 print('exec bits set; launcher CR stripped')
 "@
-  $pyFile = Join-Path $env:TEMP "ce_fix_linux_tar_exec.py"
+  # $env:TEMP is not guaranteed on Unix PowerShell (including ubuntu-latest).
+  $pyFile = Join-Path ([IO.Path]::GetTempPath()) "ce_fix_linux_tar_exec.py"
   Set-Content -Path $pyFile -Value $py -Encoding utf8
   $python = $null
   foreach ($c in @("python", "py", "python3")) {
@@ -368,6 +431,7 @@ function Pack-Linux {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "linux"
   Add-LinuxLove $Stage
+  Enable-PortablePersistence $Stage
   Write-LinuxReadme $Stage
 
   if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
@@ -402,6 +466,7 @@ function Pack-MacOS {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   New-ContentEditorStage $Stage "macOS"
   Add-MacLove $Stage
+  Enable-PortablePersistence $Stage
   if (Test-Path $TarPath) { Remove-Item -LiteralPath $TarPath -Force }
   $parent = Split-Path $Stage -Parent
   $packageName = "gen1recomp-content-editor-macos-universal"

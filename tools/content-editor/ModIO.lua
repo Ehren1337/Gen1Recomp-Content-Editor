@@ -26,6 +26,45 @@ local function trim(value)
   return value and value:gsub("^%s+", ""):gsub("%s+$", "") or ""
 end
 
+-- Windowless Win32 directory enumeration. Repeated `io.popen("dir ...")`
+-- flashes a cmd.exe window every time the editor refreshes its project list.
+local function windowsNames(path, directories, pattern)
+  if package.config:sub(1, 1) ~= "\\" then return nil end
+  local ok, ffi = pcall(require, "ffi")
+  if not ok then return nil end
+  pcall(ffi.cdef, [[
+    typedef unsigned long DWORD;
+    typedef int BOOL;
+    typedef void *HANDLE;
+    typedef struct { DWORD low; DWORD high; } CE_FILETIME;
+    typedef struct {
+      DWORD attributes;
+      CE_FILETIME creation, access, write;
+      DWORD sizeHigh, sizeLow, reserved0, reserved1;
+      char name[260]; char alternate[14];
+    } CE_FIND_DATAA;
+    HANDLE FindFirstFileA(const char *pattern, CE_FIND_DATAA *data);
+    BOOL FindNextFileA(HANDLE handle, CE_FIND_DATAA *data);
+    BOOL FindClose(HANDLE handle);
+  ]])
+  local kernel = ffi.load("kernel32")
+  local data = ffi.new("CE_FIND_DATAA[1]")
+  local query = path:gsub("/", "\\"):gsub("\\+$", "")
+    .. "\\" .. (pattern or "*")
+  local handle = kernel.FindFirstFileA(query, data)
+  if handle == ffi.cast("HANDLE", -1) then return {} end
+  local out = {}
+  repeat
+    local name = ffi.string(data[0].name)
+    local isDirectory = bit.band(tonumber(data[0].attributes), 0x10) ~= 0
+    if name ~= "." and name ~= ".." and isDirectory == directories then
+      out[#out + 1] = name
+    end
+  until kernel.FindNextFileA(handle, data) == 0
+  kernel.FindClose(handle)
+  return out
+end
+
 local function commandOutput(command)
   local pipe = io.popen(command, "r")
   if not pipe then return nil end
@@ -164,6 +203,8 @@ local function linuxPickFolder(title, startPath)
 end
 
 function ModIO.repoRoot()
+  local configured = os.getenv("POKEPORT_CONTENT_ROOT")
+  if configured and configured ~= "" then return configured end
   if love and love.filesystem and love.filesystem.getSource then
     return love.filesystem.getSource()
   end
@@ -318,7 +359,7 @@ function ModIO.load(modDir)
   return project
 end
 
-function ModIO.save(modDir, project)
+function ModIO.save(modDir, project, version)
   if project._protectMain then
     return false,
       "this mod has a hand-written main.lua (e.g. example_mew_starter); "
@@ -360,17 +401,22 @@ function ModIO.save(modDir, project)
     os.remove(schemasPath)
   end
 
-  -- keep manifest name in sync when present
+  -- Keep the generated display name aligned with the project. Compatibility
+  -- is user-authored manifest metadata: selecting a ROM for editing or
+  -- playtesting must not narrow a cross-generation mod's declared support.
   local manifestPath = join(modDir, "manifest.json")
-  if ModIO.exists(manifestPath) and project.name then
+  if ModIO.exists(manifestPath) then
     local mh = io.open(manifestPath, "rb")
     if mh then
       local text = mh:read("*a")
       mh:close()
-      text = text:gsub('"name"%s*:%s*"[^"]*"',
-        string.format('"name": "%s"', project.name:gsub('"', '\\"')))
-      local mw = io.open(manifestPath, "wb")
-      if mw then mw:write(text); mw:close() end
+      local manifest, decodeErr = Json.decode(text)
+      if not manifest then return false, decodeErr end
+      if project.name then manifest.name = project.name end
+      local mw, manifestErr = io.open(manifestPath, "wb")
+      if not mw then return false, manifestErr end
+      mw:write(ModIO.encodeManifest(manifest))
+      mw:close()
     end
   end
   return true
@@ -585,21 +631,22 @@ function ModIO.listMods()
   local root = ModIO.modsRoot()
   local out = {}
   local sep = package.config:sub(1, 1)
-  local cmd
+  local names = windowsNames(root, true)
   if sep == "\\" then
-    cmd = string.format('dir /b /ad "%s" 2>nul', root)
+    names = names or {}
   else
-    cmd = string.format('ls -1 "%s" 2>/dev/null', root)
+    names = {}
+    local pipe = io.popen(string.format('ls -1 "%s" 2>/dev/null', root), "r")
+    if not pipe then return out end
+    for line in pipe:lines() do names[#names + 1] = line end
+    pipe:close()
   end
-  local pipe = io.popen(cmd, "r")
-  if not pipe then return out end
-  for line in pipe:lines() do
+  for _, line in ipairs(names) do
     line = trim(line)
     if line ~= "" and line ~= "examples" and ModIO.exists(join(join(root, line), "manifest.json")) then
       out[#out + 1] = line
     end
   end
-  pipe:close()
   table.sort(out)
   return out
 end
@@ -689,6 +736,19 @@ function ModIO.encodeManifest(data)
   return encodeJsonValue(data or {}, "") .. "\n"
 end
 
+function ModIO.setManifestTarget(modDir, version, name)
+  local path = join(modDir, "manifest.json")
+  local body, readErr = ModIO.readText(path)
+  if not body then return false, readErr end
+  local manifest, decodeErr = Json.decode(body)
+  if not manifest then return false, decodeErr end
+  if name then manifest.name = name end
+  -- `version` selects the runtime used by Playtest. It does not describe the
+  -- complete compatibility surface of the mod, so preserve games and
+  -- gen2compat exactly as authored in the manifest.
+  return ModIO.writeText(path, ModIO.encodeManifest(manifest))
+end
+
 function ModIO.readManifest(modId)
   local dir = ModIO.modDir(modId)
   if not dir then return nil, "no mod id" end
@@ -734,12 +794,11 @@ function ModIO.listModLuaFiles(modId)
     return names
   end
   if sep == "\\" then
-    for _, name in ipairs(listNames(string.format('dir /b /a-d "%s\\*.lua" 2>nul', dir))) do
+    for _, name in ipairs(windowsNames(dir, false, "*.lua") or {}) do
       add(name)
     end
-    for _, sub in ipairs(listNames(string.format('dir /b /ad "%s" 2>nul', dir))) do
-      for _, name in ipairs(listNames(
-          string.format('dir /b /a-d "%s\\%s\\*.lua" 2>nul', dir, sub))) do
+    for _, sub in ipairs(windowsNames(dir, true) or {}) do
+      for _, name in ipairs(windowsNames(join(dir, sub), false, "*.lua") or {}) do
         add(sub .. "/" .. name)
       end
     end

@@ -7,6 +7,7 @@ local Data = require("src.core.Data")
 local CacheFs = require("src.import.CacheFs")
 
 local DataSource = {}
+local ProcessRunner = require("ProcessRunner")
 
 local PREFS_FILE = "content_editor_data.json"
 local SEP = package.config:sub(1, 1)
@@ -543,7 +544,9 @@ function DataSource.validationDataDir(opts)
 
   local recompRoot = prefs.recompRoot or mountedRecomp
   if source == "recomp" then
-    local candidate = generated(recompRoot, false)
+    -- Current caches are versioned. An unversioned cache is a legacy Red
+    -- cache and must never be used to validate Blue, Yellow, or Gold.
+    local candidate = versionedGenerated(recompRoot)
     if candidate then return candidate, "imported" end
   elseif source == "local" then
     local candidate = versionedGenerated(repoRoot)
@@ -558,7 +561,7 @@ function DataSource.validationDataDir(opts)
 
   local localFallback = versionedGenerated(repoRoot)
   if localFallback then return localFallback, "imported" end
-  local recompFallback = generated(recompRoot, false)
+  local recompFallback = versionedGenerated(recompRoot)
   if recompFallback then return recompFallback, "imported" end
   return nil, "fixture"
 end
@@ -566,7 +569,7 @@ end
 local function ensureDir(path)
   local sep = SEP
   if sep == "\\" then
-    os.execute('mkdir "' .. path .. '" 2>nul')
+    ProcessRunner.run('mkdir "' .. path .. '" 2>nul')
   else
     os.execute('mkdir -p "' .. path .. '"')
   end
@@ -608,15 +611,14 @@ local function listDir(path)
   else
     cmd = string.format('ls -1 "%s"', path)
   end
-  local pipe = io.popen(cmd, "r")
-  if not pipe then return out end
-  for line in pipe:lines() do
+  local ok, output = ProcessRunner.run(cmd)
+  if not ok then return out end
+  for line in output:gmatch("[^\r\n]+") do
     line = line:gsub("%s+$", "")
     if line ~= "" and line ~= "." and line ~= ".." then
       out[#out + 1] = line
     end
   end
-  pipe:close()
   return out
 end
 
@@ -627,11 +629,8 @@ local function isDir(path)
   local platform = (love and love.system and love.system.getOS
     and love.system.getOS()) or ""
   if platform == "Windows" or SEP == "\\" then
-    local p = io.popen(string.format(
-      'cmd /c if exist "%s\\" (echo DIR) else (echo NO)', path), "r")
-    if not p then return false end
-    local r = p:read("*l") or ""
-    p:close()
+    local _, r = ProcessRunner.run(string.format(
+      'if exist "%s\\" (echo DIR) else (echo NO)', path))
     return r:find("DIR") ~= nil
   end
   local p = io.popen(string.format('test -d "%s" && echo DIR', path), "r")
