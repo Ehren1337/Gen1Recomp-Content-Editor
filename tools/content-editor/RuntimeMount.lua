@@ -31,22 +31,79 @@ local function resolveMount()
   end
 end
 
+local function fileExists(path)
+  local f = io.open(path, "rb")
+  if f then f:close(); return true end
+  return false
+end
+
+local function join(a, b)
+  local sep = package.config:sub(1, 1)
+  a = tostring(a or ""):gsub("[/\\]+$", "")
+  b = tostring(b or ""):gsub("^[/\\]+", "")
+  return a .. sep .. b
+end
+
+local function looksLikeRecomp(path)
+  if type(path) ~= "string" or path == "" then return false end
+  return fileExists(join(path, "src/core/GameVersion.lua"))
+    or fileExists(join(path, "src\\core\\GameVersion.lua"))
+end
+
+local function unescapeJson(s)
+  return (tostring(s or ""):gsub("\\u(%x%x%x%x)", function(h)
+    return string.char(tonumber(h, 16) % 256)
+  end):gsub("\\/", "/"):gsub("\\\\", "\\"):gsub('\\"', '"'))
+end
+
+local function linkedRecompPath()
+  local env = os.getenv("POKEPORT_RECOMP")
+  if looksLikeRecomp(env) then return env end
+  local save = love.filesystem.getSaveDirectory and love.filesystem.getSaveDirectory()
+  local prefs = save and join(save, "content_editor_data.json")
+  local body = prefs and fileExists(prefs) and (function()
+    local f = io.open(prefs, "rb")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    return text
+  end)()
+  local raw = body and body:match('"recompRoot"%s*:%s*"([^"]*)"')
+  local path = raw and unescapeJson(raw)
+  if looksLikeRecomp(path) then return path end
+  return nil
+end
+
+local function runtimeComplete(fs)
+  return fs.getInfo("src/core/GameVersion.lua", "file")
+    and fs.getInfo("src/mods/Loader.lua", "file")
+end
+
 function RuntimeMount.mount()
   local fs = assert(love and love.filesystem, "LÖVE filesystem unavailable")
-  if fs.getInfo("src/core/GameVersion.lua", "file") then return true end
+  if runtimeComplete(fs) then return true end
+  local mount = resolveMount()
+  if not mount then return false end
+
   local separator = package.config:sub(1, 1)
   local source = assert(fs.getSource(), "LÖVE source directory unavailable")
   local root = source:gsub("[/\\]+$", "")
   local archive = root .. separator .. "runtime" .. separator .. "gen1recomp.love"
   local fused = root .. separator .. "love" .. separator .. "gen1recomp.exe"
   local directory = root .. separator .. "runtime" .. separator .. "gen1recomp"
-  local file = io.open(archive, "rb")
-  local fusedFile = not file and io.open(fused, "rb") or nil
-  local runtime = file and archive or (fusedFile and fused or directory)
-  if file then file:close() end
-  if fusedFile then fusedFile:close() end
-  local mount = resolveMount()
-  return mount and mount(runtime) or false
+  local candidates = {}
+  if fileExists(archive) then candidates[#candidates + 1] = archive end
+  if fileExists(fused) then candidates[#candidates + 1] = fused end
+  if looksLikeRecomp(directory) then candidates[#candidates + 1] = directory end
+  local linked = linkedRecompPath()
+  if linked then candidates[#candidates + 1] = linked end
+
+  for i = 1, #candidates do
+    if mount(candidates[i]) and runtimeComplete(fs) then
+      return true
+    end
+  end
+  return runtimeComplete(fs)
 end
 
 return RuntimeMount

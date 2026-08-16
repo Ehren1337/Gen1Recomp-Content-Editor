@@ -423,13 +423,20 @@ end
 
 function TmxIO.importFile(S, path, App)
   if not (S and S.project) then return false, "no project" end
-  local body, readErr = ModIO.readText(path)
+  local Convert = require("TmxPokemonium")
+  local files = Convert.collectTmx(path)
+  if #files == 0 then return false, "no .tmx files" end
+  if #files > 1 or not tostring(path):lower():match("%.tmx$") then
+    return Convert.importPath(S, path, App)
+  end
+  local body, readErr = ModIO.readText(files[1])
   if not body then return false, readErr end
   local ours = body:find('name="editor"%s+value="gen1recomp"')
     or body:find('value="gen1recomp"%s+name="editor"')
   if not ours then
-    return require("TmxPokemonium").importFile(S, path, App)
+    return Convert.importPath(S, files[1], App)
   end
+  path = files[1]
   local parsed, err = TmxIO.parse(path)
   if not parsed then return false, err end
 

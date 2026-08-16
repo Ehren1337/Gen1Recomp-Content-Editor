@@ -2,6 +2,10 @@
 /dist/
 /.content-editor-runtime/
 
+# Engine source comes from the pinned or linked Gen1Recomp runtime.
+# Local copies here shadow that runtime and drift.
+/src/
+
 # Local ROM-derived caches and private game data
 /data/generated/
 /assets/generated/

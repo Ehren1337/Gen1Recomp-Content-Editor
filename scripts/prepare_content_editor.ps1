@@ -3,6 +3,19 @@ param([switch]$Check)
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Runtime = Join-Path $Root "runtime\gen1recomp"
+if (-not (Test-Path (Join-Path $Runtime "main.lua"))) {
+  $prefs = Join-Path $env:APPDATA "LOVE\pokemon-love2d\content_editor_data.json"
+  $linked = $env:POKEPORT_RECOMP
+  if (-not $linked -and (Test-Path -LiteralPath $prefs)) {
+    $raw = Get-Content -LiteralPath $prefs -Raw
+    if ($raw -match '"recompRoot"\s*:\s*"([^"]+)"') {
+      $linked = $Matches[1] -replace '\\\\', '\'
+    }
+  }
+  if ($linked -and (Test-Path (Join-Path $linked "main.lua"))) {
+    $Runtime = $linked
+  }
+}
 $Stage = Join-Path $Root ".content-editor-runtime"
 $SignatureFile = Join-Path $Stage ".source-signature"
 
@@ -49,7 +62,7 @@ if ($Check) {
 }
 
 if (-not (Test-Path (Join-Path $Runtime "main.lua"))) {
-  throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
+  throw "Pinned runtime is missing. Link a Recomp folder in the editor, or run: git submodule update --init --recursive"
 }
 $expectedStage = [IO.Path]::GetFullPath((Join-Path $Root ".content-editor-runtime"))
 if ([IO.Path]::GetFullPath($Stage) -ne $expectedStage -or

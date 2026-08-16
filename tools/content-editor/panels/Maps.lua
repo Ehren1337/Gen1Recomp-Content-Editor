@@ -5445,6 +5445,11 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
           "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*")
         if picked then Maps.importTmx(S, picked, App) end
       end },
+    { label = "Import TMX folder", kind = "accent", tip = "Convert a Pokemonium maps folder (shared tileset + neighbors)",
+      run = function()
+        local picked = ModIO.chooseFolder("Pokemonium / Tiled maps folder", S.path)
+        if picked then Maps.importTmx(S, picked, App) end
+      end },
     { label = "Export TMX", kind = "good", tip = "Export this map as a Tiled .tmx (32x32 blocks)",
       run = function()
         Maps.exportTmx(S, App)

@@ -236,6 +236,12 @@ function MapsWorkspace.draw(S, x, y, w, h, App)
         Maps.importTmx(S, path, App)
       end)
   end
+  if S.mapMoreActions and Kit.button(x + 444 * s, y + 76 * s, 118 * s, 26 * s,
+      "TMX folder", { kind = "accent", enabled = S.project ~= nil,
+        tooltip = "Convert a Pokemonium maps folder to engine blocks" }) then
+    local picked = require("ModIO").chooseFolder("Pokemonium / Tiled maps folder", S.path)
+    if picked then Maps.importTmx(S, picked, App) end
+  end
 
   local formH = S.mapNewDraft and 154 * s or 0
   if S.mapNewDraft then drawNewMapForm(S, x, y + barH + 6 * s, w, App) end

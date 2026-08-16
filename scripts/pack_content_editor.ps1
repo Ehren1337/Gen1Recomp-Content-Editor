@@ -78,6 +78,65 @@ function ConvertTo-UnixLineEndings([string]$Path) {
   [IO.File]::WriteAllText($Path, $text, $utf8WithoutBom)
 }
 
+function Resolve-RuntimeSource {
+  $pin = Join-Path $Root "runtime\gen1recomp"
+  if (Test-Path (Join-Path $pin "main.lua")) { return $pin }
+  $candidates = @()
+  if ($env:POKEPORT_RECOMP) { $candidates += $env:POKEPORT_RECOMP }
+  $prefs = Join-Path $env:APPDATA "LOVE\pokemon-love2d\content_editor_data.json"
+  if (Test-Path -LiteralPath $prefs) {
+    $raw = Get-Content -LiteralPath $prefs -Raw
+    if ($raw -match '"recompRoot"\s*:\s*"([^"]+)"') {
+      $candidates += ($Matches[1] -replace '\\\\', '\')
+    }
+  }
+  foreach ($candidate in $candidates) {
+    if (-not $candidate) { continue }
+    if ((Test-Path (Join-Path $candidate "main.lua")) -and
+        (Test-Path (Join-Path $candidate "src\core\GameVersion.lua"))) {
+      Write-Host "Using linked Recomp runtime: $candidate"
+      return $candidate
+    }
+  }
+  throw "Pinned runtime is missing. Link a Recomp folder in the editor, or run: git submodule update --init --recursive"
+}
+
+function New-RuntimeLoveArchive([string]$Source, [string]$Dest) {
+  $payload = @("main.lua", "conf.lua", "src", "data", "assets", "LICENSE.MD")
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($git -and (Test-Path (Join-Path $Source ".git"))) {
+    & git -C $Source archive --format=zip "--output=$Dest" HEAD -- @payload
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Dest)) { return }
+  }
+  $temp = Join-Path ([IO.Path]::GetTempPath()) ("ce-runtime-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path $temp | Out-Null
+  try {
+    foreach ($name in @("main.lua", "conf.lua", "LICENSE.MD")) {
+      $from = Join-Path $Source $name
+      if (Test-Path -LiteralPath $from) {
+        Copy-Item -LiteralPath $from -Destination (Join-Path $temp $name) -Force
+      }
+    }
+    foreach ($dir in @("src", "data", "assets")) {
+      $from = Join-Path $Source $dir
+      if (Test-Path -LiteralPath $from) {
+        Copy-TreeFiltered -From $from -To (Join-Path $temp $dir) `
+          -ExcludeDirNames @(".git", "generated", "__pycache__")
+      }
+    }
+    if (-not (Test-Path (Join-Path $temp "main.lua"))) {
+      throw "Runtime source has no main.lua: $Source"
+    }
+    $zip = "$Dest.zip"
+    if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force }
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    Compress-Archive -Path (Join-Path $temp "*") -DestinationPath $zip -Force
+    Move-Item -LiteralPath $zip -Destination $Dest -Force
+  } finally {
+    Remove-Item -LiteralPath $temp -Recurse -Force
+  }
+}
+
 function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   Write-Host "Staging $Kind from $Root -> $Stage"
   if (Test-Path $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
@@ -91,25 +150,15 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     ".DS_Store", "Thumbs.db"
   )
 
-  # Playtest runs the exact Gen1Recomp submodule revision. Keep it as ordinary
-  # files in release packs so end users never need Git or network access.
-  $runtimeSource = Join-Path $Root "runtime\gen1recomp"
-  if (-not (Test-Path (Join-Path $runtimeSource "main.lua"))) {
-    throw "Pinned runtime is missing. Run: git submodule update --init --recursive"
-  }
-  $runtimeExcludeDirs = @(
-    ".git", ".github", "dist", "generated", "node_modules", "__pycache__"
-  )
-  # Release packs carry one immutable LÖVE archive, not a loose source tree.
-  # Source checkouts retain the submodule directory for review and pinning.
+  # Playtest needs a Gen1Recomp runtime. Prefer the pin; otherwise the
+  # Recomp folder already linked in the editor. Never pack ROM caches.
+  $runtimeSource = Resolve-RuntimeSource
   $runtimeStage = Join-Path $Stage "runtime"
   New-Item -ItemType Directory -Force -Path $runtimeStage | Out-Null
   $runtimeArchive = Join-Path $runtimeStage "gen1recomp.love"
-  $runtimePayload = @("main.lua", "conf.lua", "src", "data", "assets", "LICENSE.MD")
-  & git -C $runtimeSource archive --format=zip `
-    "--output=$runtimeArchive" HEAD -- @runtimePayload
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $runtimeArchive)) {
-    throw "Could not build pinned runtime archive."
+  New-RuntimeLoveArchive -Source $runtimeSource -Dest $runtimeArchive
+  if (-not (Test-Path -LiteralPath $runtimeArchive)) {
+    throw "Could not build runtime archive."
   }
 
   foreach ($f in @("README.md", "README.txt", ".gitattributes")) {

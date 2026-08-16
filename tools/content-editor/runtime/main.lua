@@ -4,7 +4,8 @@ local EditorApp
 
 local function mountPinnedRuntime()
   if not require("tools.content-editor.RuntimeMount").mount() then
-    error("Could not mount the pinned runtime from runtime/gen1recomp")
+    error("Could not mount Gen1Recomp. Link a Recomp folder on Project, "
+      .. "or put a checkout in runtime/gen1recomp.")
   end
 end
 

@@ -90,6 +90,56 @@ local function mapIdFromPath(path)
   return "PM_" .. base:gsub("[^%w_]", "_"):upper()
 end
 
+local function worldCoords(path)
+  local base = basename(path):gsub("%.[Tt][Mm][Xx]$", "")
+  local x, y = base:match("^(-?%d+)%.(%-?%d+)$")
+  if x then return tonumber(x), tonumber(y) end
+end
+
+local function imageKey(img)
+  local w, h = img:getWidth(), img:getHeight()
+  local parts = { tostring(w), tostring(h) }
+  for y = 0, h - 1 do
+    for x = 0, w - 1 do
+      local r, g, b, a = img:getPixel(x, y)
+      parts[#parts + 1] = string.char(
+        math.floor(r * 255 + 0.5),
+        math.floor(g * 255 + 0.5),
+        math.floor(b * 255 + 0.5),
+        math.floor(a * 255 + 0.5))
+    end
+  end
+  return table.concat(parts)
+end
+
+function TmxPokemonium.collectTmx(path)
+  if type(path) ~= "string" or path == "" then return {} end
+  if path:lower():match("%.tmx$") then return { path } end
+  local files = {}
+  local cmd
+  if SEP == "\\" then
+    cmd = 'dir /b /a-d "' .. path .. '\\*.tmx" 2>nul'
+  else
+    cmd = 'ls -1 "' .. path .. '"/*.tmx 2>/dev/null'
+  end
+  local pipe = io.popen(cmd, "r")
+  if pipe then
+    for line in pipe:lines() do
+      line = tostring(line or ""):gsub("%s+$", "")
+      if line ~= "" then
+        if line:find("[/\\]") then
+          files[#files + 1] = line
+        else
+          files[#files + 1] = join(path, line)
+        end
+      end
+    end
+    pipe:close()
+  end
+  table.sort(files)
+  return files
+end
+
 local function decodeGid(gid)
   gid = tonumber(gid) or 0
   if gid < 0 then gid = 0 end
@@ -486,37 +536,27 @@ local function copySourceTilesets(S, tilesets, report)
   return copied
 end
 
-function TmxPokemonium.importFile(S, path, App)
-  if not (S and S.project and S.path) then return false, "no project" end
-  if not (love and love.image and love.image.newImageData) then
-    return false, "python"
-  end
+local function convertOne(path, conv, report)
   local body, err = ModIO.readText(path)
-  if not body then return false, err end
+  if not body then return nil, err end
   local mapTag = body:match("<map%s.->")
-  if not mapTag then return false, "not a TMX map" end
+  if not mapTag then return nil, "not a TMX map" end
   local width = tonumber(attr(mapTag, "width"))
   local height = tonumber(attr(mapTag, "height"))
   local tilewidth = tonumber(attr(mapTag, "tilewidth")) or 32
   local tileheight = tonumber(attr(mapTag, "tileheight")) or 32
-  if not (width and height) then return false, "TMX missing width/height" end
-
-  State.ensureProjectFields(S.project)
-  local report = { "converting Pokemonium TMX → engine blocks" }
+  if not (width and height) then return nil, "TMX missing width/height" end
   if tilewidth ~= 32 or tileheight ~= 32 then
     report[#report + 1] = string.format(
-      "tile size %dx%d (scaled to 32x32 blocks)", tilewidth, tileheight)
+      "%s: tile size %dx%d (scaled to 32x32 blocks)",
+      basename(path), tilewidth, tileheight)
   end
 
-  local tmxDir = dirname(path)
-  local tilesets = parseTilesets(body, tmxDir, report)
-  if #tilesets == 0 then
-    return false, "TMX has no tilesets"
-  end
+  local tilesets = parseTilesets(body, dirname(path), report)
+  if #tilesets == 0 then return nil, "TMX has no tilesets" end
+  for i = 1, #tilesets do conv.allTilesets[#conv.allTilesets + 1] = tilesets[i] end
   local layers = parseLayers(body, width, height)
-  if #layers == 0 then
-    return false, "TMX has no tile layers"
-  end
+  if #layers == 0 then return nil, "TMX has no tile layers" end
 
   local ground, collisions, waterLayers = {}, {}, {}
   for i = 1, #layers do
@@ -531,28 +571,6 @@ function TmxPokemonium.importFile(S, path, App)
   end
   if #ground == 0 then ground[1] = layers[1] end
 
-  local sheetTiles = { love.image.newImageData(8, 8) }
-  local emptyBlock = {}
-  for i = 1, 16 do emptyBlock[i] = 0 end
-  local blockTiles = { emptyBlock }
-  local walkableSet, waterSet = {}, {}
-  local keyToBlock = {}
-
-  local function appendBlock(tile)
-    local base = #sheetTiles
-    local ids = {}
-    for row = 0, 3 do
-      for col = 0, 3 do
-        local tid = base + row * 4 + col
-        sheetTiles[tid + 1] = crop(tile, col * 8, row * 8, 8, 8)
-        ids[row * 4 + col + 1] = tid
-        walkableSet[tid] = true
-      end
-    end
-    blockTiles[#blockTiles + 1] = ids
-    return #blockTiles - 1
-  end
-
   local blocks = {}
   local need = width * height
   for i = 1, need do
@@ -566,14 +584,18 @@ function TmxPokemonium.importFile(S, path, App)
     if not any then
       blocks[i] = 0
     else
-      local key = table.concat(stack, ",")
-      local bid = keyToBlock[key]
-      if bid == nil then
-        local composed = compositeStack(stack, tilesets, report)
-        bid = composed and appendBlock(composed) or 0
-        keyToBlock[key] = bid
+      local composed = compositeStack(stack, tilesets, report)
+      if not composed then
+        blocks[i] = 0
+      else
+        local key = imageKey(composed)
+        local bid = conv.keyToBlock[key]
+        if bid == nil then
+          bid = conv.appendBlock(composed)
+          conv.keyToBlock[key] = bid
+        end
+        blocks[i] = bid
       end
-      blocks[i] = bid
     end
   end
 
@@ -586,9 +608,8 @@ function TmxPokemonium.importFile(S, path, App)
       end
     end
     if blocked then
-      local bid = blocks[i] or 0
-      local row = blockTiles[bid + 1]
-      if row then walkableSet[row[13] or 0] = nil end
+      local row = conv.blockTiles[(blocks[i] or 0) + 1]
+      if row then conv.walkableSet[row[13] or 0] = nil end
     end
     local wet = false
     for li = 1, #waterLayers do
@@ -598,10 +619,9 @@ function TmxPokemonium.importFile(S, path, App)
       end
     end
     if wet then
-      local bid = blocks[i] or 0
-      local row = blockTiles[bid + 1]
+      local row = conv.blockTiles[(blocks[i] or 0) + 1]
       if row then
-        for t = 1, 16 do waterSet[row[t]] = true end
+        for t = 1, 16 do conv.waterSet[row[t]] = true end
       end
     end
   end
@@ -641,23 +661,87 @@ function TmxPokemonium.importFile(S, path, App)
     end
   end
 
-  local mapId = mapIdFromPath(path)
-  local existing = S.project.maps[mapId]
+  local wx, wy = worldCoords(path)
+  return {
+    id = mapIdFromPath(path),
+    width = width,
+    height = height,
+    blocks = blocks,
+    warps = warps,
+    objects = objects,
+    signs = signs,
+    wx = wx,
+    wy = wy,
+  }
+end
+
+function TmxPokemonium.importPath(S, path, App)
+  if not (S and S.project and S.path) then return false, "no project" end
+  if not (love and love.image and love.image.newImageData) then
+    return false, "python"
+  end
+  local files = TmxPokemonium.collectTmx(path)
+  if #files == 0 then return false, "no .tmx files" end
+
+  State.ensureProjectFields(S.project)
+  local report = {
+    string.format("converting %d Pokemonium TMX → engine blocks", #files),
+  }
+  local emptyBlock = {}
+  for i = 1, 16 do emptyBlock[i] = 0 end
+  local conv = {
+    sheetTiles = { love.image.newImageData(8, 8) },
+    blockTiles = { emptyBlock },
+    walkableSet = {},
+    waterSet = {},
+    keyToBlock = {},
+    allTilesets = {},
+  }
+  function conv.appendBlock(tile)
+    local base = #conv.sheetTiles
+    local ids = {}
+    for row = 0, 3 do
+      for col = 0, 3 do
+        local tid = base + row * 4 + col
+        conv.sheetTiles[tid + 1] = crop(tile, col * 8, row * 8, 8, 8)
+        ids[row * 4 + col + 1] = tid
+        conv.walkableSet[tid] = true
+      end
+    end
+    conv.blockTiles[#conv.blockTiles + 1] = ids
+    return #conv.blockTiles - 1
+  end
+
+  local converted = {}
+  for i = 1, #files do
+    local m, err = convertOne(files[i], conv, report)
+    if m then
+      converted[#converted + 1] = m
+    else
+      report[#report + 1] = "FAIL " .. basename(files[i]) .. ": " .. tostring(err)
+    end
+  end
+  if #converted == 0 then
+    return false, report[#report] or "no maps converted"
+  end
+
   local tilesetId
-  if existing and existing.tileset and S.project.tilesets[existing.tileset] then
-    tilesetId = existing.tileset
-  elseif #tilesets == 1 then
-    tilesetId = uniqueTilesetId(S, tilesets[1].name)
+  local firstExisting = S.project.maps[converted[1].id]
+  if firstExisting and firstExisting.tileset
+      and S.project.tilesets[firstExisting.tileset] then
+    tilesetId = firstExisting.tileset
+  elseif #conv.allTilesets == 1 then
+    tilesetId = uniqueTilesetId(S, conv.allTilesets[1].name)
   else
     tilesetId = uniqueTilesetId(S, "PM_TILES")
   end
 
-  local nTiles = #sheetTiles
+  local nTiles = #conv.sheetTiles
   local cols = 16
   local rows = math.max(1, math.ceil(nTiles / cols))
   local atlas = love.image.newImageData(cols * 8, rows * 8)
   for i = 1, nTiles do
-    local tile = sheetTiles[i]
+    local tile = conv.sheetTiles[i]
     if tile then
       atlas:paste(tile, ((i - 1) % cols) * 8, math.floor((i - 1) / cols) * 8, 0, 0, 8, 8)
     end
@@ -668,11 +752,10 @@ function TmxPokemonium.importFile(S, path, App)
   if not okPng then return false, pngErr end
 
   local walkable, waterTiles = {}, {}
-  for id in pairs(walkableSet) do walkable[#walkable + 1] = id end
-  for id in pairs(waterSet) do waterTiles[#waterTiles + 1] = id end
+  for id in pairs(conv.walkableSet) do walkable[#walkable + 1] = id end
+  for id in pairs(conv.waterSet) do waterTiles[#waterTiles + 1] = id end
   table.sort(walkable)
   table.sort(waterTiles)
-
   local tsRec = {
     id = tilesetId,
     image = rel,
@@ -683,87 +766,117 @@ function TmxPokemonium.importFile(S, path, App)
     doorTiles = {},
     warpTiles = {},
     counterTiles = {},
-    blocks = blockTiles,
+    blocks = conv.blockTiles,
     walkable = walkable,
     waterTiles = waterTiles,
     _isNew = true,
   }
   S.project.tilesets[tilesetId] = tsRec
   if S.data and S.data.tilesets then S.data.tilesets[tilesetId] = tsRec end
+  copySourceTilesets(S, conv.allTilesets, report)
 
-  copySourceTilesets(S, tilesets, report)
-
-  local index
-  if existing and existing.index then
-    index = existing.index
-  else
-    index = S.project.nextMapIndex or 1000
-    S.project.nextMapIndex = index + 1
+  local byWorld = {}
+  for i = 1, #converted do
+    local m = converted[i]
+    if m.wx then byWorld[m.wx .. "," .. m.wy] = m.id end
   end
+
   local gen2 = Generation.isGen2(S)
-  local map = existing or {}
-  map.id = mapId
-  map.label = map.label or mapId
-  map.index = index
-  map.tileset = tilesetId
-  map.width = width
-  map.height = height
-  map.blocks = blocks
-  map.borderBlock = map.borderBlock or 0
-  map.warps = warps
-  map.objects = objects
-  map.signs = signs
-  map.connections = map.connections or {}
-  map._isNew = true
-  if gen2 then
-    map.environment = map.environment or "TOWN"
-    map.bgEvents = map.bgEvents or {}
-  else
-    map.environment = map.environment or "outside"
+  local firstId
+  for i = 1, #converted do
+    local rec = converted[i]
+    local existing = S.project.maps[rec.id]
+    local index
+    if existing and existing.index then
+      index = existing.index
+    else
+      index = S.project.nextMapIndex or 1000
+      S.project.nextMapIndex = index + 1
+    end
+    local connections = {}
+    if rec.wx then
+      local dirs = {
+        { 0, -1, "north" }, { 0, 1, "south" },
+        { -1, 0, "west" }, { 1, 0, "east" },
+      }
+      for d = 1, 4 do
+        local nid = byWorld[(rec.wx + dirs[d][1]) .. "," .. (rec.wy + dirs[d][2])]
+        if nid then connections[dirs[d][3]] = { map = nid, offset = 0 } end
+      end
+    end
+    local map = existing or {}
+    map.id = rec.id
+    map.label = map.label or rec.id
+    map.index = index
+    map.tileset = tilesetId
+    map.width = rec.width
+    map.height = rec.height
+    map.blocks = rec.blocks
+    map.borderBlock = map.borderBlock or 0
+    map.warps = rec.warps
+    map.objects = rec.objects
+    map.signs = rec.signs
+    map.connections = connections
+    map._isNew = true
+    if gen2 then
+      map.environment = map.environment or "TOWN"
+      map.bgEvents = map.bgEvents or {}
+    else
+      map.environment = map.environment or "outside"
+    end
+    if map.outdoor == nil then
+      map.outdoor = gen2 or map.environment == "outside"
+    end
+    S.project.maps[rec.id] = map
+    if S.data and S.data.maps then S.data.maps[rec.id] = map end
+    if S.project.layeredMaps then S.project.layeredMaps[rec.id] = nil end
+    pcall(function() require("LayeredMap").convertMap(S, rec.id) end)
+    pcall(function() require("src.world.MapLoader").invalidate(rec.id) end)
+    report[#report + 1] = string.format(
+      "%s: %dx%d blocks, %d warps, %d objects",
+      rec.id, rec.width, rec.height, #rec.warps, #rec.objects)
+    firstId = firstId or rec.id
   end
-  map.outdoor = map.outdoor
-  if map.outdoor == nil then
-    map.outdoor = gen2 or map.environment == "outside"
-  end
-  S.project.maps[mapId] = map
-  if S.data and S.data.maps then S.data.maps[mapId] = map end
 
-  if S.project.layeredMaps then S.project.layeredMaps[mapId] = nil end
-  pcall(function() require("LayeredMap").convertMap(S, mapId) end)
-
-  local used = {}
   if report._used then
+    local used = {}
     for name in pairs(report._used) do used[#used + 1] = name end
     table.sort(used)
     report._used = nil
     report[#report + 1] = "used tileset(s): " .. table.concat(used, ", ")
   end
   report[#report + 1] = string.format(
-    "%s: %dx%d blocks, %d unique blocks, %d 8x8 tiles, %d warps, %d objects",
-    mapId, width, height, #blockTiles - 1, nTiles, #warps, #objects)
+    "tileset %s: %d unique blocks, %d 8x8 tiles",
+    tilesetId, #conv.blockTiles - 1, nTiles)
   if nTiles > 256 then
     report[#report + 1] = "WARNING: " .. nTiles .. " 8x8 tiles (engine limit 256)"
   end
-  if #blockTiles > 256 then
-    report[#report + 1] = "WARNING: " .. #blockTiles .. " blocks (engine limit 256)"
+  if #conv.blockTiles > 256 then
+    report[#report + 1] = "WARNING: " .. #conv.blockTiles .. " blocks (engine limit 256)"
   end
 
-  S.mapId = mapId
-  S.builderMapId = mapId
+  S.mapId = firstId
+  S.builderMapId = firstId
   S.tilesetEditId = tilesetId
   S.mapPaletteTileset = tilesetId
-  S._mapPaletteFor = mapId
+  S._mapPaletteFor = firstId
   S._mapCenteredFor = nil
-  S._mapNeedsRebuild = mapId
+  S._mapNeedsRebuild = firstId
   S.importReport = table.concat(report, "\n")
   pcall(function() require("Preview").invalidatePath(rel) end)
   if App and App.markDirty then App.markDirty() end
-  pcall(function() require("src.world.MapLoader").invalidate(mapId) end)
   pcall(function()
     local Maps = require("Maps")
-    if Maps.invalidateGoldPreview then Maps.invalidateGoldPreview(S, mapId) end
+    if Maps.invalidateGoldPreview then Maps.invalidateGoldPreview(S, firstId) end
   end)
-  return true, mapId .. " (converted to engine blocks)"
+  local summary = #converted == 1
+    and (firstId .. " (converted to engine blocks)")
+    or string.format("%d maps + tileset %s", #converted, tilesetId)
+  return true, summary
+end
+
+function TmxPokemonium.importFile(S, path, App)
+  return TmxPokemonium.importPath(S, path, App)
 end
 
 return TmxPokemonium

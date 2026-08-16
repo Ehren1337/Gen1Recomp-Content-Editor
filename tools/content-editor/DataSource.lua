@@ -295,10 +295,39 @@ local function finishLoad(version)
   return true
 end
 
+local GEN2_SHELL = {
+  "constants", "maps", "tilesets", "sprites", "pokemon", "moves", "items",
+  "type_chart", "trainers", "encounters", "font", "audio", "palettes",
+  "icons", "text", "scripts", "marts", "roofs", "battle_anims", "pokedex",
+  "landmarks", "menu_gfx", "events", "initial_events", "std_scripts",
+  "title", "intro", "field", "text_pointers", "trainer_headers",
+}
+
 local function loadEmptyGold()
   remountVersion("gold")
   if Data._pristineKeys then pcall(function() Data:unloadGenerated() end) end
-  local ok, err = pcall(function() Data:loadEmptyGen2() end)
+  local ok, err = pcall(function()
+    for i = 1, #GEN2_SHELL do Data[GEN2_SHELL[i]] = {} end
+    Data.trainers = { classes = {} }
+    Data.encounters = { grass = {}, water = {}, fishing = {}, swarm = {} }
+    Data.field = { boot = {
+      startMap = "PLAYERS_HOUSE_2F", startX = 3, startY = 3,
+      startFacing = "down", playerName = "CHRIS", rivalName = "???",
+      startMoney = 3000,
+    } }
+    Data.constants = Data.constants or {}
+    if Data.constants.dexSize == nil then Data.constants.dexSize = 251 end
+    if Data.constants.dexDigits == nil then Data.constants.dexDigits = 3 end
+    if Data.constants.partyMax == nil then Data.constants.partyMax = 6 end
+    if Data.constants.levelCap == nil then Data.constants.levelCap = 100 end
+    local okBind, Generation = pcall(require, "Generation")
+    if okBind and Generation and Generation.bindGoldData then
+      Generation.bindGoldData(Data)
+    end
+    local pristine = {}
+    Data._pristineKeys = pristine
+    for key in pairs(Data) do pristine[key] = true end
+  end)
   return ok, err
 end
 
