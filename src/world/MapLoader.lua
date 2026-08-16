@@ -64,6 +64,12 @@ local function build(data, mapId)
   assert(def, "unknown map: " .. tostring(mapId) ..
          " (not in the maps registry)")
   local tilesetDef = tilesets and tilesets[def.tileset]
+  if not tilesetDef and data.gen2Tilesets then
+    tilesetDef = data.gen2Tilesets[def.tileset]
+  end
+  if not tilesetDef and data.tilesets then
+    tilesetDef = data.tilesets[def.tileset]
+  end
   assert(tilesetDef, ("map %s wants unknown tileset: %s (not in the " ..
          "tilesets registry)"):format(tostring(mapId), tostring(def.tileset)))
 

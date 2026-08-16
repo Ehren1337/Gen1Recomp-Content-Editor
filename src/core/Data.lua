@@ -99,7 +99,14 @@ end
 -- Fills only what the cache is missing, so an importer that learns to
 -- stamp one of these keys silently takes over from the engine.
 function Data:seedDefaults()
+  if require("src.core.GameVersion").generation() == 2 then
+    return self:seedDefaultsGen2()
+  end
   local constants = self.constants
+  if type(constants) ~= "table" then
+    constants = {}
+    self.constants = constants
+  end
   for key, value in pairs(CONSTANT_DEFAULTS) do
     if constants[key] == nil then constants[key] = copy(value) end
   end
@@ -115,6 +122,7 @@ function Data:seedDefaults()
   if constants.dexDigits == nil then
     constants.dexDigits = math.max(3, #tostring(constants.dexSize))
   end
+  if type(self.field) ~= "table" then self.field = {} end
   self:applyVersionedFieldData()
   local boot = self.field.boot
   if boot == nil then
@@ -330,6 +338,10 @@ function Data:loadGen2()
     -- Editor lists class ids; keep .classes as the live table.
   end
   self:seedDefaultsGen2()
+  local okBind, Generation = pcall(require, "Generation")
+  if okBind and Generation and Generation.bindGoldData then
+    Generation.bindGoldData(self)
+  end
   local pristine = {}
   self._pristineKeys = pristine
   for key in pairs(self) do pristine[key] = true end
@@ -337,6 +349,44 @@ function Data:loadGen2()
               (function() local n = 0 for _ in pairs(self.maps or {}) do n = n + 1 end return n end)(),
               (function() local n = 0 for _ in pairs(self.pokemon or {}) do n = n + 1 end return n end)(),
               (function() local n = 0 for _ in pairs(self.moves or {}) do n = n + 1 end return n end)())
+end
+
+-- Authoring shell when no Gold cache is mounted. Panels stay on the Gen 2
+-- shape (trainers.classes, encounters.grass) instead of crashing on Red
+-- fixtures.
+function Data:loadEmptyGen2()
+  for _, name in ipairs(GEN2_REQUIRED) do
+    self[name] = {}
+  end
+  for _, name in ipairs(GEN2_OPTIONAL) do
+    self[name] = {}
+  end
+  self.trainers = { classes = {} }
+  self.encounters = { grass = {}, water = {}, fishing = {}, swarm = {} }
+  self.field = { boot = {} }
+  self.gen2Maps = self.maps
+  self.gen2Tilesets = self.tilesets
+  self.gen2Sprites = self.sprites
+  self.gen2Encounters = self.encounters
+  self.gen2Trainers = self.trainers
+  self.gen2Constants = self.constants
+  self.gen2Text = self.text
+  self.gen2Palettes = self.palettes
+  self.gen2Icons = self.icons
+  self.gen2Pokedex = self.pokedex
+  self.gen2BattleAnims = self.battle_anims
+  self.gen2Scripts = self.scripts
+  self.gen2Marts = self.marts
+  self.gen2Roofs = self.roofs
+  self.gen2MenuGfx = self.menu_gfx
+  self.gen2Title = self.title
+  self.gen2Intro = self.intro
+  self.gen2Landmarks = self.landmarks
+  self.gen2EventTables = self.events
+  self:seedDefaultsGen2()
+  local pristine = {}
+  self._pristineKeys = pristine
+  for key in pairs(self) do pristine[key] = true end
 end
 
 function Data:load()
@@ -395,18 +445,34 @@ function Data:unloadGenerated()
       if not pristine[key] then self[key] = nil end
     end
   end
-  for _, name in ipairs(MODULES) do
+  self._pristineKeys = nil
+  local function drop(name)
     package.loaded["data.generated." .. name] = nil
+    self[name] = nil
   end
-  for _, name in ipairs(OPTIONAL) do
-    package.loaded["data.generated." .. name] = nil
-  end
-  for _, name in ipairs(GEN2_REQUIRED) do
-    package.loaded["data.generated." .. name] = nil
-  end
-  for _, name in ipairs(GEN2_OPTIONAL) do
-    package.loaded["data.generated." .. name] = nil
-  end
+  for _, name in ipairs(MODULES) do drop(name) end
+  for _, name in ipairs(OPTIONAL) do drop(name) end
+  for _, name in ipairs(GEN2_REQUIRED) do drop(name) end
+  for _, name in ipairs(GEN2_OPTIONAL) do drop(name) end
+  self.gen2Maps = nil
+  self.gen2Tilesets = nil
+  self.gen2Sprites = nil
+  self.gen2Encounters = nil
+  self.gen2Trainers = nil
+  self.gen2Constants = nil
+  self.gen2Text = nil
+  self.gen2Palettes = nil
+  self.gen2Icons = nil
+  self.gen2Pokedex = nil
+  self.gen2BattleAnims = nil
+  self.gen2Scripts = nil
+  self.gen2Marts = nil
+  self.gen2Roofs = nil
+  self.gen2MenuGfx = nil
+  self.gen2Title = nil
+  self.gen2Intro = nil
+  self.gen2Landmarks = nil
+  self.gen2EventTables = nil
 end
 
 -- dev-mode hot reload only (src/dev/HotReload.lua): drop every namespace the

@@ -5,6 +5,7 @@ local Theme = require("Theme")
 local Preview = require("Preview")
 local LayeredMap = require("LayeredMap")
 local TilesetExport = require("TilesetExport")
+local Generation = require("Generation")
 
 local MapBuilder = {}
 local PAL = Theme.PAL
@@ -82,6 +83,15 @@ local function quad(image, x, y, w, h)
   return bucket[key]
 end
 
+local function goldMapBgSet(S)
+  if not Generation.isGen2(S) then return nil end
+  local mapId = S.builderMapId or S.mapId
+  local map = (S.project and S.project.maps and S.project.maps[mapId])
+    or Generation.dataMaps(S)[mapId]
+  if type(map) ~= "table" then return nil end
+  return select(1, Preview.gen2MapBgSet(S, map))
+end
+
 local function animationTile(source, tile)
   local frames = source and source.animations and source.animations[tile]
   if not frames or #frames < 2 then return tile end
@@ -104,10 +114,25 @@ local function drawSourceTile(S, source, tile, x, y, size, alpha)
   if not image then return false end
   tile = animationTile(source, math.max(0, math.floor(tonumber(tile) or 0)))
   local shaded = false
-  if source.colorMode ~= "true_color" then
+  local gbc, bgSet, tilePals
+  if source.colorMode ~= "true_color" and source.runtimeTileset then
+    bgSet = goldMapBgSet(S)
+    if bgSet then
+      local okG, GbcPalette = pcall(require, "src.render.GbcPalette")
+      if okG and GbcPalette and GbcPalette.with then
+        gbc = GbcPalette
+        tilePals = source.tileset and source.tileset.tilePalettes
+        if not tilePals then
+          local vanilla = Generation.dataTilesets(S)[source.runtimeTileset]
+          tilePals = vanilla and vanilla.tilePalettes
+        end
+      end
+    end
+  end
+  if source.colorMode ~= "true_color" and not gbc then
     local mapId = S.builderMapId or S.mapId
     local map = S.project and S.project.maps and S.project.maps[mapId]
-      or S.data and S.data.maps and S.data.maps[mapId]
+      or Generation.dataMaps(S)[mapId]
     shaded = Preview.pushPaletteShader(S, Preview.mapPaletteName(S, map))
   end
   love.graphics.setColor(1, 1, 1, alpha or 1)
@@ -130,9 +155,18 @@ local function drawSourceTile(S, source, tile, x, y, size, alpha)
         if tileId then
           local sx = (tileId % perRow) * 8
           local sy = math.floor(tileId / perRow) * 8
-          love.graphics.draw(image, quad(image, sx, sy, 8, 8),
-            x + microX * 8 * scale, y + microY * 8 * scale,
-            0, scale, scale)
+          local dx = x + microX * 8 * scale
+          local dy = y + microY * 8 * scale
+          if gbc then
+            local slot = (tilePals and tilePals[tileId + 1]) or 1
+            gbc.with(bgSet[slot], function()
+              love.graphics.draw(image, quad(image, sx, sy, 8, 8),
+                dx, dy, 0, scale, scale)
+            end)
+          else
+            love.graphics.draw(image, quad(image, sx, sy, 8, 8),
+              dx, dy, 0, scale, scale)
+          end
         end
       end
     end
@@ -727,8 +761,10 @@ end
 -- Map and tileset browsers
 
 local function newMapTilesets(S)
-  local ids = sortedKeys(S.data and S.data.tilesets)
-  if #ids == 0 then ids[1] = "OVERWORLD" end
+  local ids = sortedKeys(Generation.dataTilesets(S))
+  if #ids == 0 then
+    ids[1] = Generation.isGen2(S) and "TILESET_JOHTO" or "OVERWORLD"
+  end
   return ids
 end
 
@@ -736,7 +772,7 @@ local function beginNewMap(S)
   local ids = newMapTilesets(S)
   local selected = ids[1]
   for _, id in ipairs(ids) do
-    if id == "OVERWORLD" then selected = id; break end
+    if id == "OVERWORLD" or id == "TILESET_JOHTO" then selected = id; break end
   end
   S.builderNewMap = {
     id = "NEW_MAP", width = "20", height = "18", tileset = selected,
@@ -1003,7 +1039,7 @@ local function drawTilePalette(S, source, x, y, w, h, App)
 
   local descriptor = LayeredMap.sourceDescriptor(S, S.builderSourceId)
   local gridY = sy + 42 * Kit.scale
-  local footerH = (S.builderSourceOptions and 90 or 34) * Kit.scale
+  local footerH = (S.builderSourceOptions and 118 or 34) * Kit.scale
   local gridH = math.max(20 * Kit.scale,
     h - (gridY - y) - footerH - 8 * Kit.scale)
   if not descriptor then
@@ -1082,13 +1118,20 @@ local function drawTilePalette(S, source, x, y, w, h, App)
       else importTileset(S, App) end
     end
     if Kit.button(x + 12 * Kit.scale + bw, fy, bw, 24 * Kit.scale,
-        "Import Tiled map", { kind = "accent",
-          tooltip = "Advanced: import a legacy TMX file made with Tiled" }) then
-      App.pickFile("Pokemonium / Tiled TMX",
+        "Import TMX", { kind = "accent",
+          tooltip = "Import engine TMX, or convert Pokemonium TMX to blocks" }) then
+      App.pickFile("Tiled TMX",
         "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*", function(path)
           local Maps = require("Maps")
           Maps.importTmx(S, path, App)
         end)
+    end
+    fy = fy + 28 * Kit.scale
+    if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
+        "Export TMX", { kind = "good",
+          tooltip = "Export this map as a Tiled .tmx (32x32 blocks)" }) then
+      local Maps = require("Maps")
+      Maps.exportTmx(S, App)
     end
     fy = fy + 28 * Kit.scale
     if Kit.button(x + 8 * Kit.scale, fy, bw, 24 * Kit.scale,
@@ -1939,17 +1982,8 @@ function MapBuilder.draw(S, x, y, w, h, App)
 
   if not source then
     if S.mapPreviewOnly then
-      Kit.card(centerX, y, centerW + gap + rightW, h, 10 * s)
-      Kit.text("title", S.builderMapId or "Select a map",
-        centerX + 24 * s, y + 28 * s, PAL.heading)
-      Kit.text("small", "Step 1 complete: you selected a map.",
-        centerX + 24 * s, y + 66 * s, PAL.green)
-      Kit.text("small", "You are looking at a safe preview. Nothing can change yet.",
-        centerX + 24 * s, y + 102 * s, PAL.text)
-      Kit.text("small", "Next: click Edit this map above to make your own copy.",
-        centerX + 24 * s, y + 132 * s, PAL.heading)
-      Kit.text("micro", "Then choose Paint map or Add events, make changes, and Save.",
-        centerX + 24 * s, y + 170 * s, PAL.caption)
+      local Maps = require("Maps")
+      Maps.drawPreview(S, centerX, y, centerW + gap + rightW, h, App)
     else
       Kit.card(centerX, y, centerW, h, 10 * s)
       local Maps = require("Maps")

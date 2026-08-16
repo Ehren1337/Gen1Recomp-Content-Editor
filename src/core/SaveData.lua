@@ -561,13 +561,60 @@ end
 -- flags once, before any entry chunk (src/mods/Loader.lua _loadState), so this
 -- flips on with that read and not before: until then every writer keeps to the
 -- shared flag and no surface promises what the boot does not do.
-SaveData.PER_VERSION_MODS = false
+SaveData.PER_VERSION_MODS = true
 
 -- The version a write should be scoped to: the game asked for once per-game
 -- flags are live, nil (the shared flag) while they are only a preview.
 function SaveData.modScope(version)
   if SaveData.PER_VERSION_MODS then return version end
   return nil
+end
+
+-- Promote an installation that predates per-game flags. Latest Recomp's
+-- Loader calls this after discovery; a missing function crashes boot when
+-- that Loader is the one on the read path.
+function SaveData.migrateModEnablement(options, mods)
+  if type(options) ~= "table" or options.modsByVersionMigrated then return false end
+  options.mods = type(options.mods) == "table" and options.mods or {}
+  options.modsByVersion = type(options.modsByVersion) == "table"
+    and options.modsByVersion or {}
+
+  local known = {}
+  for id in pairs(options.mods) do
+    if type(id) == "string" and id ~= "" then known[id] = { id = id } end
+  end
+  for version, bucket in pairs(options.modsByVersion) do
+    if GameVersion.VERSIONS[version] and type(bucket) == "table" then
+      for id in pairs(bucket) do
+        if type(id) == "string" and id ~= "" then
+          known[id] = known[id] or { id = id }
+        end
+      end
+    end
+  end
+  for _, mod in ipairs(mods or {}) do
+    local id = type(mod) == "table" and mod.id or mod
+    if type(id) == "string" and id ~= "" then
+      known[id] = type(mod) == "table" and mod or (known[id] or { id = id })
+    end
+  end
+
+  if next(known) == nil then return false end
+
+  for id, mod in pairs(known) do
+    local shared = options.mods[id]
+    if type(shared) ~= "boolean" then shared = not (mod.experimental == true) end
+    for _, version in ipairs(GameVersion.ORDER) do
+      local bucket = options.modsByVersion[version]
+      if type(bucket) ~= "table" then
+        bucket = {}
+        options.modsByVersion[version] = bucket
+      end
+      if type(bucket[id]) ~= "boolean" then bucket[id] = shared end
+    end
+  end
+  options.modsByVersionMigrated = true
+  return true
 end
 
 -- true/false as chosen for `version`, else the shared flag, else nil -- the

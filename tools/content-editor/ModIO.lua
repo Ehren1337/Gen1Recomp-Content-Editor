@@ -244,7 +244,8 @@ function ModIO.create(id, name, version)
     gamesLit[i] = string.format("%q", g)
   end
   local gamesJson = "[" .. table.concat(gamesLit, ", ") .. "]"
-  local gen2compat = Generation.isGen2(target) and "true" or "false"
+  local gen2compat = (Generation.coversGen2(games) or Generation.isGen2(target))
+    and "true" or "false"
   local manifest = string.format([[{
   "id": "%s",
   "name": "%s",

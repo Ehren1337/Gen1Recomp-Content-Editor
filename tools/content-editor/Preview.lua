@@ -66,6 +66,16 @@ function Preview.resolve(S, path)
       and love.filesystem.getInfo(path) then
     return path, "love"
   end
+  -- Versioned ROM cache (gold/assets/generated/…) when PhysFS has no overlay.
+  do
+    local ok, CacheFs = pcall(require, "src.import.CacheFs")
+    if ok and CacheFs and CacheFs.readActive then
+      local bytes = CacheFs.readActive(path)
+      if type(bytes) == "string" and bytes ~= "" then
+        return path, "love"
+      end
+    end
+  end
   -- absolute / cwd
   if existsFs(path) then return path, "disk" end
   local root = love and love.filesystem and love.filesystem.getSource
@@ -462,6 +472,18 @@ end
 
 -- Eight BG palettes for a Gold map at the preview daytime (roof folded in).
 function Preview.gen2MapBgSet(S, mapDef, daytime)
+  if type(mapDef) ~= "table" then
+    local mapId = S and (S.builderMapId or S.mapId)
+    if mapId then
+      mapDef = S.project and S.project.maps and S.project.maps[mapId]
+      if type(mapDef) ~= "table" then
+        local okG, Generation = pcall(require, "Generation")
+        if okG and Generation and Generation.dataMaps then
+          mapDef = Generation.dataMaps(S)[mapId]
+        end
+      end
+    end
+  end
   if type(mapDef) ~= "table" then return nil, daytime end
   local data = S and S.data
   local pals = data and (data.palettes or data.gen2Palettes)
@@ -556,6 +578,9 @@ function Preview.gen2MonColors(S, speciesId, shiny)
     if type(c) ~= "table" then return { 0, 0, 0 } end
     if c.r then return { c.r, c.g, c.b } end
     return { c[1] or 0, c[2] or 0, c[3] or 0 }
+  end
+  if pair[3] and pair[4] then
+    return { rgb(pair[1]), rgb(pair[2]), rgb(pair[3]), rgb(pair[4]) }
   end
   return { WHITE, rgb(pair[1]), rgb(pair[2]), BLACK }
 end

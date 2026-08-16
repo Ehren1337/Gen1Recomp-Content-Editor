@@ -262,7 +262,7 @@ function State.mapLabel(S, mapId)
   if not mapId then return nil end
   local proj = S.project and S.project.maps and S.project.maps[mapId]
   if proj and proj.label and proj.label ~= "" then return proj.label end
-  local base = S.data and S.data.maps and S.data.maps[mapId]
+  local base = require("Generation").dataMaps(S)[mapId]
   if base and base.label then return base.label end
   -- fallback: CamelCase from id
   return (mapId:lower():gsub("_(%w)", function(c) return c:upper() end)

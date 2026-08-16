@@ -499,12 +499,10 @@ local function allMapIds(S)
     seen[id] = true
     ids[#ids + 1] = id
   end
-  if S.data and S.data.maps then
-    for id in pairs(S.data.maps) do
-      if not seen[id] then
-        seen[id] = true
-        ids[#ids + 1] = id
-      end
+  for id in pairs(Generation.dataMaps(S)) do
+    if not seen[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
     end
   end
   table.sort(ids)
@@ -518,8 +516,8 @@ local function renameMapId(S, map, newId, App)
   if not newId or newId == oldId then return false end
   if not newId:match("^[%w_]+$") then return false end
   if S.project.maps[newId] then return false end
-  if S.data and S.data.maps and S.data.maps[newId]
-      and S.data.maps[newId] ~= map then
+  local liveMaps = Generation.dataMaps(S)
+  if liveMaps[newId] and liveMaps[newId] ~= map then
     return false
   end
 
@@ -570,9 +568,8 @@ local function resolveMapDef(S, mapId)
   if S.project and S.project.maps and S.project.maps[mapId] then
     return S.project.maps[mapId], true
   end
-  if S.data and S.data.maps and S.data.maps[mapId] then
-    return S.data.maps[mapId], false
-  end
+  local live = Generation.dataMaps(S)[mapId]
+  if live then return live, false end
   return nil, false
 end
 
@@ -1467,7 +1464,7 @@ function Maps.createMap(S, wantedId, cellWidth, cellHeight, tileset, App)
   if base:match("^%d") then base = "MAP_" .. base end
   local id, suffix = base, 1
   while (S.project.maps and S.project.maps[id])
-      or (S.data and S.data.maps and S.data.maps[id]) do
+      or Generation.dataMaps(S)[id] do
     suffix = suffix + 1
     id = base .. "_" .. suffix
   end
@@ -1878,9 +1875,7 @@ local function tilesetIds(S)
   if S.project and S.project.tilesets then
     for id in pairs(S.project.tilesets) do add(id) end
   end
-  if S.data and S.data.tilesets then
-    for id in pairs(S.data.tilesets) do add(id) end
-  end
+  for id in pairs(Generation.dataTilesets(S)) do add(id) end
   table.sort(ids)
   return ids
 end
@@ -1894,7 +1889,7 @@ end
 
 local function tilesetDef(S, tilesetId)
   return (S.project.tilesets and S.project.tilesets[tilesetId])
-    or (S.data and S.data.tilesets and S.data.tilesets[tilesetId])
+    or Generation.dataTilesets(S)[tilesetId]
 end
 
 local function blockCount(S, tilesetId)
@@ -1915,6 +1910,7 @@ local function applyMapTileset(S, map, tilesetId, App, mutate)
   end
   S.mapBlockOffset = 0
   MapLoader.invalidate(map.id)
+  Maps.invalidateGoldPreview(S, map.id)
   S._mapNeedsRebuild = map.id
   S._mapCenteredFor = nil
   App.markDirty()
@@ -1946,9 +1942,18 @@ local function mapPreviewPalette(S, mapDef)
   return mapPaletteName(S, mapDef)
 end
 
+function Maps.invalidateGoldPreview(S, mapId)
+  if not (S and S._g2MapBaker) then return end
+  local ok, MapPreview = pcall(require, "src.world.gen2.MapPreview")
+  if ok and MapPreview and MapPreview.invalidate then
+    MapPreview.invalidate(S._g2MapBaker, mapId)
+  end
+end
+
 local function invalidateMapPreview(S)
   pcall(function() require("src.render.TileRenderer").invalidate() end)
   MapLoader.invalidateAll()
+  Maps.invalidateGoldPreview(S)
   Preview.invalidate()
 end
 
@@ -1994,6 +1999,16 @@ local function drawBlockThumb(S, tilesetId, blockId, x, y, size, mapDef)
   local scale = tileDraw / 8
   local pal = mapPreviewPalette(S, mapDef)
   local shaded = pal and Preview.pushPaletteShader(S, pal)
+  local bgSet, gbc
+  if not pal and Generation.isGen2(S) then
+    bgSet = select(1, Preview.gen2MapBgSet(S, mapDef))
+    if bgSet then
+      local okG, GbcPalette = pcall(require, "src.render.GbcPalette")
+      if okG and GbcPalette and GbcPalette.available and GbcPalette.available() then
+        gbc = GbcPalette
+      end
+    end
+  end
   for row = 0, 3 do
     for col = 0, 3 do
       local tid = block[row * 4 + col + 1] or 0
@@ -2005,7 +2020,16 @@ local function drawBlockThumb(S, tilesetId, blockId, x, y, size, mapDef)
           (tid % perRow) * 8, math.floor(tid / perRow) * 8, 8, 8, iw, ih)
         quadCache[key] = q
       end
-      love.graphics.draw(img, q, x + col * tileDraw, y + row * tileDraw, 0, scale, scale)
+      local dx = x + col * tileDraw
+      local dy = y + row * tileDraw
+      if gbc then
+        local slot = (ts.tilePalettes and ts.tilePalettes[tid + 1]) or 1
+        gbc.with(bgSet[slot], function()
+          love.graphics.draw(img, q, dx, dy, 0, scale, scale)
+        end)
+      else
+        love.graphics.draw(img, q, dx, dy, 0, scale, scale)
+      end
     end
   end
   Preview.popPaletteShader(shaded)
@@ -2440,7 +2464,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     local sel = S.mapId == id
     if def then
       prepareLiveMap(S, id, def)
-      local ok, loaded = pcall(MapLoader.load, S.data, id)
+      local ok, loaded = Maps.loadEditorMap(S, id)
       if ok and loaded and loaded.renderer and loaded.renderer.drawMapOnly then
         love.graphics.push()
         love.graphics.translate(p.x, p.y)
@@ -2704,7 +2728,7 @@ local function importTilesetPng(S, App, tilesetId, opts)
           id = stem
           local n = 1
           while (S.project.tilesets and S.project.tilesets[id])
-              or (S.data and S.data.tilesets and S.data.tilesets[id]) do
+              or Generation.dataTilesets(S)[id] do
             n = n + 1
             id = stem .. "_" .. n
           end
@@ -2759,6 +2783,7 @@ local function importTilesetPng(S, App, tilesetId, opts)
         if S.mapTilesetPicker then S.mapTilesetPicker.focus = id end
         if S.mapId then
           MapLoader.invalidate(S.mapId)
+          Maps.invalidateGoldPreview(S, S.mapId)
           S._mapNeedsRebuild = S.mapId
         end
         App.markDirty()
@@ -2782,8 +2807,12 @@ prepareLiveMap = function(S, mapId, def)
     local prev = S.data.tilesets[tid]
     if prev ~= live or (prev and prev.image ~= live.image) then
       MapLoader.invalidate(mapId)
+      Maps.invalidateGoldPreview(S, mapId)
     end
     S.data.tilesets[tid] = live
+    if S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+      S.data.gen2Tilesets[tid] = live
+    end
   end
   if S.data.maps[mapId] ~= def then
     if S.project.maps[mapId] == def then
@@ -2793,12 +2822,88 @@ prepareLiveMap = function(S, mapId, def)
       end
     end
     S.data.maps[mapId] = def
+    if S.data.gen2Maps and S.data.gen2Maps ~= S.data.maps then
+      S.data.gen2Maps[mapId] = def
+    end
     MapLoader.invalidate(mapId)
+    Maps.invalidateGoldPreview(S, mapId)
   end
   if S._mapNeedsRebuild == mapId then
     MapLoader.invalidate(mapId)
+    Maps.invalidateGoldPreview(S, mapId)
     S._mapNeedsRebuild = nil
   end
+end
+
+function Maps.loadEditorMap(S, mapId)
+  if not mapId then return false, "no map" end
+  local def = select(1, resolveMapDef(S, mapId))
+  if Generation.isGen2(S) or Generation.mapLooksGen2(def) then
+    if not def then return false, "unknown map" end
+    if type(def.width) ~= "number" or type(def.height) ~= "number" then
+      return false, "incomplete map record (missing width/height)"
+    end
+    local Map2 = require("src.world.gen2.Map")
+    if S.data and def.tileset and not (S.data.tilesets and S.data.tilesets[def.tileset]) then
+      local liveTs = Generation.dataTilesets(S)[def.tileset]
+      if liveTs then
+        S.data.tilesets = S.data.tilesets or {}
+        S.data.tilesets[def.tileset] = liveTs
+        if S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+          S.data.gen2Tilesets[def.tileset] = liveTs
+        end
+      end
+    end
+    local tileset = tilesetDef(S, def.tileset) or {}
+    if S.project and S.project.tilesets and S.project.tilesets[def.tileset] then
+      tileset = liveTilesetForEditor(S, S.project.tilesets[def.tileset])
+    end
+    local ok, map = pcall(Map2.new, def, tileset)
+    if not ok then return false, map end
+    local MapPreview = require("src.world.gen2.MapPreview")
+    local tilesets = {}
+    for id, ts in pairs(Generation.dataTilesets(S)) do
+      tilesets[id] = ts
+    end
+    for id, ts in pairs((S.project and S.project.tilesets) or {}) do
+      tilesets[id] = liveTilesetForEditor(S, ts)
+    end
+    local pals = S.data and S.data.palettes
+    if not (type(pals) == "table" and pals.bg and pals.environments) then
+      pals = S.data and S.data.gen2Palettes
+    end
+    local baker = S._g2MapBaker
+    if not baker then
+      baker = MapPreview.baker({
+        tilesets = tilesets,
+        gen2Roofs = S.data and S.data.gen2Roofs,
+        roofs = S.data and S.data.roofs,
+        gen2Palettes = pals,
+        palettes = pals,
+      })
+      S._g2MapBaker = baker
+    end
+    baker.tilesets = tilesets
+    baker.palettes = pals or baker.palettes
+    baker.roofs = (S.data and (S.data.gen2Roofs or S.data.roofs)) or baker.roofs
+    local tsRec = tilesets[def.tileset]
+    if tsRec and not tsRec.tilePalettes then
+      local vanilla = Generation.dataTilesets(S)[def.tileset]
+      if vanilla and vanilla.tilePalettes then
+        tsRec.tilePalettes = vanilla.tilePalettes
+      end
+    end
+    local daytime = Preview.gen2PreviewDaytime(S, def) or "DAY"
+    local bgSet = select(1, Preview.gen2MapBgSet(S, def, daytime))
+    local okR, renderer = pcall(MapPreview.renderer, baker, map, daytime, bgSet)
+    if not okR then return false, renderer end
+    map.renderer = renderer
+    if not map.renderer then
+      return false, "could not bake map preview (missing tileset image?)"
+    end
+    return true, map
+  end
+  return pcall(MapLoader.load, S.data, mapId)
 end
 
 -- Direct N/S/E/W neighbors for the map preview (same offsets as the game).
@@ -3582,12 +3687,14 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   if Generation.isGen2(S) and Preview.syncGen2Preview then
     Preview.syncGen2Preview(S)
   end
-  local ok, map = pcall(MapLoader.load, S.data, S.mapId)
+  local ok, map = Maps.loadEditorMap(S, S.mapId)
   if not ok then
     Kit.text("mono", "Failed to load map: " .. tostring(map),
       vx + 8 * s, vy + 8 * s, PAL.red)
     Kit.text("micro",
-      "Project → Import ROM or Link Recomp so tilesets (e.g. OVERWORLD) load",
+      Generation.isGen2(S)
+        and "Project → Import a Gold ROM or Link a Recomp with gold/ cache"
+        or "Project → Import ROM or Link Recomp so tilesets (e.g. OVERWORLD) load",
       vx + 8 * s, vy + 28 * s, PAL.faint)
     return
   end
@@ -3612,7 +3719,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
     if S.mapShowNeighbors ~= false then
       for _, nb in ipairs(editorNeighbors(S, mapDef)) do
         prepareLiveMap(S, nb.id, nb.def)
-        local nok, nmap = pcall(MapLoader.load, S.data, nb.id)
+        local nok, nmap = Maps.loadEditorMap(S, nb.id)
         if nok and nmap and nmap.renderer and nmap.renderer.drawMapOnly then
           local nPal = mapPreviewPalette(S, nb.def)
           local nShaded = nPal and Preview.pushPaletteShader(S, nPal)
@@ -3654,7 +3761,9 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local brush = (tool == "paint" or tool == "erase" or tool == "pick"
       or tool == "collision")
     and not S.warpDestPick
+    and not S.mapPreviewOnly
   local selecting = (tool == "select") and not S.warpDestPick
+    and not S.mapPreviewOnly
   local over = Kit.hit(vx, vy, vw, vh)
   -- Middle button / Space / Alt pan. Right-click copies the block (eyedropper).
   local rmb, mmb = false, false
@@ -4019,6 +4128,7 @@ function Maps.invalidateCaches(S)
   if S then
     S._spriteIdList = nil
     S._spriteIdListKey = nil
+    Maps.invalidateGoldPreview(S)
   end
 end
 
@@ -4469,10 +4579,46 @@ local function mergeImportResult(S, App)
   return true, summary
 end
 
+function Maps.exportTmx(S, App)
+  if not S.project or not S.path then
+    S.status = "Open a mod before exporting TMX"
+    return
+  end
+  local mapId = S.mapId or S.builderMapId
+  if not mapId then
+    S.status = "Select a map to export"
+    return
+  end
+  local TmxIO = require("TmxIO")
+  local folder = TmxIO.defaultFolder(S)
+  if folder then ModIO.ensureDirectory(folder) end
+  local picked = ModIO.chooseFolder("Export TMX folder", folder or S.path)
+  if picked then folder = picked end
+  if not folder then
+    S.status = "TMX export cancelled"
+    return
+  end
+  local ok, dest = TmxIO.exportMap(S, mapId, folder)
+  if ok then
+    S.status = "Exported TMX → " .. tostring(dest)
+  else
+    S.status = "TMX export failed: " .. tostring(dest)
+  end
+end
+
 function Maps.importTmx(S, tmxPath, App)
   if not S.project or not S.path then
     S.status = "Open a mod before importing TMX"
     return
+  end
+  local TmxIO = require("TmxIO")
+  local nativeOk, nativeMsg = TmxIO.importFile(S, tmxPath, App)
+  if nativeOk then
+    S.status = "TMX import: " .. tostring(nativeMsg)
+    return
+  end
+  if nativeMsg and nativeMsg ~= "python" then
+    S.status = "TMX convert: " .. tostring(nativeMsg)
   end
   local root = ModIO.repoRoot()
   local sep = package.config:sub(1, 1)
@@ -4487,7 +4633,8 @@ function Maps.importTmx(S, tmxPath, App)
   S.status = "Importing TMX..."
   local pipe = io.popen(cmd, "r")
   if not pipe then
-    S.status = "Could not run tmx_import.py (is Python on PATH?)"
+    S.status = nativeMsg and ("TMX import: " .. tostring(nativeMsg))
+      or "Could not run tmx_import.py (is Python on PATH?)"
     return
   end
   local report = pipe:read("*a") or ""
@@ -5219,8 +5366,8 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
     S.gfxTilesetPane = "flags"
   end
 
-  -- Footer: 2x2 when narrow so labels stay readable.
-  local footerRows = (dw < 300 * s) and 2 or 1
+  -- Footer: extra row for Import/Export TMX.
+  local footerRows = (dw < 300 * s) and 3 or 2
   local footerH = footerRows * 26 * s + (footerRows - 1) * 4 * s
   local gridY = headerY + headerH + 8 * s
   local gridH = math.max(48 * s, dy + dh - pad - footerH - 8 * s - gridY)
@@ -5283,11 +5430,15 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
       run = function()
         importTilesetPng(S, App, nil, { createNew = true, rebuildBlocks = true })
       end },
-    { label = "Import TMX", kind = "accent", tip = "Import a Pokemonium / Tiled .tmx map",
+    { label = "Import TMX", kind = "accent", tip = "Import engine TMX, or convert Pokemonium TMX to blocks",
       run = function()
-        local picked = ModIO.chooseFile("Pokemonium / Tiled TMX",
+        local picked = ModIO.chooseFile("Tiled TMX",
           "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*")
         if picked then Maps.importTmx(S, picked, App) end
+      end },
+    { label = "Export TMX", kind = "good", tip = "Export this map as a Tiled .tmx (32x32 blocks)",
+      run = function()
+        Maps.exportTmx(S, App)
       end },
     { label = "Set border", kind = "ghost",
       tip = "Use selected paint block as map.borderBlock (out-of-bounds fill)",
@@ -5299,7 +5450,7 @@ local function drawTilesetDock(S, map, mutate, App, dx, dy, dw, dh)
         S.status = "Border block → " .. tostring(map.borderBlock)
       end },
   }
-  local colsF = (footerRows == 2) and 2 or 4
+  local colsF = (dw < 300 * s) and 2 or 3
   local fw = math.floor((gridW - 6 * s * (colsF - 1)) / colsF)
   local fhBtn = 24 * s
   for i, act in ipairs(actions) do
@@ -7711,6 +7862,16 @@ end
 Maps.allMapIds = allMapIds
 Maps.ensureOwned = ensureOwned
 Maps.resolveMapDef = resolveMapDef
+
+function Maps.drawPreview(S, x, y, w, h, App)
+  local map = resolveMapDef(S, S.mapId)
+  if not map then
+    Kit.emptyBox(x, y, w, h, "No map selected")
+    return
+  end
+  Kit.card(x, y, w, h, 10 * Kit.scale)
+  drawMapPreview(S, map, x, y, w, h, App)
+end
 
 -- Event editing on the 16x16 map canvas.
 function Maps.applyEventAtCell(S, tool, cx, cy, App)

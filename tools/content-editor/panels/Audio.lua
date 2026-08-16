@@ -432,7 +432,7 @@ function Audio.draw(S, x, y, w, h, App)
   local ids
   if mode == "map_songs" then
     -- map ids from live data.maps (Gold aliases gen2Maps here) + project
-    ids = RegList.mergeIds(S.project.maps, S.data and S.data.maps)
+    ids = RegList.mergeIds(S.project.maps, Generation.dataMaps(S))
     for id in pairs(proj) do
       local found = false
       for _, m in ipairs(ids) do if m == id then found = true; break end end

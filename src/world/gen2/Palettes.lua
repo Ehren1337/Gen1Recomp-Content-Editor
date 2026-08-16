@@ -238,6 +238,14 @@ function Palettes.monColors(data, speciesId, shiny)
   if not entry then return nil end
   local pair = (shiny and entry.shiny) or entry.normal
   if not (pair and pair[1] and pair[2]) then return nil end
+  if pair[3] and pair[4] then
+    return {
+      { pair[1][1], pair[1][2], pair[1][3] },
+      { pair[2][1], pair[2][2], pair[2][3] },
+      { pair[3][1], pair[3][2], pair[3][3] },
+      { pair[4][1], pair[4][2], pair[4][3] },
+    }
+  end
   return {
     { WHITE[1], WHITE[2], WHITE[3] },
     { pair[1][1], pair[1][2], pair[1][3] },

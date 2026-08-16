@@ -210,7 +210,8 @@ function Autocomplete.moveIds(S)
 end
 
 function Autocomplete.mapIds(S)
-  return mergeKeys(S.project and S.project.maps, S.data and S.data.maps)
+  return mergeKeys(S.project and S.project.maps,
+    require("Generation").dataMaps(S))
 end
 
 function Autocomplete.spriteIds(S)
@@ -288,7 +289,7 @@ function Autocomplete.textIds(S, mapId)
   end
   local label = nil
   local map = (S.project and S.project.maps and S.project.maps[mapId])
-    or (S.data and S.data.maps and S.data.maps[mapId])
+    or require("Generation").dataMaps(S)[mapId]
   if map and type(map.label) == "string" then label = map.label end
   local ptrs = S.project and S.project.text_pointers
   if label and ptrs then addBucket(ptrs[label]) end

@@ -22,10 +22,26 @@ Assets.loader = nil
 
 local GENERATED = "assets/generated/"
 
+local function cacheBytes(path)
+  local ok, CacheFs = pcall(require, "src.import.CacheFs")
+  if not (ok and CacheFs and CacheFs.readActive) then return nil end
+  local bytes = CacheFs.readActive(path)
+  if type(bytes) == "string" and bytes ~= "" then return bytes end
+  return nil
+end
+
+local function fileDataFromBytes(path, bytes)
+  if type(bytes) ~= "string" or bytes == "" then return nil end
+  local name = tostring(path or "asset.png"):match("[^/\\]+$") or "asset.png"
+  local ok, fileData = pcall(love.filesystem.newFileData, bytes, name)
+  if ok then return fileData end
+  return nil
+end
+
 local function exists(path)
   local fs = love and love.filesystem
-  if not (fs and fs.getInfo) then return false end
-  return fs.getInfo(path) ~= nil
+  if fs and fs.getInfo and fs.getInfo(path) ~= nil then return true end
+  return cacheBytes(path) ~= nil
 end
 Assets.exists = exists
 
@@ -55,17 +71,35 @@ end
 function Assets.image(path)
   local resolved = Assets.resolve(path)
   local image = cache[resolved]
-  if not image then
-    image = love.graphics.newImage(resolved)
-    cache[resolved] = image
+  if image then return image end
+  local ok, img = pcall(love.graphics.newImage, resolved)
+  if not (ok and img) then
+    -- Gold/Blue/Yellow images live under gold/assets/generated/…; Data
+    -- already reads those via CacheFs.readActive when PhysFS did not
+    -- overlay the un-prefixed path.
+    local fileData = fileDataFromBytes(resolved, cacheBytes(resolved))
+    if fileData then
+      ok, img = pcall(love.graphics.newImage, fileData)
+    end
   end
-  return image
+  if not (ok and img) then
+    error(ok and "image load failed" or img)
+  end
+  cache[resolved] = img
+  return img
 end
 
 -- pixel-level reads (tile-shift variants, the spinner strip blit) resolve
 -- the same way but stay uncached: the caller keeps the derived product
 function Assets.imageData(path)
-  return love.image.newImageData(Assets.resolve(path))
+  local resolved = Assets.resolve(path)
+  local ok, data = pcall(love.image.newImageData, resolved)
+  if ok and data then return data end
+  local fileData = fileDataFromBytes(resolved, cacheBytes(resolved))
+  if fileData then
+    return love.image.newImageData(fileData)
+  end
+  error(data)
 end
 
 function Assets.register(invalidate)

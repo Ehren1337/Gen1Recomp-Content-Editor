@@ -10,6 +10,7 @@ local Preview = require("Preview")
 local PalettePicker = require("PalettePicker")
 local PaletteEdit = require("PaletteEdit")
 local ItemPicker = require("ItemPicker")
+local ChoicePicker = require("ChoicePicker")
 local ColorWheel = require("ColorWheel")
 local FormPane = require("FormPane")
 local RegList = require("RegList")
@@ -162,17 +163,24 @@ local function allSpeciesIds(S)
   return ids
 end
 
-local function cloneRgbPair(row)
-  local out = {}
-  for i = 1, 2 do
-    local c = (type(row) == "table" and row[i]) or { 128, 128, 128 }
-    if c.r then
-      out[i] = { c.r, c.g, c.b }
-    else
-      out[i] = { c[1] or 0, c[2] or 0, c[3] or 0 }
-    end
+local WHITE = { 255, 255, 255 }
+local BLACK = { 0, 0, 0 }
+
+local function rgbOf(c, fallback)
+  fallback = fallback or { 128, 128, 128 }
+  if type(c) ~= "table" then return { fallback[1], fallback[2], fallback[3] } end
+  if c.r then return { c.r, c.g, c.b } end
+  return { c[1] or fallback[1], c[2] or fallback[2], c[3] or fallback[3] }
+end
+
+-- Gold battle pics are 4 GBC shades. Vanilla extract stores the two middle
+-- colors only; expand those to white + mids + black so all four are editable.
+local function cloneRgbRow(row)
+  local src = type(row) == "table" and row or {}
+  if src[3] and src[4] then
+    return { rgbOf(src[1], WHITE), rgbOf(src[2]), rgbOf(src[3]), rgbOf(src[4], BLACK) }
   end
-  return out
+  return { rgbOf(WHITE, WHITE), rgbOf(src[1]), rgbOf(src[2]), rgbOf(BLACK, BLACK) }
 end
 
 -- Clone vanilla palettes.pokemon[species] into the mod for editing.
@@ -183,17 +191,19 @@ local function ensureGen2MonPalette(S, speciesId, App)
   S.project.palettes.pokemon = S.project.palettes.pokemon or {}
   local owned = S.project.palettes.pokemon[speciesId]
   if type(owned) == "table" and owned.normal and owned.shiny then
+    owned.normal = cloneRgbRow(owned.normal)
+    owned.shiny = cloneRgbRow(owned.shiny)
     return owned
   end
   local base = Preview.gen2MonPaletteEntry(S, speciesId)
   local copy = {
-    normal = cloneRgbPair(base and base.normal),
-    shiny = cloneRgbPair(base and base.shiny),
+    normal = cloneRgbRow(base and base.normal),
+    shiny = cloneRgbRow(base and base.shiny),
   }
   -- Keep a partial project override's colors when only one form was patched.
   if type(owned) == "table" then
-    if owned.normal then copy.normal = cloneRgbPair(owned.normal) end
-    if owned.shiny then copy.shiny = cloneRgbPair(owned.shiny) end
+    if owned.normal then copy.normal = cloneRgbRow(owned.normal) end
+    if owned.shiny then copy.shiny = cloneRgbRow(owned.shiny) end
   end
   S.project.palettes.pokemon[speciesId] = copy
   if App and App.markDirty then App.markDirty() end
@@ -504,23 +514,36 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   end)
 
   Kit.text("small", "Types", formX, fy + 6 * s, PAL.caption)
-  local tx = formX + labelW
-  mon.types = mon.types or { "NORMAL" }
-  for i = 1, 2 do
-    local cur = mon.types[i] or (i == 1 and "NORMAL" or "")
-    local bw = 120 * s
-    local label = (cur ~= "" and cur) or "(none)"
-    if Kit.button(tx, fy, bw, fh, label, { kind = "accent" }) then
-      mon = mutate()
-      mon.types = mon.types or { "NORMAL" }
-      if i == 1 then
-        mon.types[1] = TypeIds.cycle(S, mon.types[1])
-      else
-        mon.types[2] = TypeIds.cycle(S, mon.types[2], true)
-      end
-      App.markDirty()
+  do
+    local tx = formX + labelW
+    mon.types = mon.types or { "NORMAL" }
+    local typeIds = TypeIds.list(S)
+    local half = math.floor((fieldW - 8 * s) / 2)
+    for i = 1, 2 do
+      local cur = mon.types[i] or (i == 1 and "NORMAL" or "")
+      local slot = i
+      ChoicePicker.field(S, {
+        x = tx, y = fy, w = half, h = fh,
+        current = cur,
+        ids = typeIds,
+        emptyLabel = slot == 1 and "NORMAL" or "(none)",
+        allowClear = slot == 2,
+        clearLabel = "(none)",
+        title = slot == 1 and "TYPE 1" or "TYPE 2",
+        tooltip = "Pick a type from the list",
+        onPick = function(id)
+          mon = mutate()
+          mon.types = mon.types or { "NORMAL" }
+          if slot == 1 then
+            mon.types[1] = (type(id) == "string" and id ~= "" and id) or "NORMAL"
+          else
+            mon.types[2] = (type(id) == "string" and id ~= "") and id or nil
+          end
+          App.markDirty()
+        end,
+      })
+      tx = tx + half + 8 * s
     end
-    tx = tx + bw + 8 * s
   end
   fy = fy + fh + 8 * s
 
@@ -566,18 +589,22 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     local rates = growthList(S)
     local cur = mon.growthRate or rates[1]
     if Generation.isGen2(S) then cur = normalizeGrowth(cur) end
-    if Kit.button(fx, fy_, 180 * s, fh_, cur, { kind = "accent" }) then
-      mon = mutate()
-      local idx = 1
-      for i, g in ipairs(rates) do
-        if g == cur then idx = i; break end
-      end
-      mon.growthRate = rates[(idx % #rates) + 1]
-      if Generation.isGen2(S) then
-        mon.growthRateId = GROWTH_IDS[mon.growthRate]
-      end
-      App.markDirty()
-    end
+    ChoicePicker.field(S, {
+      x = fx, y = fy_, w = fw, h = fh_,
+      current = cur,
+      ids = rates,
+      title = "GROWTH RATE",
+      tooltip = "Pick a growth rate from the list",
+      onPick = function(id)
+        if type(id) ~= "string" or id == "" then return end
+        mon = mutate()
+        mon.growthRate = id
+        if Generation.isGen2(S) then
+          mon.growthRateId = GROWTH_IDS[mon.growthRate]
+        end
+        App.markDirty()
+      end,
+    })
   end)
   row(Generation.isGen2(S) and "Pic size" or "Front size", function(fx, fy_, fw, fh_)
     local cur = Generation.isGen2(S)
@@ -656,18 +683,31 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
       mon.eggGroups = mon.eggGroups or { "EGG_GROUND", "EGG_GROUND" }
       local g1 = mon.eggGroups[1] or "EGG_GROUND"
       local g2 = mon.eggGroups[2] or g1
-      if Kit.button(fx, fy_, 120 * s, fh_, g1, { kind = "accent" }) then
-        mon = mutate()
-        mon.eggGroups = mon.eggGroups or {}
-        mon.eggGroups[1] = cycle(EGG_GROUPS, g1)
-        App.markDirty()
-      end
-      if Kit.button(fx + 128 * s, fy_, 120 * s, fh_, g2, { kind = "accent" }) then
-        mon = mutate()
-        mon.eggGroups = mon.eggGroups or {}
-        mon.eggGroups[2] = cycle(EGG_GROUPS, g2)
-        App.markDirty()
-      end
+      local half = math.floor((fw - 8 * s) / 2)
+      ChoicePicker.field(S, {
+        x = fx, y = fy_, w = half, h = fh_,
+        current = g1, ids = EGG_GROUPS, title = "EGG GROUP 1",
+        tooltip = "Pick an egg group from the list",
+        onPick = function(id)
+          if type(id) ~= "string" or id == "" then return end
+          mon = mutate()
+          mon.eggGroups = mon.eggGroups or {}
+          mon.eggGroups[1] = id
+          App.markDirty()
+        end,
+      })
+      ChoicePicker.field(S, {
+        x = fx + half + 8 * s, y = fy_, w = half, h = fh_,
+        current = g2, ids = EGG_GROUPS, title = "EGG GROUP 2",
+        tooltip = "Pick an egg group from the list",
+        onPick = function(id)
+          if type(id) ~= "string" or id == "" then return end
+          mon = mutate()
+          mon.eggGroups = mon.eggGroups or {}
+          mon.eggGroups[2] = id
+          App.markDirty()
+        end,
+      })
     end)
     row("Egg moves", function(fx, fy_, fw, fh_)
       local joined = table.concat(mon.eggMoves or {}, ",")
@@ -809,7 +849,7 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
     end
     local entry = livePalEntry()
     Kit.text("micro",
-      "GBC battle colors (white/black fixed). Edits go to mod palettes.pokemon.",
+      "GBC battle colors (4 shades). Click a swatch to edit.",
       formX, fy, PAL.faint)
     fy = fy + 16 * s
     if not entry then
@@ -818,16 +858,16 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
         formX, fy, PAL.danger or PAL.yellow)
       fy = fy + 18 * s
     else
-      local function drawMidSlots(label, which, prefix)
+      local function drawSlots(label, which)
         Kit.text("small", label, formX, fy + 6 * s, PAL.caption)
         local live = livePalEntry() or entry
         local pair = (which == "shiny") and (live.shiny or live.normal)
           or (live.normal or live.shiny)
-        pair = cloneRgbPair(pair)
+        pair = cloneRgbRow(pair)
         local x0 = formX + labelW
-        for i = 1, 2 do
+        local sw = math.min(36 * s, math.floor((fieldW - 24 * s) / 4))
+        for i = 1, 4 do
           local c = pair[i]
-          local sw = 28 * s
           love.graphics.setColor((c[1] or 0) / 255, (c[2] or 0) / 255,
             (c[3] or 0) / 255, 1)
           love.graphics.rectangle("fill", x0, fy + 2 * s, sw, 24 * s, 4 * s, 4 * s)
@@ -841,7 +881,7 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
               color = c,
               onChange = function(rgb)
                 local e = ensureGen2MonPalette(S, eid, App)
-                e[which] = e[which] or cloneRgbPair(pair)
+                e[which] = e[which] or cloneRgbRow(pair)
                 e[which][slot] = {
                   math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
                   math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
@@ -852,7 +892,7 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
               end,
               onApply = function(rgb)
                 local e = ensureGen2MonPalette(S, eid, App)
-                e[which] = e[which] or cloneRgbPair(pair)
+                e[which] = e[which] or cloneRgbRow(pair)
                 e[which][slot] = {
                   math.max(0, math.min(255, tonumber(rgb[1]) or 0)),
                   math.max(0, math.min(255, tonumber(rgb[2]) or 0)),
@@ -863,30 +903,12 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
               end,
             })
           end
-          local cur = string.format("%d,%d,%d", c[1] or 0, c[2] or 0, c[3] or 0)
-          local v = RegList.field(App, "pk_g2" .. prefix .. i,
-            x0 + sw + 6 * s, fy, math.min(120 * s, fieldW - sw - 10 * s), fh,
-            cur, "r,g,b")
-          if v ~= cur then
-            local r, g, b = v:match("^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
-            if r then
-              local e = ensureGen2MonPalette(S, eid, App)
-              e[which] = e[which] or cloneRgbPair(pair)
-              e[which][i] = {
-                math.max(0, math.min(255, tonumber(r))),
-                math.max(0, math.min(255, tonumber(g))),
-                math.max(0, math.min(255, tonumber(b))),
-              }
-              Preview.invalidate()
-              App.markDirty()
-            end
-          end
-          x0 = x0 + sw + 6 * s + math.min(120 * s, fieldW - sw - 10 * s) + 8 * s
+          x0 = x0 + sw + 8 * s
         end
         fy = fy + fh + 8 * s
       end
-      drawMidSlots("Normal", "normal", "n")
-      drawMidSlots("Shiny", "shiny", "s")
+      drawSlots("Normal", "normal")
+      drawSlots("Shiny", "shiny")
       if S.project.palettes and S.project.palettes.pokemon
           and S.project.palettes.pokemon[eid] then
         if Kit.button(formX + labelW, fy, 120 * s, fh, "Revert colors", {
@@ -973,18 +995,27 @@ local function drawBasics(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
       label = (resolvedName and (resolvedName .. " (dex)") or "(default)")
     end
     local names = iconList(S)
-    if Kit.button(fx, fy_, math.max(80 * s, fw - 100 * s), fh_,
-        Kit.ellipsize("small", label, fw - 108 * s), { kind = "ghost" }) then
-      local nextName = cycle(names, cur)
-      mon = mutate()
-      if nextName == "" then
-        mon.icon = nil
-      else
-        mon.icon = nextName
-      end
-      Preview.invalidate()
-      App.markDirty()
-    end
+    ChoicePicker.field(S, {
+      x = fx, y = fy_, w = math.max(80 * s, fw - 100 * s), h = fh_,
+      current = (type(mon.icon) == "table" and mon.icon.image) and "" or cur,
+      ids = names,
+      emptyLabel = label,
+      allowClear = true,
+      clearLabel = "(default)",
+      title = "PARTY ICON",
+      kind = "ghost",
+      tooltip = "Pick a party icon from the list",
+      onPick = function(id)
+        mon = mutate()
+        if type(id) ~= "string" or id == "" then
+          mon.icon = nil
+        else
+          mon.icon = id
+        end
+        Preview.invalidate()
+        App.markDirty()
+      end,
+    })
     if Kit.button(fx + fw - 96 * s, fy_, 96 * s, fh_, "PNG", {
         kind = "ghost", tooltip = "Import a custom party icon PNG",
       }) then

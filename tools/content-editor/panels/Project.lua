@@ -213,15 +213,21 @@ function Project.draw(S, x, y, w, h, App)
   local gen = (GameVersion.generation and GameVersion.generation(curVer)) or 1
   local chipW = math.floor((w - 3 * 8 * s) / 4)
   local order = GameVersion.ORDER or { "red", "blue", "yellow", "gold" }
+  local cachePrefs = S.dataPrefs or DataSource.loadPrefs()
   for i, vid in ipairs(order) do
     local info = GameVersion.info(vid) or {}
     local label = info.label or vid
     local bx = x + (i - 1) * (chipW + 8 * s)
     local kind = (vid == curVer) and "primary" or "ghost"
+    local hasCache = DataSource.hasImportedCache(vid)
+      or DataSource.hasLocalCache(vid)
+      or (cachePrefs.recompRoot and DataSource.recompHasVersion(cachePrefs.recompRoot, vid))
+    local cacheNote = hasCache and "cache ready" or "no cache yet — Import ROM"
     if Kit.button(bx, row, chipW, btnH, label, {
         kind = kind,
         tooltip = (info.displayName or label)
-          .. " — Gen " .. tostring(GameVersion.generation(vid) or 1),
+          .. " — Gen " .. tostring(GameVersion.generation(vid) or 1)
+          .. "\n" .. cacheNote,
       }) then
       if App.setGameVersion then App.setGameVersion(vid) end
     end

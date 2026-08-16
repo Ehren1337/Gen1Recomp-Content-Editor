@@ -88,13 +88,15 @@ function LayeredMap.runtimeTilesetId(sourceId)
 end
 
 local function resolveMap(S, mapId)
+  local Generation = require("Generation")
   return (S.project and S.project.maps and S.project.maps[mapId])
-    or (S.data and S.data.maps and S.data.maps[mapId])
+    or Generation.dataMaps(S)[mapId]
 end
 
 local function resolveTileset(S, tilesetId)
+  local Generation = require("Generation")
   return (S.project and S.project.tilesets and S.project.tilesets[tilesetId])
-    or (S.data and S.data.tilesets and S.data.tilesets[tilesetId])
+    or Generation.dataTilesets(S)[tilesetId]
 end
 
 function LayeredMap.allMapIds(S)
@@ -109,7 +111,7 @@ function LayeredMap.allMapIds(S)
   end
   add(S.project and S.project.layeredMaps)
   add(S.project and S.project.maps)
-  add(S.data and S.data.maps)
+  add(require("Generation").dataMaps(S))
   table.sort(ids)
   return ids
 end
@@ -215,7 +217,7 @@ end
 local function ownedMap(S, mapId)
   local project = ensureProject(assert(S.project, "no project"))
   if project.maps[mapId] then return project.maps[mapId] end
-  local base = S.data and S.data.maps and S.data.maps[mapId]
+  local base = require("Generation").dataMaps(S)[mapId]
   if not base then return nil end
   local copy = deepCopy(base)
   copy.id = mapId
@@ -224,7 +226,24 @@ local function ownedMap(S, mapId)
   return copy
 end
 
-local function collisionMode(tileset, tile)
+local function collisionMode(tileset, tile, map, x, y)
+  if tileset and type(tileset.collision) == "table" and map and map.blocks then
+    local blockX, blockY = math.floor(x / 2), math.floor(y / 2)
+    local blockId = map.blocks[blockY * map.width + blockX + 1] or 0
+    local quad = tileset.collision[blockId + 1]
+    if type(quad) == "table" then
+      local coll = quad[(y % 2) * 2 + (x % 2) + 1]
+      local okP, Permissions = pcall(require, "src.world.gen2.Permissions")
+      if okP and Permissions then
+        if Permissions.isGrass and Permissions.isGrass(coll) then return "grass" end
+        if Permissions.isWater and Permissions.isWater(coll) then return "water" end
+        if Permissions.isWalkable and Permissions.isWalkable(coll) then
+          return "walk"
+        end
+        return "solid"
+      end
+    end
+  end
   if not tileset or tile == nil then return "solid" end
   if tileset.grassTile == tile then return "grass" end
   if listSet(tileset.waterTiles)[tile] then return "water" end
@@ -319,7 +338,7 @@ function LayeredMap.convertMap(S, mapId)
       local index = y * width + x + 1
       local tile, block = rawCellTile(map, tileset, x, y)
       cells[index] = defaultRuntimeRef(map.tileset, x, y, block)
-      collision[index] = collisionMode(tileset, tile)
+      collision[index] = collisionMode(tileset, tile, map, x, y)
     end
   end
   local source = {
@@ -541,7 +560,7 @@ function LayeredMap.sourceIds(S, mapId)
   -- source first, then expose the complete runtime registry alphabetically.
   local runtimeIds, runtimeSeen = {}, {}
   for _, bucket in ipairs({ S.project and S.project.tilesets,
-      S.data and S.data.tilesets }) do
+      require("Generation").dataTilesets(S) }) do
     for tilesetId in pairs(bucket or {}) do
       if not runtimeSeen[tilesetId] then
         runtimeSeen[tilesetId] = true
@@ -1268,8 +1287,11 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     atlasWidth, atlasHeight, atlasPlacements)
   local atlasRel = derivedAssetPath(project, atlasTransformRel)
 
-  local blocks, blockIds = {}, {}
-  local function addBlock(block)
+  local blocks, blockIds, collisionQuads = {}, {}, {}
+  local COLL = {
+    solid = 0x07, walk = 0x00, grass = 0x18, water = 0x21, shore = 0x23,
+  }
+  local function addBlock(block, quad)
     local key = table.concat(block, ",")
     local id = blockIds[key]
     if id ~= nil then return id end
@@ -1277,17 +1299,21 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     if id >= 256 then error(mapId .. ": map needs more than 256 blocks", 0) end
     blockIds[key] = id
     blocks[#blocks + 1] = block
+    collisionQuads[#collisionQuads + 1] = quad
     return id
   end
   local mapBlocks = {}
   for blockY = 0, height / 2 - 1 do
     for blockX = 0, width / 2 - 1 do
-      local block = {}
+      local block, quad = {}, {}
       for cellY = 0, 1 do
         for cellX = 0, 1 do
           local index = (blockY * 2 + cellY) * width
             + blockX * 2 + cellX + 1
           local microIds = cells[index]
+          local mode = (mapSource.collision and mapSource.collision[index])
+            or "solid"
+          quad[cellY * 2 + cellX + 1] = COLL[mode] or 0x07
           for microY = 0, 1 do
             for microX = 0, 1 do
               block[(cellY * 2 + microY) * 4
@@ -1296,7 +1322,7 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
           end
         end
       end
-      mapBlocks[#mapBlocks + 1] = addBlock(block)
+      mapBlocks[#mapBlocks + 1] = addBlock(block, quad)
     end
   end
 
@@ -1323,6 +1349,7 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     animation = "TILEANIM_NONE",
     trueColor = trueColor and true or nil,
     animatedTiles = #animatedTiles > 0 and animatedTiles or nil,
+    collision = require("Generation").isGen2(context.S) and collisionQuads or nil,
     _isNew = true,
     _layeredGenerated = true,
   }
@@ -1391,6 +1418,12 @@ function LayeredMap.compileProject(S)
       S.data.maps[mapId] = project.maps[mapId]
       local tilesetId = project.maps[mapId].tileset
       S.data.tilesets[tilesetId] = project.tilesets[tilesetId]
+      if S.data.gen2Maps and S.data.gen2Maps ~= S.data.maps then
+        S.data.gen2Maps[mapId] = project.maps[mapId]
+      end
+      if S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+        S.data.gen2Tilesets[tilesetId] = project.tilesets[tilesetId]
+      end
     end
   end
   local transformed, transformErr = emitTransform(context)
@@ -1400,6 +1433,12 @@ function LayeredMap.compileProject(S)
     S.manifestDraft.assets_transforms = project.layeredTransform
   end
   pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  if S._g2MapBaker then
+    local okP, MapPreview = pcall(require, "src.world.gen2.MapPreview")
+    if okP and MapPreview and MapPreview.invalidate then
+      MapPreview.invalidate(S._g2MapBaker)
+    end
+  end
   Preview.invalidate()
   return true, string.format("compiled %d layered map(s)", compiled)
 end

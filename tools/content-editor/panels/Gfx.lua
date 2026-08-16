@@ -615,7 +615,7 @@ end
 -- ---- Gold palette contexts (GBC tables, not flat SGB names) ----
 
 local GEN2_PAL_CONTEXTS = {
-  { id = "pokemon", label = "Pokemon", tip = "Species normal + shiny (2 colors)" },
+  { id = "pokemon", label = "Pokemon", tip = "Species normal + shiny (4 GBC colors)" },
   { id = "trainers", label = "Trainers", tip = "Trainer class pics (2 colors)" },
   { id = "objects", label = "OW OBJ", tip = "Overworld OBJ rows per time of day" },
   { id = "bg", label = "BG", tip = "BG palette rows (4 colors)" },
@@ -634,6 +634,14 @@ local function cloneColorRow(row, n)
     else out[i] = { c[1] or 0, c[2] or 0, c[3] or 0 } end
   end
   return out
+end
+
+local function cloneMonRow(row)
+  if type(row) == "table" and row[3] and row[4] then
+    return cloneColorRow(row, 4)
+  end
+  local mid = cloneColorRow(row, 2)
+  return { { 255, 255, 255 }, mid[1], mid[2], { 0, 0, 0 } }
 end
 
 local function gen2PalRoot(S)
@@ -837,8 +845,12 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
         else
           if ctx == "pokemon" then
             bucket[key] = {
-              normal = { { 200, 200, 200 }, { 80, 80, 80 } },
-              shiny  = { { 216, 184, 200 }, { 96, 64, 88 } },
+              normal = {
+                { 255, 255, 255 }, { 200, 200, 200 }, { 80, 80, 80 }, { 0, 0, 0 },
+              },
+              shiny  = {
+                { 255, 255, 255 }, { 216, 184, 200 }, { 96, 64, 88 }, { 0, 0, 0 },
+              },
             }
           elseif ctx == "roofs" then
             bucket[key] = {
@@ -926,8 +938,8 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
     if ctx == "roofs" and num then key = num end
     if ctx == "pokemon" then
       bucket[key] = {
-        normal = cloneColorRow(rec.normal, 2),
-        shiny = cloneColorRow(rec.shiny, 2),
+        normal = cloneMonRow(rec.normal),
+        shiny = cloneMonRow(rec.shiny),
       }
     elseif ctx == "roofs" then
       bucket[key] = {
@@ -950,17 +962,17 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
   end
 
   if ctx == "pokemon" then
-    Kit.text("micro", "normal (2) / shiny (2) — cart supplies white+black",
+    Kit.text("micro", "normal / shiny — 4 GBC shades (white + mids + black)",
       viewX, fy, PAL.faint)
     fy = fy + 16 * s
-    local normal = cloneColorRow((owned and rec.normal) or rec.normal, 2)
-    local shiny = cloneColorRow((owned and rec.shiny) or rec.shiny, 2)
+    local normal = cloneMonRow((owned and rec.normal) or rec.normal)
+    local shiny = cloneMonRow((owned and rec.shiny) or rec.shiny)
     drawPalettePreview(normal, viewX, fy, viewW / 2 - 4 * s, 28 * s, s)
     drawPalettePreview(shiny, viewX + viewW / 2, fy, viewW / 2 - 4 * s, 28 * s, s)
     fy = fy + 36 * s
     Kit.text("small", "Normal", viewX, fy, PAL.caption)
     fy = fy + 16 * s
-    fy = drawColorSlots(S, App, normal, 2, viewX, fy, viewW, s, "n", function(slot, rgb)
+    fy = drawColorSlots(S, App, normal, 4, viewX, fy, viewW, s, "n", function(slot, rgb)
       local e = ensure()
       e.normal = e.normal or normal
       e.normal[slot] = rgb
@@ -970,7 +982,7 @@ local function drawGen2Palettes(S, x, y, w, h, App, modeY)
     end)
     Kit.text("small", "Shiny", viewX, fy, PAL.caption)
     fy = fy + 16 * s
-    fy = drawColorSlots(S, App, shiny, 2, viewX, fy, viewW, s, "s", function(slot, rgb)
+    fy = drawColorSlots(S, App, shiny, 4, viewX, fy, viewW, s, "s", function(slot, rgb)
       local e = ensure()
       e.shiny = e.shiny or shiny
       e.shiny[slot] = rgb

@@ -84,10 +84,8 @@ local function allMapIds(S)
       if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
     end
   end
-  if S.data and S.data.maps then
-    for id in pairs(S.data.maps) do
-      if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
-    end
+  for id in pairs(require("Generation").dataMaps(S)) do
+    if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
   end
   table.sort(ids)
   return ids
@@ -97,7 +95,8 @@ local function mapRecord(S, mapId)
   if S.project and S.project.maps and S.project.maps[mapId] then
     return S.project.maps[mapId], true
   end
-  if S.data and S.data.maps then return S.data.maps[mapId], false end
+  local live = require("Generation").dataMaps(S)[mapId]
+  if live then return live, false end
   return nil, false
 end
 

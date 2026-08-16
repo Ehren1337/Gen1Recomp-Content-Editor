@@ -24,7 +24,8 @@ local function mapRecord(S, mapId)
   if S.project and S.project.maps and S.project.maps[mapId] then
     return S.project.maps[mapId], true
   end
-  if S.data and S.data.maps then return S.data.maps[mapId], false end
+  local live = Generation.dataMaps(S)[mapId]
+  if live then return live, false end
   return nil, false
 end
 
@@ -317,9 +318,7 @@ function TalkIndex.allMapIds(S)
       add(key:match("^([^/]+)/"))
     end
   end
-  if S.data and S.data.maps then
-    for id in pairs(S.data.maps) do add(id) end
-  end
+  for id in pairs(Generation.dataMaps(S)) do add(id) end
   TalkIndex.ensureScripts()
   local ok, MapScripts = pcall(require, "src.script.MapScripts")
   if ok and MapScripts then

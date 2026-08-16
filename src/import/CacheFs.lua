@@ -305,10 +305,13 @@ function CacheFs.read(rel)
   local root = CacheFs.root()
   if root then
     local f = io.open(realPath(root, rel), "rb")
-    if not f then return nil end
-    local data = f:read("*a")
-    f:close()
-    return data
+    if f then
+      local data = f:read("*a")
+      f:close()
+      return data
+    end
+    -- A source checkout root is the game folder, not the save-dir ROM
+    -- cache (gold/assets/generated/…). Keep looking in PhysFS / save dir.
   end
   -- headless (plain luajit, e.g. the modkit validate/pack driver): there is
   -- no save directory to read from, so a cache miss is nil, not a crash

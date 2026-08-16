@@ -317,15 +317,7 @@ end
 
 -- Load the import manifest for a version and confirm it matches that ROM.
 local function decodeManifest(version)
-  local path = GameVersion.info(version).manifest
-  local raw, readError = love.filesystem.read(path)
-  if not raw then error("ROM import metadata is missing: " .. tostring(readError)) end
-  local Json = require("src.link.Json")
-  local manifest, decodeError = Json.decode(raw)
-  if not manifest then error("ROM import metadata is invalid: " .. tostring(decodeError)) end
-  assert(manifest.romSha1 == GameVersion.info(version).sha1,
-    "ROM import metadata version mismatch")
-  return manifest
+  return require("src.import.RomManifest").decode(version)
 end
 
 local function sha1(data)

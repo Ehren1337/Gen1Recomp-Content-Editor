@@ -52,7 +52,7 @@ local function defaultDraft(id)
     profile = "content",
     game_version = string.format(">=%s <%d.0.0", engine, major + 1),
     games = games,
-    gen2compat = Generation.isGen2(nil) or false,
+    gen2compat = Generation.coversGen2(games) or Generation.isGen2(nil) or false,
     category = "GAMEPLAY",
     priority = 100,
     permissions = {},
@@ -94,7 +94,7 @@ local function loadDraft(S, modId)
   if d.gen2compat == nil then
     d.gen2compat = false
     for _, g in ipairs(d.games or {}) do
-      if g == "gen2" or g == "gold" then d.gen2compat = true; break end
+      if g == "all" or g == "gen2" or g == "gold" then d.gen2compat = true; break end
     end
   end
   S.manifestDraft = d
@@ -344,13 +344,16 @@ function Manifest.draw(S, x, y, w, h, App)
   end)
   row("games", function(fx, fy, fw, fh_)
     local cur = csv(d.games)
-    local v = field(S, "mf_games", fx, fy, fw, fh_, cur, "gen1, gen2")
+    local v = field(S, "mf_games", fx, fy, fw, fh_, cur, "all")
     if v ~= cur then
       d.games = splitCsv(v)
       d.gen2compat = false
       for _, g in ipairs(d.games) do
         local low = tostring(g):lower()
-        if low == "gen2" or low == "gold" then d.gen2compat = true; break end
+        if low == "all" or low == "gen2" or low == "gold" then
+          d.gen2compat = true
+          break
+        end
       end
       markManifestDirty(S)
     end
@@ -363,7 +366,10 @@ function Manifest.draw(S, x, y, w, h, App)
       local hasGen2 = false
       for _, g in ipairs(d.games) do
         local low = tostring(g):lower()
-        if low == "gen2" or low == "gold" then hasGen2 = true; break end
+        if low == "all" or low == "gen2" or low == "gold" then
+          hasGen2 = true
+          break
+        end
       end
       if d.gen2compat and not hasGen2 then
         d.games[#d.games + 1] = "gen2"

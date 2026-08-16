@@ -2,6 +2,10 @@
 -- Reuses the save-editor Kit/Theme via the shared require path.
 
 local Data = require("src.core.Data")
+-- Pin the editor's Loader before DataSource mounts a linked Recomp. That
+-- mount prepends the Recomp tree, and a later require would otherwise load
+-- the newer Loader against this process's SaveData.
+require("src.mods.Loader")
 local Kit = require("Kit")
 local Theme = require("Theme")
 local State = require("State")
@@ -41,6 +45,7 @@ local UiPreview = require("UiPreview")
 local PalettePicker = require("PalettePicker")
 local SpeciesPicker = require("SpeciesPicker")
 local ItemPicker = require("ItemPicker")
+local ChoicePicker = require("ChoicePicker")
 local Autocomplete = require("Autocomplete")
 local ColorWheel = require("ColorWheel")
 local PaletteEdit = require("PaletteEdit")
@@ -215,6 +220,7 @@ function App.resetCatalogSelection()
   S._liveTilesets = nil
   S._vanillaMapBackup = nil
   S._mapCenteredFor = nil
+  S._g2MapBaker = nil
   S.mapListOffset = 0
   S.pokemonListOffset = 0
   S.itemListOffset = 0
@@ -238,10 +244,11 @@ function App.resetCatalogSelection()
     table.sort(ids)
     S.moveId = ids[1]
   end
+  local liveMaps = require("Generation").dataMaps(S)
   local mapStillExists = previousMapId and (
     (S.project and S.project.maps and S.project.maps[previousMapId])
-    or (S.data.maps and S.data.maps[previousMapId]))
-  S.mapId = mapStillExists and previousMapId or firstSortedId(S.data.maps)
+    or liveMaps[previousMapId])
+  S.mapId = mapStillExists and previousMapId or firstSortedId(liveMaps)
   S.builderMapId = S.mapId
   S.dialogMapId = S.mapId
   S.dialogTextId = nil
@@ -297,7 +304,10 @@ function App.load(modPath, opts)
   opts = opts or {}
   S = State.new()
   local prefsPeek = DataSource.loadPrefs()
-  local version = opts.version or prefsPeek.lastVersion or "red"
+  -- main.lua always passes version="red" unless POKEPORT_VERSION is set.
+  -- Keep the last game chip the user actually selected.
+  local version = os.getenv("POKEPORT_VERSION")
+    or prefsPeek.lastVersion or opts.version or "red"
   S.version = version
   App.dataVersion = version
   local source, prefs, status = DataSource.apply({ version = version })
@@ -405,6 +415,7 @@ function App.clearCache()
     S._mapNeedsRebuild = S.mapId
     S._vanillaMapBackup = nil
     S._vanillaTilesetBackup = nil
+    S._g2MapBaker = nil
   end
   -- Imported mode is gone after a wipe; fall back to linked Recomp or fixtures.
   local prefs = DataSource.loadPrefs()
@@ -485,11 +496,8 @@ function App.openMod(path)
   for id in pairs(project.maps or {}) do projectMapIds[#projectMapIds + 1] = id end
   table.sort(projectMapIds)
   S.mapId = projectMapIds[1]
-  if not S.mapId and S.data and S.data.maps then
-    local ids = {}
-    for id in pairs(S.data.maps) do ids[#ids + 1] = id end
-    table.sort(ids)
-    S.mapId = ids[1]
+  if not S.mapId then
+    S.mapId = firstSortedId(require("Generation").dataMaps(S))
   end
   S.builderMapId = S.mapId
   S.dialogMapId = S.mapId
@@ -735,12 +743,16 @@ function App.playtestMod()
     end
     options.mods[id] = true
     options.modsByVersion = options.modsByVersion or {}
-    local bucket = options.modsByVersion[version] or {}
-    options.modsByVersion[version] = bucket
-    for otherId in pairs(bucket) do
-      bucket[otherId] = false
+    -- Latest Recomp reads per-game enablement. Turn this mod on for every
+    -- supported game so Playtest works after switching Red/Blue/Yellow/Gold.
+    for _, vid in ipairs(GameVersion.ORDER or { version }) do
+      local bucket = options.modsByVersion[vid] or {}
+      options.modsByVersion[vid] = bucket
+      for otherId in pairs(bucket) do
+        bucket[otherId] = false
+      end
+      bucket[id] = true
     end
-    bucket[id] = true
     SaveData.saveOptions(options)
   end)
   if not okEnable then
@@ -1274,6 +1286,7 @@ function App.draw()
   -- Block underlying panel hits while a modal is up.
   if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or ChoicePicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker then
     Kit.blockClicks = true
   end
@@ -1287,6 +1300,7 @@ function App.draw()
   -- Inline autocomplete over panel fields (before status / full-screen modals).
   if not (ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or ChoicePicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker) then
     Autocomplete.draw(S)
   end
@@ -1314,6 +1328,10 @@ function App.draw()
   if ItemPicker.isOpen(S) then
     Kit.blockClicks = false
     ItemPicker.draw(S, 0, 0, W, H)
+  end
+  if ChoicePicker.isOpen(S) then
+    Kit.blockClicks = false
+    ChoicePicker.draw(S, 0, 0, W, H)
   end
   if BattleAnims.isPickerOpen(S) then
     Kit.blockClicks = false
@@ -1372,6 +1390,7 @@ function App.keypressed(key)
     if PalettePicker.keypressed(S, key) then return end
     if SpeciesPicker.keypressed(S, key) then return end
     if ItemPicker.keypressed(S, key) then return end
+    if ChoicePicker.keypressed(S, key) then return end
     if BattleAnims.pickerKeypressed(S, key) then return end
     if S.mapTilesetPicker then
       S.mapTilesetPicker = nil
@@ -1398,6 +1417,7 @@ function App.keypressed(key)
   -- Modals own keyboard (except Kit textfields / Esc above).
   if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or ChoicePicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S.mapTilesetPicker or S._pathPrompt then
     return
   end
@@ -1437,6 +1457,7 @@ function App.wheelmoved(x, y)
   -- Tileset / palette modals need Kit.wheelY for their lists; never zoom maps.
   if S and (S.mapTilesetPicker or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
+      or ChoicePicker.isOpen(S)
       or ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or S._pathPrompt) then
     wheelY = wheelY + (y or 0)
     return

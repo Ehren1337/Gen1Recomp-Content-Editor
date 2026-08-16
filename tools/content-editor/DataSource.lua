@@ -66,8 +66,21 @@ function DataSource.hasLocalCache(version)
   return false
 end
 
+local function hasGeneratedMaps(root, prefix)
+  if prefix and prefix ~= "" then
+    if fileExists(join(root, prefix .. SEP .. "data" .. SEP .. "generated"
+      .. SEP .. "maps.lua")) then
+      return true
+    end
+  end
+  return fileExists(join(root, "data" .. SEP .. "generated" .. SEP .. "maps.lua"))
+end
+
 -- Linked Gen1Recomp folder has an on-disk cache for this version (not merely
 -- a Red/legacy data/generated at the root).
+-- Latest Recomp checkouts often only extract Red at data/generated. Blue and
+-- Yellow share that Gen 1 table shape, so they may use the Red/root extract.
+-- Gold must have its own gold/ tree.
 function DataSource.recompHasVersion(root, version)
   if type(root) ~= "string" or root == "" then return false end
   root = root:gsub("[/\\]+$", "")
@@ -76,12 +89,12 @@ function DataSource.recompHasVersion(root, version)
   local prefix = (GameVersion.cachePrefix and GameVersion.cachePrefix(version) or "")
     :gsub("/+$", ""):gsub("/", SEP)
   if prefix ~= "" then
-    local maps = join(root, prefix .. SEP .. "data" .. SEP .. "generated"
-      .. SEP .. "maps.lua")
-    if fileExists(maps) then return true end
-    -- Red may still live at the legacy un-prefixed path in older trees.
-    if version == "red" then
-      return fileExists(join(root, "data" .. SEP .. "generated" .. SEP .. "maps.lua"))
+    if fileExists(join(root, prefix .. SEP .. "data" .. SEP .. "generated"
+      .. SEP .. "maps.lua")) then
+      return true
+    end
+    if version == "red" or (GameVersion.generation(version) == 1) then
+      return hasGeneratedMaps(root, "red")
     end
     return false
   end
@@ -97,7 +110,8 @@ local function loadedDataMatches(version)
     if type(Data.pokemon) == "table" and Data.pokemon.CHIKORITA then return true end
     if type(Data.encounters) == "table" and Data.encounters.grass then return true end
     if type(Data.trainers) == "table" and Data.trainers.classes then return true end
-    return false
+    if type(Data.maps) == "table" and Data.maps.PALLET_TOWN then return false end
+    return type(Data.maps) == "table" and type(Data.pokemon) == "table"
   end
   if type(Data.encounters) == "table" and Data.encounters.grass then return false end
   if type(Data.trainers) == "table" and Data.trainers.classes then return false end
@@ -270,7 +284,21 @@ local function finishLoad(version)
     if Data._pristineKeys then pcall(function() Data:unloadGenerated() end) end
     return false, "cache does not match " .. tostring(version)
   end
+  local GameVersion = require("src.core.GameVersion")
+  if GameVersion.generation(version) == 2 then
+    local okBind, Generation = pcall(require, "Generation")
+    if okBind and Generation and Generation.bindGoldData then
+      Generation.bindGoldData(Data)
+    end
+  end
   return true
+end
+
+local function loadEmptyGold()
+  remountVersion("gold")
+  if Data._pristineKeys then pcall(function() Data:unloadGenerated() end) end
+  local ok, err = pcall(function() Data:loadEmptyGen2() end)
+  return ok, err
 end
 
 local function tryLocal(version)
@@ -324,6 +352,14 @@ function DataSource.apply(opts)
 
   if mode == "fixtures" then
     remountVersion(version)
+    if GameVersion.generation(version) == 2 then
+      local okEmpty, emptyErr = loadEmptyGold()
+      if not okEmpty then
+        error("content editor Gold shell failed:\n" .. tostring(emptyErr))
+      end
+      return "empty", prefs,
+        "No Gold fixtures — Import a Gold ROM or Link a Recomp with gold/"
+    end
     local ok, err = loadFixtures()
     if not ok then
       error("content editor fixtures failed:\n" .. tostring(err))
@@ -371,6 +407,16 @@ function DataSource.apply(opts)
   end
 
   remountVersion(version)
+  if GameVersion.generation(version) == 2 then
+    local okEmpty, emptyErr = loadEmptyGold()
+    if not okEmpty then
+      error("content editor needs a Gold cache (Import a Gold ROM or Link a "
+        .. "Recomp with gold/):\n" .. tostring(emptyErr))
+    end
+    return "empty", prefs,
+      "No Gold cache for " .. verLabel
+        .. " — Import a Gold ROM or Link a Recomp with gold/"
+  end
   local ok, err = loadFixtures()
   if not ok then
     error("content editor needs an imported ROM cache, linked Recomp, or fixtures:\n"
@@ -395,6 +441,7 @@ function DataSource.label(source)
   if source == "recomp" then return "Linked Gen1Recomp folder" end
   if source == "imported" then return "Imported ROM (save directory)" end
   if source == "fixtures" then return "Fixtures (stub data)" end
+  if source == "empty" then return "Empty Gold shell (no cache)" end
   return tostring(source or "?")
 end
 

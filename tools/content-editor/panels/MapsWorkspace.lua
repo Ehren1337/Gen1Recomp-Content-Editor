@@ -5,6 +5,7 @@ local Theme = require("Theme")
 local MapBuilder = require("MapBuilder")
 local Maps = require("Maps")
 local LayeredMap = require("LayeredMap")
+local Generation = require("Generation")
 
 local MapsWorkspace = {}
 local PAL = Theme.PAL
@@ -12,13 +13,15 @@ local PAL = Theme.PAL
 local function sortedTilesets(S)
   local seen, ids = {}, {}
   for _, bucket in ipairs({ S.project and S.project.tilesets,
-      S.data and S.data.tilesets }) do
+      Generation.dataTilesets(S) }) do
     for id in pairs(bucket or {}) do
       if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
     end
   end
   table.sort(ids)
-  if #ids == 0 then ids[1] = "OVERWORLD" end
+  if #ids == 0 then
+    ids[1] = Generation.isGen2(S) and "TILESET_JOHTO" or "OVERWORLD"
+  end
   return ids
 end
 
@@ -219,6 +222,19 @@ function MapsWorkspace.draw(S, x, y, w, h, App)
       "Delete map", { kind = "danger", enabled = owned,
         tooltip = "Delete this project-owned map (vanilla maps revert to source)" }) then
     Maps.deleteMap(S, App)
+  end
+  if S.mapMoreActions and Kit.button(x + 240 * s, y + 76 * s, 96 * s, 26 * s,
+      "Export TMX", { kind = "good", enabled = selected ~= nil,
+        tooltip = "Write this map as a Tiled .tmx (one tile = one block)" }) then
+    Maps.exportTmx(S, App)
+  end
+  if S.mapMoreActions and Kit.button(x + 342 * s, y + 76 * s, 96 * s, 26 * s,
+      "Import TMX", { kind = "accent", enabled = S.project ~= nil,
+        tooltip = "Import engine TMX, or convert Pokemonium TMX to blocks" }) then
+    App.pickFile("Tiled TMX", "Tiled map (*.tmx)|*.tmx|All (*.*)|*.*",
+      function(path)
+        Maps.importTmx(S, path, App)
+      end)
   end
 
   local formH = S.mapNewDraft and 154 * s or 0
