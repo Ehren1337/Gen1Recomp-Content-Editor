@@ -287,6 +287,10 @@ local GOLD_EXTRAS = {
   { file = "std_scripts", keys = { "std_scripts", "gen2StdScripts" } },
   { file = "events", keys = { "events", "gen2EventTables" } },
   { file = "initial_events", keys = { "initial_events", "gen2InitialEvents" } },
+  { file = "title", keys = { "title", "gen2Title" } },
+  { file = "intro", keys = { "intro", "gen2Intro" } },
+  { file = "landmarks", keys = { "landmarks", "gen2Landmarks" } },
+  { file = "menu_gfx", keys = { "menu_gfx", "gen2MenuGfx" } },
 }
 
 local function loadGoldGenerated(name)

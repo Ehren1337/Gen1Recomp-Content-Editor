@@ -715,9 +715,13 @@ function App.validateMod()
 
   local function runValidate(py)
     local modPath = S.path or ModIO.modDir(id)
+    local ver = tostring(S.version or "red"):lower()
+    if ver ~= "red" and ver ~= "blue" and ver ~= "yellow" and ver ~= "gold" then
+      ver = "red"
+    end
     local inner = string.format(
-      '%s "%s" validate "%s" --base %s --repo "%s"',
-      py, script, modPath, base, engine)
+      '%s "%s" validate "%s" --base %s --version %s --repo "%s"',
+      py, script, modPath, base, ver, engine)
     local cmd = LuaJitTool.wrapCommand(inner, luajit, libDir, extraEnv)
     return runShell(cmd)
   end

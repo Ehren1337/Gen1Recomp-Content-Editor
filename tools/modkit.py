@@ -766,6 +766,52 @@ def resolve_base(repo, choice):
     return "imported" if os.path.isfile(imported) else "fixture"
 
 
+# Gold's extractor never writes these Gen 1 tables. Data:load still asks for
+# them when POKEPORT_DATA_DIR is set; older Data.lua copies error instead of
+# substituting {}.
+GEN2_OPTIONAL_MODULES = ("text_pointers", "trainer_headers", "field")
+
+
+def infer_rom_version(explicit=None):
+    """CLI/env first; otherwise the Gold/Blue/Yellow cache path the editor set."""
+    if explicit in ("red", "blue", "yellow", "gold"):
+        return explicit
+    env = (os.environ.get("MODKIT_VERSION")
+           or os.environ.get("POKEPORT_VERSION") or "").lower()
+    if env in ("red", "blue", "yellow", "gold"):
+        return env
+    data_dir = (os.environ.get("POKEPORT_DATA_DIR") or "").replace("\\", "/")
+    lowered = data_dir.lower()
+    for ver in ("gold", "yellow", "blue", "red"):
+        token = "/" + ver + "/data/"
+        if token in lowered or lowered.endswith("/" + ver + "/data/generated"):
+            return ver
+    return "red"
+
+
+def stage_gold_optional_modules(data_dir):
+    """Return (dir, temp_dir_or_None). temp_dir must be rmtree'd by the caller."""
+    if not data_dir or not os.path.isdir(data_dir):
+        return data_dir, None
+    missing = [name for name in GEN2_OPTIONAL_MODULES
+               if not os.path.isfile(os.path.join(data_dir, name + ".lua"))]
+    if not missing:
+        return data_dir, None
+    tmp = tempfile.mkdtemp(prefix="modkit-gold-data-")
+    for name in os.listdir(data_dir):
+        src = os.path.join(data_dir, name)
+        dest = os.path.join(tmp, name)
+        if os.path.isfile(src) and name.endswith(".lua"):
+            try:
+                os.link(src, dest)
+            except OSError:
+                shutil.copy2(src, dest)
+    for name in missing:
+        with open(os.path.join(tmp, name + ".lua"), "w", encoding="utf-8") as handle:
+            handle.write("return {}\n")
+    return tmp, tmp
+
+
 def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
                version=None):
     """Drive the engine loader headlessly with the mod mounted; the base
@@ -782,12 +828,12 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
     entries = "".join(
         "  [%s] = %s,\n" % (lua_quote(k), lua_quote(v))
         for k, v in sorted(files.items()))
-    version = (version or os.environ.get("MODKIT_VERSION")
-               or os.environ.get("POKEPORT_VERSION") or "red").lower()
+    version = infer_rom_version(version)
     if version not in ("red", "blue", "yellow", "gold"):
         findings.append(Finding("MK100", "error",
                                 f"unknown validation ROM version: {version}"))
         return
+    staged = None
     try:
         with runtime_tree(repo) as engine_root:
             base = resolve_base(engine_root, base)
@@ -807,10 +853,16 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
                 handle.write(driver)
                 driver_path = handle.name
             try:
+                env = luajit_env()
+                data_dir = env.get("POKEPORT_DATA_DIR")
+                if version == "gold" and data_dir:
+                    data_dir, staged = stage_gold_optional_modules(data_dir)
+                    if data_dir:
+                        env["POKEPORT_DATA_DIR"] = data_dir
                 proc = subprocess.run(
                     luajit_cmd(driver_path), cwd=engine_root,
                     capture_output=True, text=True, timeout=120,
-                    env=luajit_env())
+                    env=env)
             except FileNotFoundError:
                 findings.append(Finding("MK100", "error",
                                         f"cannot run {luajit_exe()} (install luajit or "
@@ -821,6 +873,9 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
     except FileNotFoundError as exc:
         findings.append(Finding("MK100", "error", str(exc)))
         return
+    finally:
+        if staged:
+            shutil.rmtree(staged, ignore_errors=True)
     if proc.returncode != 0:
         findings.append(Finding("MK100", "error",
                                 "loader driver crashed: "
