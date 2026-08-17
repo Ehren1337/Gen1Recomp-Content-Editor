@@ -92,9 +92,10 @@ On **Project**, under Overview:
 - Without an imported game-data cache, Validate still checks structure, Lua,
   permissions, and packaging, but skips vanilla cross-reference rules MK102 and
   MK103 instead of reporting normal game IDs as errors.
-  If LuaJIT is missing: **Windows** tries `winget install DEVCOM.LuaJIT`
-  (Program Files — not AppData; Defender flags AppData LuaJIT as SuspLua);
-  **Linux** tries a passwordless `apt`/`dnf`/`pacman` install, else install
+  If LuaJIT is missing: **Windows** uses the bundled `tools/tooling/luajit`
+  copy, then `winget install DEVCOM.LuaJIT`. **Linux** uses a bundled
+  `tools/tooling/luajit/linux-x64/luajit` if present, then `/usr/bin/luajit`,
+  then a passwordless `apt`/`dnf`/`pacman` install. Otherwise install
   manually (`sudo apt install luajit`) or set `MODKIT_LUAJIT`.
 - **Playtest** — saves and synchronizes only the open mod into the bundled
   pinned runtime, then launches the ROM selected in the editor. Link Recomp is

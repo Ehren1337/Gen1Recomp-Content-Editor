@@ -104,21 +104,24 @@ end
 -- LÖVE AppImages / wrappers set LD_LIBRARY_PATH to their bundled libs.
 -- Spawning system /usr/bin/luajit with that path loads the wrong
 -- libluajit (undefined symbol luaJIT_version_2_1_…). Clear it unless we
--- intentionally point at a private libDir.
+-- intentionally point at a private libDir. Prefer `unset` over `env -u`
+-- so BusyBox /dash still work.
 local function linuxLuaJitEnvPrefix(libDir)
   if libDir and libDir ~= "" then
     return string.format('LD_LIBRARY_PATH="%s" ', libDir)
   end
-  return 'env -u LD_LIBRARY_PATH '
+  return "unset LD_LIBRARY_PATH; "
 end
 
 local function works(exe, libDir)
   if not exe or not fileExists(exe) then return false end
   -- -joff: Defender Behavior:Win32/SuspLua.A flags LuaJIT's JIT; the
   -- interpreter probe is enough to prove the binary runs.
+  -- ProcessRunner already wraps Windows commands in a .bat, so do not nest
+  -- another cmd /C here (paths with spaces then fail to spawn).
   local cmd
   if isWindows() then
-    cmd = string.format('cmd /C ""%s" -joff -e print(1)"', exe)
+    cmd = string.format('"%s" -joff -e "print(1)"', exe)
   else
     cmd = string.format('%s"%s" -joff -e "print(1)"',
       linuxLuaJitEnvPrefix(libDir), exe)
@@ -128,28 +131,60 @@ local function works(exe, libDir)
   return false
 end
 
+local function parentDir(path)
+  if not path or path == "" then return nil end
+  return path:match("^(.*)[/\\][^/\\]+$")
+end
+
+local function searchRoots()
+  local source = love and love.filesystem and love.filesystem.getSource
+    and love.filesystem.getSource() or "."
+  local roots, seen = {}, {}
+  local function add(path)
+    if not path or path == "" or seen[path] then return end
+    seen[path] = true
+    roots[#roots + 1] = path
+  end
+  add(os.getenv("POKEPORT_CONTENT_ROOT"))
+  add(source)
+  add(parentDir(source))
+  return roots
+end
+
+local function siblingLibDir(exe)
+  local dir = parentDir(exe)
+  if not dir then return nil end
+  if fileExists(dir .. sep() .. "libluajit-5.1.so.2")
+      or fileExists(dir .. sep() .. "libluajit-5.1.so") then
+    return dir
+  end
+  return nil
+end
+
 local function windowsCandidates()
   local s = sep()
   local list = {}
-  local source = love and love.filesystem and love.filesystem.getSource
-    and love.filesystem.getSource() or "."
   local pf = os.getenv("ProgramFiles") or "C:\\Program Files"
   local pf86 = os.getenv("ProgramFiles(x86)") or "C:\\Program Files (x86)"
   local localApp = os.getenv("LOCALAPPDATA") or ""
-  -- winget DEVCOM.LuaJIT installs here (per-user), not under Program Files.
-  local extras = {
-    source .. s .. "tools" .. s .. "tooling" .. s .. "luajit" .. s .. "luajit.exe",
-    localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe",
-    localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "luajit.exe",
-    pf .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe",
-    pf .. s .. "LuaJIT" .. s .. "luajit.exe",
-    pf86 .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe",
-    pf .. s .. "luajit" .. s .. "bin" .. s .. "luajit.exe",
-  }
-  for _, p in ipairs(extras) do
+  local bundled = s .. "tools" .. s .. "tooling" .. s .. "luajit" .. s .. "luajit.exe"
+  local extras = {}
+  local function add(p)
     if p and p ~= "" and not p:find("^" .. s) then
-      list[#list + 1] = p
+      extras[#extras + 1] = p
     end
+  end
+  for _, root in ipairs(searchRoots()) do
+    add(root .. bundled)
+  end
+  add(localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe")
+  add(localApp .. s .. "Programs" .. s .. "LuaJIT" .. s .. "luajit.exe")
+  add(pf .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe")
+  add(pf .. s .. "LuaJIT" .. s .. "luajit.exe")
+  add(pf86 .. s .. "LuaJIT" .. s .. "bin" .. s .. "luajit.exe")
+  add(pf .. s .. "luajit" .. s .. "bin" .. s .. "luajit.exe")
+  for _, p in ipairs(extras) do
+    list[#list + 1] = p
   end
   if localApp ~= "" then
     local roots = {
@@ -171,14 +206,40 @@ local function windowsCandidates()
   return list
 end
 
+-- { exe, libDir } rows. Bundled unix binary first, then host paths the
+-- LÖVE AppImage PATH often hides.
+local function linuxCandidates()
+  local s = sep()
+  local rows, seen = {}, {}
+  local function add(exe, libDir)
+    if not exe or exe == "" or seen[exe] then return end
+    seen[exe] = true
+    rows[#rows + 1] = { exe, libDir or siblingLibDir(exe) }
+  end
+  for _, root in ipairs(searchRoots()) do
+    add(root .. s .. "tools" .. s .. "tooling" .. s .. "luajit"
+      .. s .. "linux-x64" .. s .. "luajit")
+    add(root .. s .. "tools" .. s .. "tooling" .. s .. "luajit" .. s .. "luajit")
+  end
+  add("/usr/bin/luajit")
+  add("/usr/local/bin/luajit")
+  add("/usr/bin/luajit-2.1")
+  add("/usr/local/bin/luajit-2.1")
+  local home = os.getenv("HOME") or ""
+  if home ~= "" then
+    add(home .. "/.local/bin/luajit")
+  end
+  return rows
+end
+
 --- @return string|nil path, string|nil libDir
 function LuaJitTool.find()
   scrubLegacyAppDataLuaJit()
 
   local env = os.getenv("MODKIT_LUAJIT")
-  if env and env ~= "" and fileExists(env) and not isBadLuaJitPath(env)
-      and works(env, nil) then
-    return env, nil
+  if env and env ~= "" and fileExists(env) and not isBadLuaJitPath(env) then
+    local lib = isLinux() and siblingLibDir(env) or nil
+    if works(env, lib) then return env, lib end
   end
 
   -- On Windows prefer winget / Program Files before PATH: a source checkout
@@ -191,8 +252,23 @@ function LuaJitTool.find()
     end
   end
 
+  if isLinux() then
+    for _, row in ipairs(linuxCandidates()) do
+      local p, lib = row[1], row[2]
+      if fileExists(p) and not isBadLuaJitPath(p) then
+        if p:find("/tooling/luajit/", 1, true) then
+          runShell(string.format('chmod +x "%s" 2>/dev/null || true', p))
+        end
+        if works(p, lib) then return p, lib end
+      end
+    end
+  end
+
   local onPath = whichOnPath()
-  if onPath and works(onPath, nil) then return onPath, nil end
+  if onPath then
+    local lib = isLinux() and siblingLibDir(onPath) or nil
+    if works(onPath, lib) then return onPath, lib end
+  end
 
   return nil, nil
 end
@@ -259,7 +335,8 @@ function LuaJitTool.ensure()
 
   if isLinux() then
     local exe, err = installLinuxApt()
-    if exe and works(exe, nil) then return exe, nil, nil, true end
+    local lib = exe and siblingLibDir(exe) or nil
+    if exe and works(exe, lib) then return exe, lib, nil, true end
     return nil, nil,
       (err or "LuaJIT missing")
         .. " — system luajit failed to run (install/reinstall luajit, "
@@ -299,11 +376,13 @@ function LuaJitTool.wrapCommand(innerCmd, luajitPath, libDir, extraEnv)
   local sh = tools .. sep() .. "run_validate.sh"
   local f = io.open(sh, "wb")
   if not f then
-    local exports = string.format('MODKIT_LUAJIT="%s"', luajitPath)
+    local exports
     if libDir and libDir ~= "" then
-      exports = exports .. string.format(' LD_LIBRARY_PATH="%s"', libDir)
+      exports = string.format('LD_LIBRARY_PATH="%s" MODKIT_LUAJIT="%s"',
+        libDir, luajitPath)
     else
-      exports = "env -u LD_LIBRARY_PATH " .. exports
+      exports = string.format('unset LD_LIBRARY_PATH; MODKIT_LUAJIT="%s"',
+        luajitPath)
     end
     for k, v in pairs(extraEnv) do
       if k and v and v ~= "" then

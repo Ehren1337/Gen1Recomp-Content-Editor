@@ -22,7 +22,7 @@ $SignatureFile = Join-Path $Stage ".source-signature"
 function Get-SourceSignature {
   $inputs = @()
   foreach ($relative in @("tools\content-editor", "tools\save-editor",
-      "libs\flexlove")) {
+      "libs\flexlove", "tools\tooling")) {
     $base = Join-Path $Root $relative
     if (Test-Path -LiteralPath $base) {
       Get-ChildItem -LiteralPath $base -Recurse -File | Sort-Object FullName |
@@ -107,6 +107,8 @@ Copy-Filtered (Join-Path $Root "tools\content-editor") `
   (Join-Path $Stage "tools\content-editor") @("__pycache__")
 Copy-Filtered (Join-Path $Root "tools\save-editor") `
   (Join-Path $Stage "tools\save-editor") @("__pycache__")
+Copy-Filtered (Join-Path $Root "tools\tooling") `
+  (Join-Path $Stage "tools\tooling")
 Copy-Filtered (Join-Path $Root "libs\flexlove") `
   (Join-Path $Stage "libs\flexlove")
 Copy-Filtered (Join-Path $Root "tests\fixture_data") `

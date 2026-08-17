@@ -207,6 +207,11 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
   Copy-TreeFiltered -From (Join-Path $Root "tools\save-editor") `
     -To (Join-Path $toolsStage "save-editor") `
     -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
+  if (Test-Path (Join-Path $Root "tools\tooling")) {
+    Copy-TreeFiltered -From (Join-Path $Root "tools\tooling") `
+      -To (Join-Path $toolsStage "tooling") `
+      -ExcludeDirNames $excludeDirs -ExcludeFilePatterns $excludeFiles
+  }
 
   # modkit validate (Python) + ROM manifests
   foreach ($extra in @("modkit.py")) {
@@ -435,7 +440,7 @@ import io, tarfile, os, tempfile, shutil
 src = r'''$TarPath'''
 fd, tmp = tempfile.mkstemp(suffix='.tar.gz')
 os.close(fd)
-want = ('.sh', '.command', '.AppImage', '/Contents/MacOS/love')
+want = ('.sh', '.command', '.AppImage', '/Contents/MacOS/love', '/linux-x64/luajit')
 launchers = ('ContentEditor.sh', 'ContentEditor.command')
 with tarfile.open(src, 'r:gz') as inn, tarfile.open(tmp, 'w:gz') as out:
     for m in inn.getmembers():

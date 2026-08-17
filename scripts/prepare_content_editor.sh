@@ -24,6 +24,9 @@ mkdir -p "$STAGE/runtime/gen1recomp/mods"
 
 cp -R "$ROOT/tools/content-editor" "$STAGE/tools/content-editor"
 cp -R "$ROOT/tools/save-editor" "$STAGE/tools/save-editor"
+if [ -d "$ROOT/tools/tooling" ]; then
+  cp -R "$ROOT/tools/tooling" "$STAGE/tools/tooling"
+fi
 cp -R "$ROOT/libs/flexlove" "$STAGE/libs/flexlove"
 cp -R "$ROOT/tests/fixture_data" "$STAGE/tests/fixture_data"
 cp "$ROOT/tests/love_stub.lua" "$STAGE/tests/love_stub.lua"

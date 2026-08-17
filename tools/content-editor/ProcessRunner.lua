@@ -59,12 +59,24 @@ local function getWindowsFfi()
   return windowsFfi
 end
 
+local function tempBase()
+  local tmp = os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR")
+  local name = "pokeport_ce_" .. tostring(os.time()) .. "_"
+    .. tostring(math.random(100000, 999999))
+  if tmp and tmp ~= "" then
+    return tmp .. package.config:sub(1, 1) .. name
+  end
+  -- LuaJIT on Windows often returns a drive-root name (\sXXXX) that is not writable.
+  local fallback = os.tmpname()
+  os.remove(fallback)
+  return fallback
+end
+
 local function windowsRun(command)
   local ffi = getWindowsFfi()
   if not ffi then return portableRun(command) end
 
-  local base = os.tmpname()
-  os.remove(base)
+  local base = tempBase()
   local batchPath = base .. ".bat"
   local outputPath = base .. ".out"
   local batch = io.open(batchPath, "wb")
