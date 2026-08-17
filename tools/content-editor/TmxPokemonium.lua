@@ -727,8 +727,9 @@ function TmxPokemonium.importPath(S, path, App)
 
   local tilesetId
   local firstExisting = S.project.maps[converted[1].id]
-  if firstExisting and firstExisting.tileset
-      and S.project.tilesets[firstExisting.tileset] then
+  local existingTs = firstExisting and firstExisting.tileset
+    and S.project.tilesets[firstExisting.tileset]
+  if existingTs and existingTs._isNew and not existingTs._layeredGenerated then
     tilesetId = firstExisting.tileset
   elseif #conv.allTilesets == 1 then
     tilesetId = uniqueTilesetId(S, conv.allTilesets[1].name)
@@ -769,6 +770,7 @@ function TmxPokemonium.importPath(S, path, App)
     blocks = conv.blockTiles,
     walkable = walkable,
     waterTiles = waterTiles,
+    trueColor = true,
     _isNew = true,
   }
   S.project.tilesets[tilesetId] = tsRec
@@ -857,6 +859,7 @@ function TmxPokemonium.importPath(S, path, App)
 
   S.mapId = firstId
   S.builderMapId = firstId
+  S.builderSourceId = require("LayeredMap").runtimeSourceId(tilesetId)
   S.tilesetEditId = tilesetId
   S.mapPaletteTileset = tilesetId
   S._mapPaletteFor = firstId
@@ -865,6 +868,8 @@ function TmxPokemonium.importPath(S, path, App)
   S.importReport = table.concat(report, "\n")
   pcall(function() require("Preview").invalidatePath(rel) end)
   if App and App.markDirty then App.markDirty() end
+  pcall(function() require("LayeredMap").compileProject(S) end)
+  pcall(function() require("src.world.MapLoader").invalidate(firstId) end)
   pcall(function()
     local Maps = require("Maps")
     if Maps.invalidateGoldPreview then Maps.invalidateGoldPreview(S, firstId) end

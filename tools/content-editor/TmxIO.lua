@@ -1,6 +1,6 @@
 -- Export / import Tiled TMX for content-editor maps.
--- Our export: one Tiled tile = one engine block (32x32), GID = blockId + 1.
--- Pokemonium / foreign TMX is converted to that block format on import.
+-- Native export/import uses the TMX tileset PNG as that map's own tileset.
+-- Pokemonium / foreign TMX is converted into engine blocks + a new tileset.
 
 local ModIO = require("ModIO")
 local Generation = require("Generation")
@@ -34,74 +34,150 @@ local function resolveTileset(S, tilesetId)
     or Generation.dataTilesets(S)[tilesetId]
 end
 
+local function dirname(path)
+  return tostring(path or ""):match("^(.*)[/\\][^/\\]+$") or "."
+end
+
+local function basename(path)
+  return tostring(path or ""):match("([^/\\]+)$") or tostring(path or "")
+end
+
+local function resolvePath(base, rel)
+  rel = tostring(rel or ""):gsub("\\", "/"):gsub("^%s+", ""):gsub("%s+$", "")
+  if rel == "" then return base end
+  if rel:match("^[A-Za-z]:/") or rel:sub(1, 1) == "/" then
+    return rel:gsub("/", SEP)
+  end
+  return join(base, (rel:gsub("/", SEP)))
+end
+
+local function safeTilesetId(name, fallback)
+  local id = tostring(name or ""):upper():gsub("[^A-Z0-9_]", "_")
+  id = id:gsub("_+", "_"):gsub("^_+", ""):gsub("_+$", "")
+  if id == "" then id = fallback or "TMX_TILES" end
+  if id:match("^%d") then id = "TS_" .. id end
+  return id
+end
+
+local function ownTilesetId(S, mapId, tmName)
+  if type(tmName) == "string" and tmName ~= ""
+      and not Generation.dataTilesets(S)[tmName]
+      and not (S.project.tilesets and S.project.tilesets[tmName]
+        and S.project.tilesets[tmName]._layeredGenerated) then
+    return safeTilesetId(tmName, mapId .. "_TILES")
+  end
+  return safeTilesetId(mapId .. "_TILES", "TMX_TILES")
+end
+
 local function layeredSource(S, mapId)
   return S.project and S.project.layeredMaps and S.project.layeredMaps[mapId]
 end
 
-local function blocksFromLayered(source)
-  local w = math.floor((source.cellWidth or 0) / 2)
-  local h = math.floor((source.cellHeight or 0) / 2)
+local function cellsFromLayered(source)
+  local w = source.cellWidth or 0
+  local h = source.cellHeight or 0
   if w < 1 or h < 1 then return nil end
   local layer = source.layers and source.layers[1]
   local cells = layer and layer.cells
   if type(cells) ~= "table" then return nil end
-  local blocks = {}
-  for by = 0, h - 1 do
-    for bx = 0, w - 1 do
-      local index = (by * 2) * source.cellWidth + (bx * 2) + 1
-      local ref = cells[index]
-      local tile = ref and tonumber(ref.tile) or 0
-      blocks[#blocks + 1] = math.floor(tile / 4)
+  local out = {}
+  for y = 0, h - 1 do
+    for x = 0, w - 1 do
+      local ref = cells[y * w + x + 1]
+      out[#out + 1] = ref and tonumber(ref.tile) or 0
     end
   end
-  return blocks, w, h
+  return out, w, h
+end
+
+-- Layered cell refs store runtime tiles as block*4+quadrant. Those GIDs
+-- belong to source.baseTileset, not the compiled *_LAYERED atlas.
+local function layeredRuntimeTileset(source)
+  if not source then return nil end
+  local LayeredMap = require("LayeredMap")
+  local layer = source.layers and source.layers[1]
+  local cells = layer and layer.cells
+  if type(cells) ~= "table" then return source.baseTileset end
+  local tilesetId
+  for _, ref in pairs(cells) do
+    if type(ref) == "table" and ref.source then
+      if not LayeredMap.isRuntimeSource(ref.source) then return nil end
+      tilesetId = tilesetId or LayeredMap.runtimeTilesetId(ref.source)
+    end
+  end
+  return tilesetId or source.baseTileset
 end
 
 local function mapPayload(S, mapId)
   local map = resolveMap(S, mapId)
   if not map then return nil, "unknown map" end
   local source = layeredSource(S, mapId)
-  local blocks, width, height
-  if source then
-    blocks, width, height = blocksFromLayered(source)
+  local runtimeTileset = layeredRuntimeTileset(source)
+  if runtimeTileset then
+    local cells, width, height = cellsFromLayered(source)
+    if cells then
+      return {
+        id = map.id or mapId,
+        map = map,
+        blocks = cells,
+        width = width,
+        height = height,
+        tileset = runtimeTileset,
+        tileSize = 16,
+        source = source,
+      }
+    end
   end
-  if not blocks then
-    blocks = map.blocks
-    width = map.width
-    height = map.height
-  end
-  if type(blocks) ~= "table" or type(width) ~= "number" or type(height) ~= "number" then
+  if type(map.blocks) ~= "table" or type(map.width) ~= "number"
+      or type(map.height) ~= "number" then
     return nil, "map has no block grid"
   end
   return {
     id = map.id or mapId,
     map = map,
-    blocks = blocks,
-    width = width,
-    height = height,
+    blocks = map.blocks,
+    width = map.width,
+    height = map.height,
     tileset = map.tileset,
+    tileSize = 32,
     source = source,
   }
 end
 
+local function imageDataFromBytes(bytes, name)
+  if type(bytes) ~= "string" or bytes == "" then return nil end
+  if not (love and love.image and love.image.newImageData) then return nil end
+  local okFd, fd = pcall(love.filesystem.newFileData, bytes, name or "tiles.png")
+  if not (okFd and fd) then return nil end
+  local ok, data = pcall(love.image.newImageData, fd)
+  return ok and data or nil
+end
+
 local function loadImageData(S, path)
   if type(path) ~= "string" or path == "" then return nil end
+  if love and love.filesystem and love.filesystem.getInfo
+      and love.filesystem.getInfo(path) then
+    local data = imageDataFromBytes(love.filesystem.read(path),
+      path:match("[^/\\]+$"))
+    if data then return data end
+  end
   local okA, Assets = pcall(require, "src.render.Assets")
   if okA and Assets and Assets.imageData then
     local ok, data = pcall(Assets.imageData, path)
     if ok and data then return data end
+  end
+  local okC, CacheFs = pcall(require, "src.import.CacheFs")
+  if okC and CacheFs and CacheFs.readActive then
+    local data = imageDataFromBytes(CacheFs.readActive(path),
+      path:match("[^/\\]+$"))
+    if data then return data end
   end
   local resolved, kind = Preview.resolve(S, path)
   if not resolved or not (love and love.image and love.image.newImageData) then
     return nil
   end
   if kind == "disk" then
-    local bytes = ModIO.readText(resolved)
-    if type(bytes) ~= "string" or bytes == "" then return nil end
-    local okFd, fd = pcall(love.filesystem.newFileData, bytes, "tiles.png")
-    if not (okFd and fd) then return nil end
-    local ok, data = pcall(love.image.newImageData, fd)
-    return ok and data or nil
+    return imageDataFromBytes(ModIO.readText(resolved), "tiles.png")
   end
   local ok, data = pcall(love.image.newImageData, resolved)
   return ok and data or nil
@@ -115,35 +191,107 @@ local function writePng(imageData, path)
   return ModIO.writeText(path, bytes)
 end
 
-local function buildBlockAtlas(S, tileset)
+local function paletteForTile(S, map, tileset, tileId)
+  if Generation.isGen2(S) then
+    local bakeMap = Preview.gen2BakeMap(map, tileset and tileset.id)
+    local bgSet = select(1, Preview.gen2MapBgSet(S, bakeMap))
+    if not bgSet then return nil end
+    local pals = tileset and tileset.tilePalettes
+    if not pals then
+      local vanilla = Generation.dataTilesets(S)[tileset and tileset.id]
+      pals = vanilla and vanilla.tilePalettes
+    end
+    local slot = (pals and pals[(tileId or 0) + 1]) or 1
+    return bgSet[slot]
+  end
+  return Preview.paletteColors(S, Preview.mapPaletteName(S, map))
+end
+
+local function applyShade(r, g, b, a, colors)
+  if not colors or a <= 0 then return r, g, b, a end
+  local shade = math.floor((1 - r) * 3 + 0.5)
+  if shade < 0 then shade = 0 elseif shade > 3 then shade = 3 end
+  local c = colors[shade + 1]
+  if not c then return r, g, b, a end
+  return (c[1] or 0) / 255, (c[2] or 0) / 255, (c[3] or 0) / 255, a
+end
+
+local function blit8(atlas, sheet, dx, dy, sx, sy, colors)
+  local sw, sh = sheet:getWidth(), sheet:getHeight()
+  if sx < 0 or sy < 0 or sx + 8 > sw or sy + 8 > sh then return end
+  for y = 0, 7 do
+    for x = 0, 7 do
+      local r, g, b, a = sheet:getPixel(sx + x, sy + y)
+      r, g, b, a = applyShade(r, g, b, a, colors)
+      atlas:setPixel(dx + x, dy + y, r, g, b, a)
+    end
+  end
+end
+
+local function blitBlock(atlas, sheet, tileset, block, ax, ay, palFn)
+  if type(block) ~= "table" then return end
+  local perRow = tileset.tilesPerRow or 16
+  for i = 0, 15 do
+    local tid = block[i + 1] or 0
+    local sx = (tid % perRow) * 8
+    local sy = math.floor(tid / perRow) * 8
+    blit8(atlas, sheet, ax + (i % 4) * 8, ay + math.floor(i / 4) * 8, sx, sy,
+      palFn and palFn(tid))
+  end
+end
+
+local function blitCell(atlas, sheet, tileset, cellTile, ax, ay, palFn)
+  local blockId = math.floor((cellTile or 0) / 4)
+  local quadrant = (cellTile or 0) % 4
+  local block = tileset.blocks and tileset.blocks[blockId + 1]
+  if type(block) ~= "table" then return end
+  local qx, qy = quadrant % 2, math.floor(quadrant / 2)
+  local perRow = tileset.tilesPerRow or 16
+  for microY = 0, 1 do
+    for microX = 0, 1 do
+      local tid = block[(qy * 2 + microY) * 4 + qx * 2 + microX + 1] or 0
+      blit8(atlas, sheet, ax + microX * 8, ay + microY * 8,
+        (tid % perRow) * 8, math.floor(tid / perRow) * 8,
+        palFn and palFn(tid))
+    end
+  end
+end
+
+local function buildBlockAtlas(S, map, tileset)
   local sheet = loadImageData(S, tileset and tileset.image)
   local blocks = tileset and tileset.blocks
   if not (sheet and type(blocks) == "table" and #blocks > 0) then
     return nil
   end
-  local perRow = tileset.tilesPerRow or 16
   local n = #blocks
   local cols = 16
   local rows = math.max(1, math.ceil(n / cols))
   local atlas = love.image.newImageData(cols * 32, rows * 32)
+  local function palFn(tid) return paletteForTile(S, map, tileset, tid) end
   for bi = 0, n - 1 do
-    local block = blocks[bi + 1]
-    local ax = (bi % cols) * 32
-    local ay = math.floor(bi / cols) * 32
-    if type(block) == "table" then
-      for i = 0, 15 do
-        local tid = block[i + 1] or 0
-        local sx = (tid % perRow) * 8
-        local sy = math.floor(tid / perRow) * 8
-        local dx = ax + (i % 4) * 8
-        local dy = ay + math.floor(i / 4) * 8
-        if atlas.paste then
-          pcall(atlas.paste, atlas, sheet, dx, dy, sx, sy, 8, 8)
-        end
-      end
-    end
+    blitBlock(atlas, sheet, tileset, blocks[bi + 1],
+      (bi % cols) * 32, math.floor(bi / cols) * 32, palFn)
   end
   return atlas, n, cols, cols * 32, rows * 32
+end
+
+-- One Tiled tile = one editor 16x16 cell (block*4+quadrant), matching Map Builder.
+local function buildCellAtlas(S, map, tileset)
+  local sheet = loadImageData(S, tileset and tileset.image)
+  local blocks = tileset and tileset.blocks
+  if not (sheet and type(blocks) == "table" and #blocks > 0) then
+    return nil
+  end
+  local n = #blocks * 4
+  local cols = 16
+  local rows = math.max(1, math.ceil(n / cols))
+  local atlas = love.image.newImageData(cols * 16, rows * 16)
+  local function palFn(tid) return paletteForTile(S, map, tileset, tid) end
+  for tile = 0, n - 1 do
+    blitCell(atlas, sheet, tileset, tile,
+      (tile % cols) * 16, math.floor(tile / cols) * 16, palFn)
+  end
+  return atlas, n, cols, cols * 16, rows * 16
 end
 
 local function csvBlocks(blocks, width, height)
@@ -179,14 +327,27 @@ local function objectXml(kind, obj, id)
   if kind == "warp" then
     prop("destMap", obj.destMap or obj.map)
     prop("destWarp", obj.destWarp or obj.dest or 0, "int")
+    prop("destGroup", obj.destGroup, "int")
+    prop("destMapNum", obj.destMapNum, "int")
   elseif kind == "sign" then
     prop("text", obj.text or obj.script or "")
   else
     prop("sprite", obj.sprite)
-    prop("movement", obj.movement)
+    prop("movement", tonumber(obj.movement) or obj.movement)
     prop("range", obj.range, "int")
     prop("text", obj.text)
     prop("facing", obj.facing or obj.range)
+    prop("name", obj.name)
+    prop("index", obj.index, "int")
+    prop("type", obj.type, "int")
+    prop("scriptKey", obj.scriptKey)
+    if type(obj.hours) == "table" then
+      prop("hours", tostring(obj.hours[1] or -1) .. "," .. tostring(obj.hours[2] or -1))
+    end
+    if type(obj.radius) == "table" then
+      prop("radiusX", obj.radius.x, "int")
+      prop("radiusY", obj.radius.y, "int")
+    end
   end
   return string.format(
     '  <object id="%d" name="%s" type="%s" x="%d" y="%d" width="16" height="16">\n'
@@ -208,18 +369,23 @@ function TmxIO.exportMap(S, mapId, folder)
   if not made then return false, makeErr end
 
   local tileset = resolveTileset(S, payload.tileset) or {}
+  tileset.id = tileset.id or payload.tileset
   local tsName = payload.tileset or "TILESET"
-  local pngName = tsName:lower():gsub("[^a-z0-9_-]", "_") .. "_blocks.png"
-  local atlas, tilecount, columns, imgW, imgH = buildBlockAtlas(S, tileset)
-  if atlas then
-    local okPng, pngErr = writePng(atlas, join(folder, pngName))
-    if not okPng then return false, pngErr end
+  local tileSize = payload.tileSize or 32
+  local pngName = tsName:lower():gsub("[^a-z0-9_-]", "_")
+    .. (tileSize == 16 and "_cells.png" or "_blocks.png")
+  local atlas, tilecount, columns, imgW, imgH
+  if tileSize == 16 then
+    atlas, tilecount, columns, imgW, imgH = buildCellAtlas(S, payload.map, tileset)
   else
-    tilecount = tileset.blocks and #tileset.blocks or 256
-    columns = 16
-    imgW, imgH = 512, math.max(32, math.ceil(tilecount / 16) * 32)
-    pngName = (tileset.image and tileset.image:match("([^/\\]+)$")) or pngName
+    atlas, tilecount, columns, imgW, imgH = buildBlockAtlas(S, payload.map, tileset)
   end
+  if not atlas then
+    return false, "could not build tileset PNG for " .. tostring(tsName)
+      .. " (missing " .. tostring(tileset.image or "tileset image") .. ")"
+  end
+  local okPng, pngErr = writePng(atlas, join(folder, pngName))
+  if not okPng then return false, pngErr end
 
   local map = payload.map
   local objects, nextId = {}, 1
@@ -242,6 +408,7 @@ function TmxIO.exportMap(S, mapId, folder)
     string.format('  <property name="editor" value="gen1recomp"/>'),
     string.format('  <property name="mapId" value="%s"/>', xml(payload.id)),
     string.format('  <property name="tileset" value="%s"/>', xml(tsName)),
+    string.format('  <property name="tileSize" type="int" value="%d"/>', tileSize),
   }
   if type(map.palette) == "string" and map.palette ~= "" then
     props[#props + 1] = string.format(
@@ -261,16 +428,16 @@ function TmxIO.exportMap(S, mapId, folder)
     '<?xml version="1.0" encoding="UTF-8"?>',
     string.format(
       '<map version="1.10" tiledversion="1.10.2" orientation="orthogonal" '
-        .. 'renderorder="right-down" width="%d" height="%d" tilewidth="32" '
-        .. 'tileheight="32" infinite="0" nextlayerid="%d" nextobjectid="%d">',
-      payload.width, payload.height, #objects + 2, nextId),
+        .. 'renderorder="right-down" width="%d" height="%d" tilewidth="%d" '
+        .. 'tileheight="%d" infinite="0" nextlayerid="%d" nextobjectid="%d">',
+      payload.width, payload.height, tileSize, tileSize, #objects + 2, nextId),
     " <properties>",
     table.concat(props, "\n"),
     " </properties>",
     string.format(
-      ' <tileset firstgid="1" name="%s" tilewidth="32" tileheight="32" '
+      ' <tileset firstgid="1" name="%s" tilewidth="%d" tileheight="%d" '
         .. 'tilecount="%d" columns="%d">',
-      xml(tsName), tilecount, columns),
+      xml(tsName), tileSize, tileSize, tilecount, columns),
     string.format(
       '  <image source="%s" width="%d" height="%d"/>',
       xml(pngName), imgW, imgH),
@@ -332,11 +499,26 @@ local function parseObjects(xmlText, kind)
         if pname == "destMap" or pname == "map" then rec.destMap = pval
         elseif pname == "destWarp" or pname == "dest" then
           rec.destWarp = tonumber(pval) or 0
+        elseif pname == "destGroup" then rec.destGroup = tonumber(pval)
+        elseif pname == "destMapNum" then rec.destMapNum = tonumber(pval)
         elseif pname == "text" then rec.text = pval
         elseif pname == "sprite" then rec.sprite = pval
-        elseif pname == "movement" then rec.movement = pval
+        elseif pname == "movement" then rec.movement = tonumber(pval) or pval
         elseif pname == "range" then rec.range = tonumber(pval) or 0
         elseif pname == "facing" then rec.facing = pval
+        elseif pname == "name" then rec.name = pval
+        elseif pname == "index" then rec.index = tonumber(pval)
+        elseif pname == "type" then rec.type = tonumber(pval)
+        elseif pname == "scriptKey" then rec.scriptKey = pval
+        elseif pname == "hours" then
+          local a, b = pval:match("([^,]+),([^,]+)")
+          rec.hours = { tonumber(a) or -1, tonumber(b) or -1 }
+        elseif pname == "radiusX" then
+          rec.radius = rec.radius or {}
+          rec.radius.x = tonumber(pval) or 0
+        elseif pname == "radiusY" then
+          rec.radius = rec.radius or {}
+          rec.radius.y = tonumber(pval) or 0
         end
       end
       out[#out + 1] = rec
@@ -363,6 +545,8 @@ function TmxIO.parse(path)
 
   local firstgid = tonumber(body:match('firstgid="(%d+)"')) or 1
   local tilesetName = body:match('<tileset[^>]-name="([^"]+)"')
+  local imgSrc = body:match('<image%s[^>]*source="([^"]+)"')
+  local imagePath = imgSrc and resolvePath(dirname(path), imgSrc) or nil
   local data = body:match('<layer[^>]-name="blocks".-<data[^>]*>(.-)</data>')
     or body:match("<data%s+encoding=\"csv\"[^>]*>(.-)</data>")
     or body:match("<data[^>]*>(.-)</data>")
@@ -385,6 +569,7 @@ function TmxIO.parse(path)
     tileheight = tileheight,
     props = props,
     tileset = tilesetName,
+    imagePath = imagePath,
     blocks = blocks,
     warps = parseObjects(body, "warp"),
     signs = parseObjects(body, "sign"),
@@ -393,18 +578,150 @@ function TmxIO.parse(path)
   }
 end
 
-local function applyLayeredBlocks(S, mapId, map)
-  local source = layeredSource(S, mapId)
+local function ensureLayered(S, mapId, map, width, height, tilesetId)
+  local LayeredMap = require("LayeredMap")
+  LayeredMap.ensureProject(S.project)
+  if layeredSource(S, mapId) then return layeredSource(S, mapId) end
+  if tilesetId and resolveTileset(S, tilesetId) then
+    pcall(LayeredMap.convertMap, S, mapId)
+    if layeredSource(S, mapId) then return layeredSource(S, mapId) end
+  end
+  local cw = width + (width % 2)
+  local ch = height + (height % 2)
+  local source = {
+    id = mapId,
+    cellWidth = cw,
+    cellHeight = ch,
+    baseTileset = tilesetId,
+    layers = {
+      {
+        id = "ground", name = "Ground", visible = true, export = true,
+        opacity = 1, cells = {},
+      },
+    },
+    collision = {},
+  }
+  S.project.layeredMaps[mapId] = source
+  map._layeredSource = mapId
+  map.width = math.max(1, math.floor(cw / 2))
+  map.height = math.max(1, math.floor(ch / 2))
+  return source
+end
+
+local function loadDiskPng(path)
+  local bytes = ModIO.readText(path)
+  if type(bytes) ~= "string" or bytes == "" then return nil end
+  return imageDataFromBytes(bytes, basename(path))
+end
+
+local function copyPngToMod(S, absPath, destRel)
+  local dest = join(S.path, (destRel:gsub("/", SEP)))
+  local ok, err = ModIO.copyFile(absPath, dest)
+  if not ok then return nil, err end
+  return destRel
+end
+
+local function registerBlockTileset(S, id, rel, img, tilecount, columns)
+  columns = columns or math.max(1, math.floor(img:getWidth() / 32))
+  local sheetCols = math.max(1, math.floor(img:getWidth() / 8))
+  local n = tilecount or (math.floor(img:getWidth() / 32)
+    * math.floor(img:getHeight() / 32))
+  local blocks, walkable = {}, {}
+  for bi = 0, n - 1 do
+    local bx = (bi % columns) * 4
+    local by = math.floor(bi / columns) * 4
+    local block = {}
+    for row = 0, 3 do
+      for col = 0, 3 do
+        local tid = (by + row) * sheetCols + (bx + col)
+        block[row * 4 + col + 1] = tid
+        walkable[tid] = true
+      end
+    end
+    blocks[#blocks + 1] = block
+  end
+  local walkList = {}
+  for tid in pairs(walkable) do walkList[#walkList + 1] = tid end
+  table.sort(walkList)
+  local rec = {
+    id = id,
+    image = rel,
+    tilesPerRow = sheetCols,
+    imageWidth = img:getWidth(),
+    imageHeight = img:getHeight(),
+    blocks = blocks,
+    walkable = walkList,
+    waterTiles = {},
+    warpTiles = {},
+    doorTiles = {},
+    counterTiles = {},
+    animation = "TILEANIM_NONE",
+    trueColor = true,
+    _isNew = true,
+  }
+  S.project.tilesets = S.project.tilesets or {}
+  S.project.tilesets[id] = rec
+  if S.data and S.data.tilesets then S.data.tilesets[id] = rec end
+  if S.data and S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+    S.data.gen2Tilesets[id] = rec
+  end
+  return rec
+end
+
+local function applyLayeredCells(S, mapId, map, cellTiles, width, height,
+    paintSource, tilesetId)
+  local LayeredMap = require("LayeredMap")
+  local source = ensureLayered(S, mapId, map, width, height, tilesetId)
   if not source then return end
-  local tilesetId = source.baseTileset or map.tileset
+  paintSource = paintSource or LayeredMap.runtimeSourceId(tilesetId)
+  if LayeredMap.isRuntimeSource(paintSource) then
+    source.baseTileset = tilesetId
+  end
+  if tilesetId then map.tileset = tilesetId end
+  local cells, collision = {}, {}
+  for y = 0, height - 1 do
+    for x = 0, width - 1 do
+      local index = y * width + x + 1
+      local tile = cellTiles[index] or 0
+      cells[index] = {
+        source = paintSource,
+        tile = tile,
+      }
+      collision[index] = source.collision and source.collision[index] or "walk"
+    end
+  end
+  if source.layers and source.layers[1] then
+    source.layers[1].cells = cells
+  end
+  source.collision = collision
+  source.cellWidth, source.cellHeight = width, height
+  map.width = math.max(1, math.floor(width / 2))
+  map.height = math.max(1, math.floor(height / 2))
+  local blocks = {}
+  for by = 0, map.height - 1 do
+    for bx = 0, map.width - 1 do
+      local tile = cellTiles[(by * 2) * width + (bx * 2) + 1] or 0
+      blocks[#blocks + 1] = math.floor(tile / 4)
+    end
+  end
+  map.blocks = blocks
+end
+
+local function applyLayeredBlocks(S, mapId, map, tilesetId)
+  local LayeredMap = require("LayeredMap")
   local width, height = map.width * 2, map.height * 2
+  local source = ensureLayered(S, mapId, map, width, height, tilesetId)
+  if not source then return end
+  tilesetId = tilesetId or map.tileset or source.baseTileset
+  source.baseTileset = tilesetId
+  map.tileset = tilesetId
   local cells, collision = {}, {}
   for y = 0, height - 1 do
     for x = 0, width - 1 do
       local index = y * width + x + 1
       local block = map.blocks[math.floor(y / 2) * map.width + math.floor(x / 2) + 1] or 0
       cells[index] = {
-        source = require("LayeredMap").runtimeSourceId(tilesetId),
+        source = LayeredMap.runtimeSourceId(tilesetId),
         tile = block * 4 + (y % 2) * 2 + (x % 2),
       }
       collision[index] = source.collision and source.collision[index] or "walk"
@@ -464,23 +781,86 @@ function TmxIO.importFile(S, path, App)
     S.project.maps[mapId] = map
   end
   map.id = mapId
-  map.width = parsed.width
-  map.height = parsed.height
-  map.blocks = parsed.blocks
-  if parsed.tileset and parsed.tileset ~= "" then
-    map.tileset = parsed.tileset
+  local LayeredMap = require("LayeredMap")
+  local fallbackTs = Generation.isGen2(S) and "TILESET_JOHTO" or "OVERWORLD"
+  local paintSource, tilesetId
+  local isCells = parsed.tilewidth == 16 or tonumber(parsed.props.tileSize) == 16
+  if parsed.imagePath then
+    local img = loadDiskPng(parsed.imagePath)
+    if img then
+      local tsId = ownTilesetId(S, mapId, parsed.tileset)
+      if isCells then
+        local pngName = basename(parsed.imagePath)
+        if not tostring(pngName):lower():match("%.png$") then
+          pngName = tsId:lower() .. "_cells.png"
+        end
+        local rel = "assets/mapbuilder/sources/" .. pngName
+        ModIO.ensureDirectory(join(S.path, "assets", "mapbuilder", "sources"))
+        local copied = copyPngToMod(S, parsed.imagePath, rel)
+        if copied then
+          pcall(function() Preview.invalidatePath(copied) end)
+          local src, srcErr = LayeredMap.installTileSource(
+            S.project, tsId, copied, img:getWidth(), img:getHeight())
+          if src then
+            paintSource = src.id
+            tilesetId = map.tileset
+            if not tilesetId or Generation.dataTilesets(S)[tilesetId]
+                or (S.project.tilesets and S.project.tilesets[tilesetId]
+                  and S.project.tilesets[tilesetId]._layeredGenerated) then
+              tilesetId = fallbackTs
+            end
+          else
+            return false, srcErr or "could not install TMX tileset PNG"
+          end
+        end
+      else
+        local rel = "assets/tilesets/" .. tsId:lower() .. ".png"
+        ModIO.ensureDirectory(join(S.path, "assets", "tilesets"))
+        local copied = copyPngToMod(S, parsed.imagePath, rel)
+        if copied then
+          pcall(function() Preview.invalidatePath(copied) end)
+          local cols = math.max(1, math.floor(img:getWidth() / 32))
+          registerBlockTileset(S, tsId, copied, img, nil, cols)
+          tilesetId = tsId
+        end
+      end
+    end
   end
+  if not tilesetId then
+    tilesetId = parsed.tileset
+    if type(tilesetId) ~= "string" or tilesetId == ""
+        or not resolveTileset(S, tilesetId) then
+      tilesetId = map.tileset or fallbackTs
+    end
+  end
+  map.tileset = tilesetId
+  if isCells then
+    applyLayeredCells(S, mapId, map, parsed.blocks, parsed.width, parsed.height,
+      paintSource or LayeredMap.runtimeSourceId(tilesetId), tilesetId)
+  else
+    map.width = parsed.width
+    map.height = parsed.height
+    map.blocks = parsed.blocks
+    applyLayeredBlocks(S, mapId, map, tilesetId)
+  end
+  S.builderSourceId = paintSource or LayeredMap.runtimeSourceId(tilesetId)
+  S.builderLayer = 1
+  S.tilesetEditId = tilesetId
+  S.mapPaletteTileset = tilesetId
   if parsed.props.palette then map.palette = parsed.props.palette end
   if parsed.props.environment then map.environment = parsed.props.environment end
-  if parsed.warps and #parsed.warps > 0 then map.warps = parsed.warps end
+  if parsed.warps and #parsed.warps > 0 then
+    map.warps = parsed.warps
+    require("LayeredMap").syncMapWarps(S, map)
+  end
   if parsed.signs and #parsed.signs > 0 then map.signs = parsed.signs end
   if parsed.objects and #parsed.objects > 0 then map.objects = parsed.objects end
-  applyLayeredBlocks(S, mapId, map)
   if S.data and S.data.maps then S.data.maps[mapId] = map end
   S.mapId = mapId
   S.builderMapId = mapId
   S._mapCenteredFor = nil
   if App and App.markDirty then App.markDirty() end
+  pcall(function() require("LayeredMap").compileProject(S) end)
   pcall(function() require("src.world.MapLoader").invalidate(mapId) end)
   pcall(function()
     local Maps = require("Maps")

@@ -454,6 +454,30 @@ Preview.GEN2_MAP_PALETTES = {
 }
 Preview.GEN2_TOD = { "MORN", "DAY", "NITE", "DARK" }
 
+-- Johto/Kanto overworld sheets are authored against TOWN/ROUTE BG slots.
+-- Baking them with an INDOOR environment (house maps painted with outdoor
+-- tiles) produces the oversaturated grass / pink path look.
+local OUTDOOR_TILESETS = {
+  TILESET_JOHTO = true,
+  TILESET_JOHTO_MODERN = true,
+  TILESET_KANTO = true,
+  TILESET_PARK = true,
+  TILESET_FOREST = true,
+  TILESET_BATTLE_TOWER_OUTSIDE = true,
+}
+local INDOOR_ENV = {
+  INDOOR = true, CAVE = true, DUNGEON = true, GATE = true,
+}
+
+function Preview.gen2BakeMap(map, tilesetId)
+  if type(map) ~= "table" then return map end
+  tilesetId = tilesetId or map.tileset
+  if OUTDOOR_TILESETS[tilesetId] and INDOOR_ENV[map.environment] then
+    return setmetatable({ environment = "TOWN" }, { __index = map })
+  end
+  return map
+end
+
 -- Editor ToD pin for Gold map preview (nil / AUTO = follow map.palette + clock).
 -- TileRenderer may call this without S; Maps syncs S.mapPreviewTod onto
 -- Preview._gen2PreviewTod before MapLoader.load.

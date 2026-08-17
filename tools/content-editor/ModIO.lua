@@ -344,7 +344,7 @@ function ModIO.load(modDir)
     if mainLooksHandWritten(modDir) then
       project._protectMain = true
       return project,
-        "hand-written main.lua detected — Save writes editor_project.lua and leaves main.lua alone"
+        "hand-written main.lua detected — Save writes editor_project.lua + editor_apply.lua and leaves main.lua alone"
     end
     return project, "no editor_project.lua; started empty project (Save regenerates main.lua)"
   end
@@ -381,12 +381,20 @@ function ModIO.save(modDir, project, version)
   local ok, rerr = os.rename(tmp, path)
   if not ok then return false, tostring(rerr) end
 
-  if not keepMain then
-    local main = ModWriter.emitMain(project, ModIO._emitBaseData)
+  -- Generated runtime payload. Hand-written main.lua stays untouched; it should
+  -- load editor_apply.lua so editor edits still reach playtest.
+  local generated = ModWriter.emitMain(project, ModIO._emitBaseData)
+  if keepMain then
+    local applyPath = join(modDir, "editor_apply.lua")
+    local af, aerr = io.open(applyPath, "wb")
+    if not af then return false, aerr end
+    af:write(generated)
+    af:close()
+  else
     local mainPath = join(modDir, "main.lua")
     local mf, merr = io.open(mainPath, "wb")
     if not mf then return false, merr end
-    mf:write(main)
+    mf:write(generated)
     mf:close()
 
     -- Ship Schemas.lua only on Gen1 when trainer party DV/moves/statExp overrides

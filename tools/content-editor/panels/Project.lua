@@ -387,7 +387,7 @@ function Project.draw(S, x, y, w, h, App)
     count(p.pokemon), count(p.items), count(p.maps), count(p.tilesets)),
     x + 20 * s, row + 52 * s, PAL.text)
   Kit.text("micro",
-    "Save writes editor_project.lua + main.lua. MANIFEST / CODE tabs edit files under mods/.",
+    "Save writes editor_project.lua + main.lua (or editor_apply.lua if main.lua is hand-written).",
     x + 20 * s, row + 78 * s, PAL.muted)
   local actionGap = 10 * s
   local actionW = math.floor((w - 40 * s - actionGap) / 2)

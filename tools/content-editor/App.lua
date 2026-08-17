@@ -578,7 +578,8 @@ function App.save()
   if ok then
     S.dirty = false
     if err == "kept-main" then
-      say("Saved " .. S.path .. " (editor_project.lua; left hand-written main.lua)")
+      say("Saved " .. S.path
+        .. " (editor_project.lua + editor_apply.lua; left hand-written main.lua)")
     else
       say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
     end
@@ -702,7 +703,9 @@ function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
-  if anyDirty(S) and not App.save() then return false end
+  -- Hand-written mods need a fresh editor_apply.lua even when the project
+  -- is not marked dirty (first playtest after a Save-format change).
+  if (anyDirty(S) or S.project._protectMain) and not App.save() then return false end
   local id = S.project.id
   -- Older editor saves can already contain the Map Builder transform without
   -- its required filesystem capability.  Repair that manifest before either
@@ -1198,7 +1201,7 @@ function App.draw()
   rbtn("Close", "ghost", function() App.close() end, true,
     "Quit the content editor (Esc)")
   rbtn("Save", "primary", function() App.save() end, true,
-    "Write editor_project.lua + main.lua (Ctrl+S)")
+    "Write editor_project.lua + main.lua (or editor_apply.lua) (Ctrl+S)")
   rbtn("Redo", "ghost", function() App.redo() end, History.canRedo(S),
     "Redo (Ctrl+Y)")
   rbtn("Undo", "ghost", function() App.undo() end, History.canUndo(S),

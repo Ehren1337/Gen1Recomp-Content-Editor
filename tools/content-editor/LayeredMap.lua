@@ -295,7 +295,6 @@ end
 
 local function importMapWarps(S, map)
   local project = ensureProject(S.project)
-  local created = {}
   for index, warp in ipairs(map.warps or {}) do
     local node = nodeAt(project, map.id, warp.x, warp.y)
       or newNode(project, map.id, warp.x, warp.y)
@@ -303,13 +302,19 @@ local function importMapWarps(S, map)
     node.originalIndex = index
     node.targetMap = warp.destMap
     node.targetIndex = warp.destWarp
-    created[index] = node
+    node.destGroup = warp.destGroup
+    node.destMapNum = warp.destMapNum
+    -- External destinations (DAY_CARE, etc.) must not keep a same-map
+    -- targetNode or compile rewrites them into intra-map hops.
+    if warp.destMap and not project.layeredMaps[warp.destMap] then
+      node.targetNode = nil
+    end
   end
 
-  -- Reconnect stable nodes whenever both maps have been converted. External
-  -- destinations retain their original map/index pair until then.
+  -- Reconnect only when the destination is also a layered map.
   for _, node in pairs(project.mapWarpNodes) do
-    if node.targetMap and node.targetIndex then
+    if node.targetMap and node.targetIndex
+        and project.layeredMaps[node.targetMap] then
       for _, candidate in pairs(project.mapWarpNodes) do
         if candidate.map == node.targetMap
             and candidate.originalIndex == node.targetIndex then
@@ -319,6 +324,11 @@ local function importMapWarps(S, map)
       end
     end
   end
+end
+
+function LayeredMap.syncMapWarps(S, map)
+  if not (S and S.project and map) then return end
+  importMapWarps(S, map)
 end
 
 function LayeredMap.convertMap(S, mapId)
@@ -522,6 +532,28 @@ function LayeredMap.addTileSource(project, wantedId, image, width, height)
   return source
 end
 
+-- Reuse a stable id so re-importing a TMX replaces the same source.
+function LayeredMap.installTileSource(project, wantedId, image, width, height)
+  ensureProject(project)
+  width, height = tonumber(width), tonumber(height)
+  if not width or not height or width < 16 or height < 16
+      or width % 16 ~= 0 or height % 16 ~= 0 then
+    return nil, "tileset PNG dimensions must be multiples of 16 pixels"
+  end
+  local id = cleanId(wantedId, "CUSTOM_TILES")
+  local source = project.mapTileSources[id] or {
+    id = id, name = id, animations = {},
+  }
+  source.image = image
+  source.tileWidth = 16
+  source.tileHeight = 16
+  source.columns = width / 16
+  source.count = (width / 16) * (height / 16)
+  source.colorMode = "true_color"
+  project.mapTileSources[id] = source
+  return source
+end
+
 function LayeredMap.sourceDescriptor(S, sourceId)
   if LayeredMap.isRuntimeSource(sourceId) then
     local tilesetId = LayeredMap.runtimeTilesetId(sourceId)
@@ -552,6 +584,13 @@ function LayeredMap.sourceIds(S, mapId)
   end
   local mapSource = S.project and S.project.layeredMaps
     and S.project.layeredMaps[mapId]
+  if mapSource and mapSource.layers then
+    for _, layer in ipairs(mapSource.layers) do
+      for _, ref in pairs(layer.cells or {}) do
+        if type(ref) == "table" then add(ref.source) end
+      end
+    end
+  end
   if mapSource and mapSource.baseTileset then
     add(LayeredMap.runtimeSourceId(mapSource.baseTileset))
   end
@@ -772,6 +811,26 @@ local function runtimeMicroTile(tileset, cellTile, micro)
   return block[(qy * 2 + my) * 4 + qx * 2 + mx + 1]
 end
 
+-- Gold: 4 GBC shades for one 8x8 in a runtime tileset, using the map's BG set.
+local function gbcMicroPalette(S, map, source, cellTile, micro)
+  if not (source and source.runtimeTileset) then return nil end
+  if source.colorMode == "true_color" then return nil end
+  local Generation = require("Generation")
+  if not Generation.isGen2(S) then return nil end
+  local bakeMap = Preview.gen2BakeMap(map, source.runtimeTileset)
+  local bgSet = select(1, Preview.gen2MapBgSet(S, bakeMap))
+  if not bgSet then return nil end
+  local microTile = runtimeMicroTile(source.tileset, cellTile, micro)
+  if microTile == nil then return nil end
+  local pals = source.tileset and source.tileset.tilePalettes
+  if not pals then
+    local vanilla = Generation.dataTilesets(S)[source.runtimeTileset]
+    pals = vanilla and vanilla.tilePalettes
+  end
+  local slot = (pals and pals[microTile + 1]) or 1
+  return bgSet[slot]
+end
+
 local function animationFor(source, tile)
   if source.runtimeTileset then return nil end
   return source.animations and source.animations[tile]
@@ -859,8 +918,12 @@ local function transformSpec(context, refs, micro, animatedIndex, frameTile,
     else
       layer.pixels = embeddedMicro(context, source, tile, micro)
     end
-    if paletteColors and source.colorMode ~= "true_color" then
-      layer.palette = paletteColors
+    local pal = paletteColors
+    if not pal then
+      pal = gbcMicroPalette(context.S, context.map, source, tile, micro)
+    end
+    if pal and source.colorMode ~= "true_color" then
+      layer.palette = pal
     end
     layers[#layers + 1] = layer
   end
@@ -1090,7 +1153,10 @@ local function warpPlan(project)
     for index, node in ipairs(nodes) do
       local target = node.targetNode and project.mapWarpNodes[node.targetNode]
       local destMap, destWarp
-      if target then
+      if node.targetMap and node.targetMap ~= mapId then
+        destMap = node.targetMap
+        destWarp = node.targetIndex
+      elseif target then
         destMap = target.map
         destWarp = indexByNode[target.id] or target.originalIndex
       else
@@ -1103,6 +1169,8 @@ local function warpPlan(project)
       records[mapId][index] = {
         x = node.x, y = node.y,
         destMap = destMap, destWarp = destWarp,
+        destGroup = node.destGroup,
+        destMapNum = node.destMapNum,
       }
     end
   end
@@ -1254,15 +1322,20 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
 
   local tilesetId = generatedTilesetId(project, mapId)
   local previousTileset = project.tilesets[tilesetId]
+  context.map = map
   -- GFX/Tilesets is allowed to force a generated atlas to TrueColor. Preserve
   -- that authored override across recompiles instead of replacing it with the
   -- color modes inferred from the painted sources.
+  -- Gold layered maps bake GBC shades into the atlas so playtest matches the
+  -- editor (the game will not remap a generated unique-tile sheet correctly).
+  local gen2 = require("Generation").isGen2(S)
   local trueColor = usesTrueColor(context, mapSource)
-    or (previousTileset and previousTileset.trueColor) or false
+    or (previousTileset and previousTileset.trueColor) or gen2 or false
   local paletteColors, paletteName = paletteForMap(S, map, mapSource)
   -- Mixed atlases are emitted as true color, so palette-mode layers must be
   -- baked. Fully palette-mode atlases keep grayscale pixels for runtime remap.
-  if not trueColor then paletteColors = nil end
+  -- Gen2 uses per-8x8 GBC palettes in transformSpec instead of one SGB set.
+  if gen2 or not trueColor then paletteColors = nil end
   local tiles, tileIds = {}, {}
   local cells = {}
   local animatedTiles = {}
@@ -1372,8 +1445,11 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
   local COLL = {
     solid = 0x07, walk = 0x00, grass = 0x18, water = 0x21, shore = 0x23,
   }
+  -- Gold only takes a warp if the cell's COLL_* is a warp kind (door, carpet,
+  -- stairs). Gen 1 uses warpTiles on the 8x8 sheet; that list is not enough.
+  local COLL_DOOR = 0x71
   local function addBlock(block, quad)
-    local key = table.concat(block, ",")
+    local key = table.concat(block, ",") .. ":" .. table.concat(quad, ",")
     local id = blockIds[key]
     if id ~= nil then return id end
     id = #blocks
@@ -1394,7 +1470,11 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
           local microIds = cells[index]
           local mode = (mapSource.collision and mapSource.collision[index])
             or "solid"
-          quad[cellY * 2 + cellX + 1] = COLL[mode] or 0x07
+          local collByte = COLL[mode] or 0x07
+          if activeWarpCells and activeWarpCells[index] then
+            collByte = COLL_DOOR
+          end
+          quad[cellY * 2 + cellX + 1] = collByte
           for microY = 0, 1 do
             for microX = 0, 1 do
               block[(cellY * 2 + microY) * 4
