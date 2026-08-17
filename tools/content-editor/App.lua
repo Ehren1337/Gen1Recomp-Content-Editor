@@ -12,6 +12,7 @@ local State = require("State")
 local ModIO = require("ModIO")
 local History = require("History")
 local DataSource = require("DataSource")
+local PlaytestPaths = require("PlaytestPaths")
 local LuaJitTool = require("LuaJitTool")
 local GameVersion = require("src.core.GameVersion")
 local PAL = Theme.PAL
@@ -576,7 +577,11 @@ function App.save()
   ModIO._emitBaseData = nil
   if ok then
     S.dirty = false
-    say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
+    if err == "kept-main" then
+      say("Saved " .. S.path .. " (editor_project.lua; left hand-written main.lua)")
+    else
+      say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
+    end
     return true
   else
     say("Save failed: " .. tostring(err))
@@ -764,14 +769,15 @@ function App.playtestMod()
   local cmd
   if sep == "\\" then
     if fused then
-      cmd = string.format('start "" "%s" --game=%s', loveExe, version)
+      cmd = string.format('start "" /D "%s" "%s" --game=%s',
+        recomp, loveExe, version)
     else
-      cmd = string.format('start "" "%s" "%s" --game=%s',
-        loveExe, recomp, version)
+      cmd = PlaytestPaths.windowsLaunch(loveExe, recomp, version)
     end
   else
     if fused then
-      cmd = string.format('"%s" --game=%s &', loveExe, version)
+      cmd = string.format('cd "%s" && "%s" --game=%s &',
+        recomp, loveExe, version)
     else
       cmd = string.format('"%s" "%s" --game=%s &',
         loveExe, recomp, version)

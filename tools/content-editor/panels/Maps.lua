@@ -1933,12 +1933,22 @@ local function mapUsesTrueColor(S, mapDef)
   return ts and ts.trueColor and true or false
 end
 
--- Palette id for SGB remap, or nil when TrueColor / Gold bake (skip remap).
+-- Palette id for SGB remap, or nil when the sheet is already RGB / Gold bake.
+-- Map-level TrueColor alone must not skip remap: ROM and layered grayscale
+-- atlases stay 2bpp, so skipping the shader is what turned edited maps grey.
 local function mapPreviewPalette(S, mapDef)
   mapDef = mapDef or resolveMapDef(S, S.mapId)
-  if mapUsesTrueColor(S, mapDef) then return nil end
   -- Gold atlases are baked true-color via tilePalettes × EnvironmentColors.
   if Generation.isGen2(S) then return nil end
+  local ts = mapDef and tilesetDef(S, mapDef.tileset)
+  if ts and ts.trueColor then
+    if not ts._layeredGenerated then return nil end
+    -- Compiled true-color atlases are baked RGB once the derived PNG exists.
+    if type(ts.image) == "string" and love.filesystem
+        and love.filesystem.getInfo and love.filesystem.getInfo(ts.image) then
+      return nil
+    end
+  end
   return mapPaletteName(S, mapDef)
 end
 
@@ -2797,6 +2807,8 @@ end
 
 prepareLiveMap = function(S, mapId, def)
   if not (S.data and mapId and def) then return end
+  S.data.tilesets = S.data.tilesets or {}
+  S.data.maps = S.data.maps or {}
   for tid, ts in pairs(S.project.tilesets or {}) do
     -- Keep a pristine ROM copy before project tilesets overwrite live data
     -- (needed so Save can diff terrain flags without dumping water anims).
@@ -2910,6 +2922,23 @@ function Maps.loadEditorMap(S, mapId)
     end
     return true, map
   end
+  if S.data and def and def.tileset then
+    S.data.tilesets = S.data.tilesets or {}
+    if not S.data.tilesets[def.tileset] then
+      local liveTs = tilesetDef(S, def.tileset)
+      if liveTs then
+        if S.project and S.project.tilesets
+            and S.project.tilesets[def.tileset] then
+          liveTs = liveTilesetForEditor(S, liveTs)
+        end
+        S.data.tilesets[def.tileset] = liveTs
+        if S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+          S.data.gen2Tilesets[def.tileset] = liveTs
+        end
+      end
+    end
+  end
+  pcall(function() require("LayeredMap").ensureEditorAtlas(S, mapId) end)
   return pcall(MapLoader.load, S.data, mapId)
 end
 

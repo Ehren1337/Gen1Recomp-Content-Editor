@@ -344,7 +344,7 @@ function ModIO.load(modDir)
     if mainLooksHandWritten(modDir) then
       project._protectMain = true
       return project,
-        "hand-written main.lua detected — Save will NOT overwrite it (use a new mod id for the content editor)"
+        "hand-written main.lua detected — Save writes editor_project.lua and leaves main.lua alone"
     end
     return project, "no editor_project.lua; started empty project (Save regenerates main.lua)"
   end
@@ -360,16 +360,14 @@ function ModIO.load(modDir)
 end
 
 function ModIO.save(modDir, project, version)
-  if project._protectMain then
-    return false,
-      "this mod has a hand-written main.lua (e.g. example_mew_starter); "
-      .. "create a new mod id instead of overwriting it"
-  end
-
   -- Persist trainer_headers seeded from map trainer objects / special battles.
   ModWriter.ensureTrainerHeaders(project)
   -- Drop flag-name typing partials before writing editor_project / main.lua.
   State.rebuildEventFlags(project)
+
+  local keepMain = project._protectMain == true
+    or mainLooksHandWritten(modDir)
+  if keepMain then project._protectMain = true end
 
   local body = ModWriter.serializeProject(project)
   local path = ModIO.projectPath(modDir)
@@ -383,22 +381,24 @@ function ModIO.save(modDir, project, version)
   local ok, rerr = os.rename(tmp, path)
   if not ok then return false, tostring(rerr) end
 
-  local main = ModWriter.emitMain(project, ModIO._emitBaseData)
-  local mainPath = join(modDir, "main.lua")
-  local mf, merr = io.open(mainPath, "wb")
-  if not mf then return false, merr end
-  mf:write(main)
-  mf:close()
+  if not keepMain then
+    local main = ModWriter.emitMain(project, ModIO._emitBaseData)
+    local mainPath = join(modDir, "main.lua")
+    local mf, merr = io.open(mainPath, "wb")
+    if not mf then return false, merr end
+    mf:write(main)
+    mf:close()
 
-  -- Ship Schemas.lua only on Gen1 when trainer party DV/moves/statExp overrides
-  -- exist (main.lua only loads it when not gen2).
-  local schemasPath = join(modDir, "Schemas.lua")
-  local Generation = require("Generation")
-  if (not Generation.isGen2(nil)) and ModWriter.trainerPartyHasOverrides(project) then
-    local okS, errS = ModIO.writeText(schemasPath, ModWriter.trainerPartySchemasLua())
-    if not okS then return false, errS end
-  elseif ModIO.exists(schemasPath) then
-    os.remove(schemasPath)
+    -- Ship Schemas.lua only on Gen1 when trainer party DV/moves/statExp overrides
+    -- exist (main.lua only loads it when not gen2).
+    local schemasPath = join(modDir, "Schemas.lua")
+    local Generation = require("Generation")
+    if (not Generation.isGen2(nil)) and ModWriter.trainerPartyHasOverrides(project) then
+      local okS, errS = ModIO.writeText(schemasPath, ModWriter.trainerPartySchemasLua())
+      if not okS then return false, errS end
+    elseif ModIO.exists(schemasPath) then
+      os.remove(schemasPath)
+    end
   end
 
   -- Keep the generated display name aligned with the project. Compatibility
@@ -419,6 +419,7 @@ function ModIO.save(modDir, project, version)
       mw:close()
     end
   end
+  if keepMain then return true, "kept-main" end
   return true
 end
 

@@ -889,6 +889,87 @@ local function addTransformOutput(context, relative, width, height, placements)
   }
 end
 
+local function sampleTransformLayer(layer, baseImages, pixelsById, x, y)
+  local r, g, b, a = 0, 0, 0, 0
+  if layer.base then
+    local image = baseImages[layer.base]
+    if not image then return 0, 0, 0, 0 end
+    local columns = layer.columns or 16
+    local sx = (layer.tile % columns) * 8 + x
+    local sy = math.floor(layer.tile / columns) * 8 + y
+    if sx < 0 or sy < 0 or sx >= image:getWidth() or sy >= image:getHeight() then
+      return 0, 0, 0, 0
+    end
+    r, g, b, a = image:getPixel(sx, sy)
+  else
+    local raw = pixelsById[layer.pixels]
+    if type(raw) ~= "string" then return 0, 0, 0, 0 end
+    local offset = (y * 8 + x) * 4 + 1
+    local rb, gb, bb, ab = string.byte(raw, offset, offset + 3)
+    if not rb then return 0, 0, 0, 0 end
+    r, g, b, a = rb / 255, gb / 255, bb / 255, (ab or 0) / 255
+  end
+  if layer.palette and a > 0 then
+    local light = (r + g + b) / 3
+    local color = light > 0.83 and layer.palette[1]
+      or light > 0.5 and layer.palette[2]
+      or light > 0.17 and layer.palette[3] or layer.palette[4]
+    if color then
+      r, g, b = color[1] / 255, color[2] / 255, color[3] / 255
+    end
+  end
+  return r, g, b, a * (layer.opacity or 1)
+end
+
+-- Write compiled mapbuilder atlases into the editor save directory so
+-- MapLoader / TileRenderer can preview them before the game transform runs.
+local function writeEditorDerivedImages(context)
+  if not (love and love.image and love.image.newImageData
+      and love.filesystem and love.filesystem.createDirectory) then
+    return
+  end
+  local project = context.project
+  if not project then return end
+  local pixelsById = {}
+  for _, entry in ipairs(context.pixels or {}) do
+    if entry.id and entry.bytes then pixelsById[entry.id] = entry.bytes end
+  end
+  local baseImages = {}
+  for relative in pairs(context.bases or {}) do
+    local ok, image = pcall(readImageData, context.S,
+      "assets/generated/" .. relative)
+    if ok and image then baseImages[relative] = image end
+  end
+  for _, output in pairs(context.outputs or {}) do
+    local image = love.image.newImageData(output.width, output.height)
+    for _, placement in ipairs(output.placements or {}) do
+      for y = 0, 7 do
+        for x = 0, 7 do
+          local outR, outG, outB, outA = 0, 0, 0, 0
+          local premulR, premulG, premulB = 0, 0, 0
+          for _, layer in ipairs(placement.layers or {}) do
+            local r, g, b, a = sampleTransformLayer(
+              layer, baseImages, pixelsById, x, y)
+            premulR = r * a + premulR * (1 - a)
+            premulG = g * a + premulG * (1 - a)
+            premulB = b * a + premulB * (1 - a)
+            outA = a + outA * (1 - a)
+          end
+          if outA > 0 then
+            outR, outG, outB = premulR / outA, premulG / outA, premulB / outA
+          end
+          image:setPixel(placement.x + x, placement.y + y,
+            outR, outG, outB, outA)
+        end
+      end
+    end
+    local dest = "save/mod-derived/" .. tostring(project.id) .. "/" .. output.path
+    local dir = dest:match("^(.*)/[^/]+$")
+    if dir then love.filesystem.createDirectory(dir) end
+    pcall(function() image:encode("png", dest) end)
+  end
+end
+
 local function cellRefs(context, mapSource, index)
   local refs = {}
   for _, layer in ipairs(mapSource.layers or {}) do
@@ -1415,6 +1496,8 @@ function LayeredMap.compileProject(S)
     if not ok then return false, err end
     compiled = compiled + 1
     if S.data then
+      S.data.maps = S.data.maps or {}
+      S.data.tilesets = S.data.tilesets or {}
       S.data.maps[mapId] = project.maps[mapId]
       local tilesetId = project.maps[mapId].tileset
       S.data.tilesets[tilesetId] = project.tilesets[tilesetId]
@@ -1432,7 +1515,11 @@ function LayeredMap.compileProject(S)
   if S.manifestDraft and S.browseModId == project.id then
     S.manifestDraft.assets_transforms = project.layeredTransform
   end
+  -- The transform writes derived PNGs on game load. The editor world view
+  -- uses MapLoader now, so bake the same atlases into the LÖVE save dir.
+  writeEditorDerivedImages(context)
   pcall(function() require("src.world.MapLoader").invalidateAll() end)
+  pcall(function() require("src.render.TileRenderer").invalidate() end)
   if S._g2MapBaker then
     local okP, MapPreview = pcall(require, "src.world.gen2.MapPreview")
     if okP and MapPreview and MapPreview.invalidate then
@@ -1441,6 +1528,26 @@ function LayeredMap.compileProject(S)
   end
   Preview.invalidate()
   return true, string.format("compiled %d layered map(s)", compiled)
+end
+
+-- Rebuild missing save/mod-derived atlases so MapLoader can preview a map
+-- that was compiled on a previous save (the game transform has not run).
+function LayeredMap.ensureEditorAtlas(S, mapId)
+  if not (S and S.project and S.path and mapId) then return end
+  if not (love and love.filesystem and love.filesystem.getInfo) then return end
+  local map = S.project.maps and S.project.maps[mapId]
+  local ts = map and S.project.tilesets and S.project.tilesets[map.tileset]
+  if not (ts and ts._layeredGenerated and type(ts.image) == "string") then
+    return
+  end
+  if love.filesystem.getInfo(ts.image) then return end
+  if S._editorAtlasBaking then return end
+  S._editorAtlasBake = S._editorAtlasBake or {}
+  if S._editorAtlasBake[ts.image] then return end
+  S._editorAtlasBake[ts.image] = true
+  S._editorAtlasBaking = true
+  pcall(LayeredMap.compileProject, S)
+  S._editorAtlasBaking = nil
 end
 
 LayeredMap.deepCopy = deepCopy

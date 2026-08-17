@@ -40,9 +40,11 @@ end
 function PlaytestPaths.windowsLaunch(loveExe, runtimeSource, workDir, version)
   local source = runtimeSource
   if version == nil then
-    version, workDir, source = workDir, runtimeSource, "."
+    version, workDir, source = workDir, runtimeSource, runtimeSource
   end
-  return string.format('cd /d "%s" && start "" "%s" "%s" --game=%s',
+  -- /D keeps cwd on the game folder. start otherwise resets cwd to love.exe's
+  -- directory, so "." becomes the editor's love/ folder (No code to run).
+  return string.format('start "" /D "%s" "%s" "%s" --game=%s',
     workDir, loveExe, source, version)
 end
 

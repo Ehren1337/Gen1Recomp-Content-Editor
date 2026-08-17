@@ -125,8 +125,12 @@ local function cloneNumList(v)
 end
 
 local function syncTilesetLive(S, id, ts)
-  if S.data and S.data.tilesets then
+  if S.data then
+    S.data.tilesets = S.data.tilesets or {}
     S.data.tilesets[id] = ts
+    if S.data.gen2Tilesets and S.data.gen2Tilesets ~= S.data.tilesets then
+      S.data.gen2Tilesets[id] = ts
+    end
   end
   MapLoader.invalidateAll()
 end
@@ -1418,7 +1422,8 @@ function Gfx.draw(S, x, y, w, h, App)
 
   -- tilesets (full editor: image, flags, blocks)
   local proj = S.project.tilesets
-  local data = (S.data and S.data.tilesets) or {}
+  -- Gold keeps records on gen2Tilesets; overlay so the list is not empty.
+  local data = Generation.dataTilesets(S)
   local ids = {}
   do
     local merged = RegList.mergeIds(proj, data)
