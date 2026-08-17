@@ -1,8 +1,8 @@
--- Resolve LuaJIT for modkit validate (Windows / Linux).
+-- Resolve LuaJIT for modkit validate (Windows / macOS / Linux).
 --
 -- Do NOT download luajit.exe into the LÖVE save directory: Windows Defender
 -- flags that as Behavior:Win32/SuspLua.A. On Windows we install via winget
--- into Program Files; on Linux we use PATH or apt when available.
+-- into Program Files; on macOS Homebrew; on Linux PATH or apt when available.
 
 local LuaJitTool = {}
 local ProcessRunner = require("ProcessRunner")
@@ -16,6 +16,11 @@ local function isWindows()
   if osName == "Windows" then return true end
   if osName == "Linux" or osName == "OS X" then return false end
   return sep() == "\\"
+end
+
+local function isMac()
+  local osName = love and love.system and love.system.getOS and love.system.getOS()
+  return osName == "OS X"
 end
 
 local function isLinux()
@@ -101,14 +106,20 @@ local function whichOnPath()
   return nil
 end
 
--- LÖVE AppImages / wrappers set LD_LIBRARY_PATH to their bundled libs.
--- Spawning system /usr/bin/luajit with that path loads the wrong
+-- LÖVE AppImages / love.app set LD_LIBRARY_PATH / DYLD_LIBRARY_PATH to
+-- their bundled libs. Spawning system luajit with that path loads the wrong
 -- libluajit (undefined symbol luaJIT_version_2_1_…). Clear it unless we
 -- intentionally point at a private libDir. Prefer `unset` over `env -u`
 -- so BusyBox /dash still work.
-local function linuxLuaJitEnvPrefix(libDir)
+local function unixLuaJitEnvPrefix(libDir)
   if libDir and libDir ~= "" then
+    if isMac() then
+      return string.format('DYLD_LIBRARY_PATH="%s" ', libDir)
+    end
     return string.format('LD_LIBRARY_PATH="%s" ', libDir)
+  end
+  if isMac() then
+    return "unset DYLD_LIBRARY_PATH DYLD_INSERT_LIBRARIES; "
   end
   return "unset LD_LIBRARY_PATH; "
 end
@@ -124,11 +135,18 @@ local function works(exe, libDir)
     cmd = string.format('"%s" -joff -e "print(1)"', exe)
   else
     cmd = string.format('%s"%s" -joff -e "print(1)"',
-      linuxLuaJitEnvPrefix(libDir), exe)
+      unixLuaJitEnvPrefix(libDir), exe)
   end
   local ok, out = runShell(cmd)
   if (out or ""):find("1", 1, true) then return true end
   return false
+end
+
+local function windowsPath(path)
+  if isWindows() and path then
+    return path:gsub("/", "\\")
+  end
+  return path
 end
 
 local function parentDir(path)
@@ -154,8 +172,11 @@ end
 local function siblingLibDir(exe)
   local dir = parentDir(exe)
   if not dir then return nil end
-  if fileExists(dir .. sep() .. "libluajit-5.1.so.2")
-      or fileExists(dir .. sep() .. "libluajit-5.1.so") then
+  local s = sep()
+  if fileExists(dir .. s .. "libluajit-5.1.so.2")
+      or fileExists(dir .. s .. "libluajit-5.1.so")
+      or fileExists(dir .. s .. "libluajit-5.1.dylib")
+      or fileExists(dir .. s .. "libluajit-5.1.2.dylib") then
     return dir
   end
   return nil
@@ -232,14 +253,42 @@ local function linuxCandidates()
   return rows
 end
 
+-- Homebrew (Apple Silicon + Intel) and MacPorts. Finder-launched LÖVE does
+-- not inherit a login PATH, so these must be explicit — not only `command -v`.
+local function macCandidates()
+  local s = sep()
+  local rows, seen = {}, {}
+  local function add(exe, libDir)
+    if not exe or exe == "" or seen[exe] then return end
+    seen[exe] = true
+    rows[#rows + 1] = { exe, libDir or siblingLibDir(exe) }
+  end
+  for _, root in ipairs(searchRoots()) do
+    add(root .. s .. "tools" .. s .. "tooling" .. s .. "luajit"
+      .. s .. "macos-universal" .. s .. "luajit")
+    add(root .. s .. "tools" .. s .. "tooling" .. s .. "luajit"
+      .. s .. "macos" .. s .. "luajit")
+  end
+  add("/opt/homebrew/bin/luajit")
+  add("/opt/homebrew/opt/luajit/bin/luajit")
+  add("/usr/local/bin/luajit")
+  add("/usr/local/opt/luajit/bin/luajit")
+  add("/opt/local/bin/luajit")
+  local home = os.getenv("HOME") or ""
+  if home ~= "" then
+    add(home .. "/.local/bin/luajit")
+  end
+  return rows
+end
+
 --- @return string|nil path, string|nil libDir
 function LuaJitTool.find()
   scrubLegacyAppDataLuaJit()
 
   local env = os.getenv("MODKIT_LUAJIT")
   if env and env ~= "" and fileExists(env) and not isBadLuaJitPath(env) then
-    local lib = isLinux() and siblingLibDir(env) or nil
-    if works(env, lib) then return env, lib end
+    local lib = (isLinux() or isMac()) and siblingLibDir(env) or nil
+    if works(env, lib) then return windowsPath(env), lib end
   end
 
   -- On Windows prefer winget / Program Files before PATH: a source checkout
@@ -247,13 +296,25 @@ function LuaJitTool.find()
   if isWindows() then
     for _, p in ipairs(windowsCandidates()) do
       if fileExists(p) and not isBadLuaJitPath(p) and works(p, nil) then
-        return p, nil
+        return windowsPath(p), nil
       end
     end
   end
 
   if isLinux() then
     for _, row in ipairs(linuxCandidates()) do
+      local p, lib = row[1], row[2]
+      if fileExists(p) and not isBadLuaJitPath(p) then
+        if p:find("/tooling/luajit/", 1, true) then
+          runShell(string.format('chmod +x "%s" 2>/dev/null || true', p))
+        end
+        if works(p, lib) then return windowsPath(p), lib end
+      end
+    end
+  end
+
+  if isMac() then
+    for _, row in ipairs(macCandidates()) do
       local p, lib = row[1], row[2]
       if fileExists(p) and not isBadLuaJitPath(p) then
         if p:find("/tooling/luajit/", 1, true) then
@@ -266,8 +327,8 @@ function LuaJitTool.find()
 
   local onPath = whichOnPath()
   if onPath then
-    local lib = isLinux() and siblingLibDir(onPath) or nil
-    if works(onPath, lib) then return onPath, lib end
+    local lib = (isLinux() or isMac()) and siblingLibDir(onPath) or nil
+    if works(onPath, lib) then return windowsPath(onPath), lib end
   end
 
   return nil, nil
@@ -318,6 +379,29 @@ local function installLinuxApt()
     "install LuaJIT (e.g. sudo apt install luajit) or set MODKIT_LUAJIT"
 end
 
+local function installMacBrew()
+  local cmds = {}
+  for _, brew in ipairs({ "/opt/homebrew/bin/brew", "/usr/local/bin/brew" }) do
+    if fileExists(brew) then
+      cmds[#cmds + 1] = string.format('"%s" install luajit', brew)
+    end
+  end
+  cmds[#cmds + 1] = "brew install luajit"
+  for _, cmd in ipairs(cmds) do
+    local ok = runShell(cmd)
+    if ok then
+      for _, row in ipairs(macCandidates()) do
+        local p, lib = row[1], row[2]
+        if fileExists(p) then return p, lib end
+      end
+      local p = whichOnPath()
+      if p then return p, siblingLibDir(p) end
+    end
+  end
+  return nil,
+    "install LuaJIT (brew install luajit) or set MODKIT_LUAJIT"
+end
+
 --- Find LuaJIT or install via the OS package manager.
 --- @return string|nil path, string|nil libDir, string|nil err, boolean installed
 function LuaJitTool.ensure()
@@ -344,8 +428,18 @@ function LuaJitTool.ensure()
       false
   end
 
+  if isMac() then
+    local exe, err = installMacBrew()
+    local lib = exe and siblingLibDir(exe) or nil
+    if exe and works(exe, lib) then return exe, lib, nil, true end
+    return nil, nil,
+      (err or "LuaJIT missing")
+        .. " — brew install luajit (or set MODKIT_LUAJIT to a working binary)",
+      false
+  end
+
   return nil, nil,
-    "Install luajit or set MODKIT_LUAJIT (auto-install supports Windows/Linux)",
+    "Install luajit or set MODKIT_LUAJIT (auto-install supports Windows/macOS/Linux)",
     false
 end
 
@@ -376,14 +470,8 @@ function LuaJitTool.wrapCommand(innerCmd, luajitPath, libDir, extraEnv)
   local sh = tools .. sep() .. "run_validate.sh"
   local f = io.open(sh, "wb")
   if not f then
-    local exports
-    if libDir and libDir ~= "" then
-      exports = string.format('LD_LIBRARY_PATH="%s" MODKIT_LUAJIT="%s"',
-        libDir, luajitPath)
-    else
-      exports = string.format('unset LD_LIBRARY_PATH; MODKIT_LUAJIT="%s"',
-        luajitPath)
-    end
+    local exports = unixLuaJitEnvPrefix(libDir)
+      .. string.format('MODKIT_LUAJIT="%s"', luajitPath)
     for k, v in pairs(extraEnv) do
       if k and v and v ~= "" then
         exports = exports .. string.format(' %s="%s"', k, v)
@@ -393,11 +481,16 @@ function LuaJitTool.wrapCommand(innerCmd, luajitPath, libDir, extraEnv)
   end
   f:write("#!/bin/sh\n")
   f:write(string.format('export MODKIT_LUAJIT="%s"\n', luajitPath))
-  -- Drop LÖVE AppImage library path so system luajit loads its own .so.
+  -- Drop LÖVE AppImage / love.app library path so system luajit loads its own.
+  f:write("unset LD_LIBRARY_PATH\n")
+  f:write("unset DYLD_LIBRARY_PATH\n")
+  f:write("unset DYLD_INSERT_LIBRARIES\n")
   if libDir and libDir ~= "" then
-    f:write(string.format('export LD_LIBRARY_PATH="%s"\n', libDir))
-  else
-    f:write("unset LD_LIBRARY_PATH\n")
+    if isMac() then
+      f:write(string.format('export DYLD_LIBRARY_PATH="%s"\n', libDir))
+    else
+      f:write(string.format('export LD_LIBRARY_PATH="%s"\n', libDir))
+    end
   end
   for k, v in pairs(extraEnv) do
     if k and v and v ~= "" then
@@ -412,6 +505,7 @@ end
 
 function LuaJitTool.platformLabel()
   if isWindows() then return "Windows" end
+  if isMac() then return "macOS" end
   if isLinux() then return "Linux" end
   local osName = love and love.system and love.system.getOS and love.system.getOS()
   return osName or "unknown"

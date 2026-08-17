@@ -50,7 +50,10 @@ MODKIT_VERSION = "1.0.0"
 
 def luajit_exe():
     """Resolve LuaJIT at call time so editor-provided overrides take effect."""
-    return os.environ.get("MODKIT_LUAJIT") or os.environ.get("LUA") or "luajit"
+    raw = os.environ.get("MODKIT_LUAJIT") or os.environ.get("LUA") or "luajit"
+    if raw not in ("luajit", "lua") and os.path.dirname(raw):
+        return os.path.normpath(raw)
+    return raw
 
 
 def luajit_cmd(*args):
@@ -59,9 +62,16 @@ def luajit_cmd(*args):
 
 
 def luajit_env():
-    """Remove AppImage library overrides before invoking system LuaJIT."""
+    """Remove AppImage / love.app library overrides before invoking LuaJIT."""
     env = os.environ.copy()
     env.pop("LD_LIBRARY_PATH", None)
+    env.pop("DYLD_LIBRARY_PATH", None)
+    env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+    env.pop("DYLD_INSERT_LIBRARIES", None)
+    exe = luajit_exe()
+    folder = os.path.dirname(exe)
+    if folder:
+        env["PATH"] = folder + os.pathsep + env.get("PATH", "")
     return env
 
 
@@ -78,6 +88,15 @@ def runtime_tree(repo):
     extract it only for the duration of the headless command.
     """
     candidates = [repo, os.path.join(repo, "runtime", "gen1recomp")]
+    for key in ("POKEPORT_RECOMP", "MODKIT_ENGINE"):
+        env_root = os.environ.get(key)
+        if env_root:
+            candidates.append(env_root)
+    content = os.environ.get("POKEPORT_CONTENT_ROOT")
+    if content:
+        candidates.append(os.path.join(content, "runtime", "gen1recomp"))
+        candidates.append(os.path.join(
+            content, ".content-editor-runtime", "runtime", "gen1recomp"))
     for candidate in candidates:
         loader = os.path.join(candidate, "src", "mods", "Loader.lua")
         if os.path.isfile(loader):
@@ -792,12 +811,15 @@ def run_loader(repo, mod_dir, findings, base="fixture", notes=None,
                     luajit_cmd(driver_path), cwd=engine_root,
                     capture_output=True, text=True, timeout=120,
                     env=luajit_env())
+            except FileNotFoundError:
+                findings.append(Finding("MK100", "error",
+                                        f"cannot run {luajit_exe()} (install luajit or "
+                                        "set MODKIT_LUAJIT)"))
+                return
             finally:
                 os.unlink(driver_path)
-    except FileNotFoundError:
-        findings.append(Finding("MK100", "error",
-                                f"cannot run {luajit_exe()} (install luajit or "
-                                "set MODKIT_LUAJIT)"))
+    except FileNotFoundError as exc:
+        findings.append(Finding("MK100", "error", str(exc)))
         return
     if proc.returncode != 0:
         findings.append(Finding("MK100", "error",
@@ -972,11 +994,23 @@ def cmd_add_release_workflow(args, repo):
 # ---------------------------------------------------------------- lint
 
 def ahash(image):
-    """Ink-mask hash over the 8x8 downscale: background (the lightest GB
+    """Ink-mask hash over a small downscale: background (the lightest GB
     shade) vs ink.  Swapping the three ink shades -- the classic recolor --
-    leaves the mask intact, which is exactly what MK302 wants to catch."""
+    leaves the mask intact, which is exactly what MK302 wants to catch.
+
+    Keep the source aspect ratio. Squashing a 16x96 GBC walk sheet into 8x8
+    made every custom ranch sprite look like dragon.png.
+    """
     from PIL import Image
-    small = image.convert("L").resize((8, 8), Image.LANCZOS)
+    w, h = image.size
+    if w <= 0 or h <= 0:
+        return 0
+    long_edge = 32
+    if w >= h:
+        tw, th = long_edge, max(4, int(round(long_edge * h / float(w))))
+    else:
+        th, tw = long_edge, max(4, int(round(long_edge * w / float(h))))
+    small = image.convert("L").resize((tw, th), Image.NEAREST)
     raw = (small.get_flattened_data() if hasattr(small, "get_flattened_data")
            else small.getdata())
     return sum((1 << i) for i, p in enumerate(raw) if p <= 200)

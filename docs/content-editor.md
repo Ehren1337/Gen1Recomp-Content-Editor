@@ -120,9 +120,10 @@ On **Project**, **Validate** / **Playtest** sit under Overview.
 version currently selected in the editor. The Windows pack includes its
 validator-only LuaJIT under `tools/tooling/luajit`; if LuaJIT is missing, the
 editor installs it via the OS package manager
-(`winget` on Windows, `apt`/`dnf`/`pacman` on Linux when passwordless sudo
-works) and sets `MODKIT_LUAJIT`. It does **not** drop `luajit.exe` into the
-LÖVE save folder — Windows Defender treats that as `Behavior:Win32/SuspLua.A`.
+(`winget` on Windows, `brew install luajit` on macOS, `apt`/`dnf`/`pacman`
+on Linux when passwordless sudo works) and sets `MODKIT_LUAJIT`. It does **not**
+drop `luajit.exe` into the LÖVE save folder — Windows Defender treats that as
+`Behavior:Win32/SuspLua.A`.
 
 **Playtest does not require Link Recomp.** It runs the exact upstream checkout
 at `runtime/gen1recomp`, whose Git submodule commit is mirrored in

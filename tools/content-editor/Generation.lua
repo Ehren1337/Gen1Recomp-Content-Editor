@@ -127,22 +127,21 @@ function Generation.bindGoldData(data)
   if data.battle_anims and data.gen2BattleAnims == nil then
     data.gen2BattleAnims = data.battle_anims
   end
-  if data.scripts and data.gen2Scripts == nil then
-    data.gen2Scripts = data.scripts
+  -- Game2 writes gen2*; Data:load / panels use the short names. Fill both.
+  local function alias(a, b)
+    if data[a] and data[b] == nil then data[b] = data[a] end
+    if data[b] and data[a] == nil then data[a] = data[b] end
   end
-  if data.marts and data.gen2Marts == nil then data.gen2Marts = data.marts end
-  if data.roofs and data.gen2Roofs == nil then data.gen2Roofs = data.roofs end
-  if data.menu_gfx and data.gen2MenuGfx == nil then
-    data.gen2MenuGfx = data.menu_gfx
-  end
-  if data.title and data.gen2Title == nil then data.gen2Title = data.title end
-  if data.intro and data.gen2Intro == nil then data.gen2Intro = data.intro end
-  if data.landmarks and data.gen2Landmarks == nil then
-    data.gen2Landmarks = data.landmarks
-  end
-  if data.events and data.gen2EventTables == nil then
-    data.gen2EventTables = data.events
-  end
+  alias("scripts", "gen2Scripts")
+  alias("marts", "gen2Marts")
+  alias("roofs", "gen2Roofs")
+  alias("menu_gfx", "gen2MenuGfx")
+  alias("title", "gen2Title")
+  alias("intro", "gen2Intro")
+  alias("landmarks", "gen2Landmarks")
+  alias("events", "gen2EventTables")
+  alias("std_scripts", "gen2StdScripts")
+  alias("initial_events", "gen2InitialEvents")
   return data
 end
 

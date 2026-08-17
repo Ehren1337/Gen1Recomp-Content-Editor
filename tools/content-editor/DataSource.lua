@@ -278,6 +278,51 @@ local function remountVersion(version)
   pcall(GameVersion.set, version)
 end
 
+-- Data:load is Gen 1-shaped (maps/text/pokemon/…). Game2.lua fills the rest
+-- (marts/scripts/events) as gen2* keys; the editor never runs Game2, so Gold
+-- Shops / Trades / Dialog / Events stay empty unless we load them here.
+local GOLD_EXTRAS = {
+  { file = "marts", keys = { "marts", "gen2Marts" } },
+  { file = "scripts", keys = { "scripts", "gen2Scripts" } },
+  { file = "std_scripts", keys = { "std_scripts", "gen2StdScripts" } },
+  { file = "events", keys = { "events", "gen2EventTables" } },
+  { file = "initial_events", keys = { "initial_events", "gen2InitialEvents" } },
+}
+
+local function loadGoldGenerated(name)
+  package.loaded["data.generated." .. name] = nil
+  local path = "data/generated/" .. name .. ".lua"
+  local bytes = CacheFs.readActive(path)
+  if type(bytes) == "string" then
+    local GameVersion = require("src.core.GameVersion")
+    local chunk = loadstring(bytes, "@" .. (GameVersion.cachePrefix() or "") .. path)
+    if chunk then
+      local ok, res = pcall(chunk)
+      if ok and type(res) == "table" then return res end
+    end
+  end
+  if love and love.filesystem and love.filesystem.load then
+    local chunk = love.filesystem.load(path)
+    if chunk then
+      local ok, res = pcall(chunk)
+      if ok and type(res) == "table" then return res end
+    end
+  end
+  return nil
+end
+
+local function loadGoldEditorTables()
+  for i = 1, #GOLD_EXTRAS do
+    local spec = GOLD_EXTRAS[i]
+    local tbl = loadGoldGenerated(spec.file)
+    if tbl then
+      for j = 1, #spec.keys do
+        Data[spec.keys[j]] = tbl
+      end
+    end
+  end
+end
+
 local function finishLoad(version)
   local ok, err = pcall(function() Data:load() end)
   if not ok then return false, err end
@@ -287,6 +332,7 @@ local function finishLoad(version)
   end
   local GameVersion = require("src.core.GameVersion")
   if GameVersion.generation(version) == 2 then
+    loadGoldEditorTables()
     local okBind, Generation = pcall(require, "Generation")
     if okBind and Generation and Generation.bindGoldData then
       Generation.bindGoldData(Data)

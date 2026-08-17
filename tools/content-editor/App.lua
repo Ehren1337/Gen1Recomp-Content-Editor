@@ -608,6 +608,43 @@ local function runShell(cmd)
   return exit == 0, out
 end
 
+local function engineHasLoader(root)
+  if not root or root == "" then return false end
+  local sep = package.config:sub(1, 1)
+  local f = io.open(root .. sep .. "src" .. sep .. "mods" .. sep .. "Loader.lua", "rb")
+  if f then f:close(); return true end
+  return false
+end
+
+local function linkedRecompRoot()
+  local prefs = (S and S.dataPrefs) or DataSource.loadPrefs()
+  local recomp = (prefs and prefs.recompRoot)
+    or DataSource.mountedRecompRoot()
+  if recomp and recomp ~= "" and DataSource.isValidRecompRoot(recomp) then
+    return recomp:gsub("[/\\]+$", "")
+  end
+  return nil
+end
+
+local function validationEngineRoot()
+  local sep = package.config:sub(1, 1)
+  local linked = linkedRecompRoot()
+  if engineHasLoader(linked) then return linked end
+  local source = repoRoot()
+  if engineHasLoader(source) then return source end
+  local nested = source .. sep .. "runtime" .. sep .. "gen1recomp"
+  if engineHasLoader(nested) then return nested end
+  local content = os.getenv("POKEPORT_CONTENT_ROOT")
+  if content and content ~= "" then
+    nested = content .. sep .. "runtime" .. sep .. "gen1recomp"
+    if engineHasLoader(nested) then return nested end
+    nested = content .. sep .. ".content-editor-runtime" .. sep
+      .. "runtime" .. sep .. "gen1recomp"
+    if engineHasLoader(nested) then return nested end
+  end
+  return source
+end
+
 function App.validateMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
@@ -616,9 +653,16 @@ function App.validateMod()
     if not App.save() then return false end
   end
   local id = S.project.id
-  local root = repoRoot()
   local sep = package.config:sub(1, 1)
+  local root = ModIO.repoRoot()
   local script = root .. sep .. "tools" .. sep .. "modkit.py"
+  local probe = io.open(script, "rb")
+  if probe then
+    probe:close()
+  else
+    root = repoRoot()
+    script = root .. sep .. "tools" .. sep .. "modkit.py"
+  end
 
   say("Checking LuaJIT (" .. LuaJitTool.platformLabel() .. ")…")
   local luajit, libDir, ljErr, installed = LuaJitTool.ensure()
@@ -638,6 +682,8 @@ function App.validateMod()
   })
   local extraEnv = {}
   extraEnv.MODKIT_VERSION = S.version or "red"
+  local engine = validationEngineRoot()
+  extraEnv.POKEPORT_RECOMP = engine
   if dataDir then
     extraEnv.POKEPORT_DATA_DIR = dataDir
   end
@@ -646,8 +692,10 @@ function App.validateMod()
   end
 
   local function runValidate(py)
+    local modPath = S.path or ModIO.modDir(id)
     local inner = string.format(
-      '%s "%s" validate %s --base %s', py, script, id, base)
+      '%s "%s" validate "%s" --base %s --repo "%s"',
+      py, script, modPath, base, engine)
     local cmd = LuaJitTool.wrapCommand(inner, luajit, libDir, extraEnv)
     return runShell(cmd)
   end
@@ -678,6 +726,9 @@ local function resolveLoveExe(searchRoots)
         -- Linux portable AppImage / binary
         { root .. sep .. "love" .. sep .. "love-11.5-x86_64.AppImage", false },
         { root .. sep .. "love" .. sep .. "love", false },
+        -- macOS portable pack (love/love.app)
+        { root .. sep .. "love" .. sep .. "love.app" .. sep
+          .. "Contents" .. sep .. "MacOS" .. sep .. "love", false },
       }
       for _, candidate in ipairs(candidates) do
         local path, fused = candidate[1], candidate[2]
@@ -686,17 +737,10 @@ local function resolveLoveExe(searchRoots)
       end
     end
   end
+  local macApp = "/Applications/love.app/Contents/MacOS/love"
+  local f = io.open(macApp, "rb")
+  if f then f:close(); return macApp, false end
   return "love", false
-end
-
-local function linkedRecompRoot()
-  local prefs = (S and S.dataPrefs) or DataSource.loadPrefs()
-  local recomp = (prefs and prefs.recompRoot)
-    or DataSource.mountedRecompRoot()
-  if recomp and recomp ~= "" and DataSource.isValidRecompRoot(recomp) then
-    return recomp:gsub("[/\\]+$", "")
-  end
-  return nil
 end
 
 function App.playtestMod()
@@ -768,7 +812,11 @@ function App.playtestMod()
     return
   end
 
-  local loveExe, fused = resolveLoveExe({ recomp, repoRoot() })
+  local loveExe, fused = resolveLoveExe({
+    recomp,
+    repoRoot(),
+    os.getenv("POKEPORT_CONTENT_ROOT"),
+  })
   local cmd
   if sep == "\\" then
     if fused then
