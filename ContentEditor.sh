@@ -30,19 +30,24 @@ fi
 LOVE=""
 if [[ -x "love/love-11.5-x86_64.AppImage" ]]; then
   LOVE="./love/love-11.5-x86_64.AppImage"
-elif [[ -f "love/love-11.5-x86_64.AppImage" ]]; then
-  echo "The bundled LOVE AppImage is not executable."
-  echo "Run: chmod 755 ContentEditor.sh love/love-11.5-x86_64.AppImage"
-  echo "If the launcher itself is not executable, start it once with: bash ContentEditor.sh"
-  exit 1
 elif [[ -x "love/love" ]]; then
   LOVE="./love/love"
 elif command -v love >/dev/null 2>&1; then
   LOVE="love"
-else
-  echo "Missing LOVE runtime."
-  echo "Expected love/love-11.5-x86_64.AppImage, or install love 11.5."
-  echo "If the AppImage is present: chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage"
+fi
+
+if [[ -z "$LOVE" ]]; then
+  echo "LÖVE 11.5 not found."
+  echo "Install love 11.5, or from this folder run:  love . --content-editor"
+  if [[ -f "love/love-11.5-x86_64.AppImage" ]]; then
+    echo "Bundled AppImage is present but not executable:"
+    echo "  chmod +x ContentEditor.sh love/love-11.5-x86_64.AppImage"
+  fi
+  exit 1
+fi
+
+if [[ ! -f "$EDITOR_SOURCE/main.lua" ]]; then
+  echo "main.lua is missing from $EDITOR_SOURCE" >&2
   exit 1
 fi
 

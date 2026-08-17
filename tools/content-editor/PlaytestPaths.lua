@@ -42,10 +42,26 @@ function PlaytestPaths.windowsLaunch(loveExe, runtimeSource, workDir, version)
   if version == nil then
     version, workDir, source = workDir, runtimeSource, runtimeSource
   end
-  -- /D keeps cwd on the game folder. start otherwise resets cwd to love.exe's
-  -- directory, so "." becomes the editor's love/ folder (No code to run).
-  return string.format('start "" /D "%s" "%s" "%s" --game=%s',
+  -- Non-empty title: cmd /c start "" eats the empty quotes, then the next
+  -- quoted string (often love.exe) is treated as the window title and the
+  -- process exits immediately — playtest looks like it opens and closes.
+  -- /D keeps cwd on the game folder. start otherwise resets cwd to love.exe.
+  return string.format('start "Gen1RecompPlaytest" /D "%s" "%s" "%s" --game=%s',
     workDir, loveExe, source, version)
+end
+
+-- Write a .bat so os.execute does not nest cmd /c start quoting.
+function PlaytestPaths.windowsDetach(startCmd)
+  local tmp = os.getenv("TEMP") or os.getenv("TMP")
+  if not tmp or tmp == "" or type(startCmd) ~= "string" then return startCmd end
+  local bat = tmp .. "\\pokeport_playtest.bat"
+  local f = io.open(bat, "wb")
+  if not f then return startCmd end
+  f:write("@echo off\r\n")
+  f:write(startCmd)
+  f:write("\r\n")
+  f:close()
+  return '"' .. bat .. '"'
 end
 
 return PlaytestPaths

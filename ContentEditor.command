@@ -5,7 +5,6 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$HERE/love/portable.txt" ]; then
   export POKEPORT_IDENTITY="gen1recomp-content-editor-portable"
 fi
-LOVE="$HERE/love/love.app/Contents/MacOS/love"
 EDITOR_SOURCE="$HERE"
 if [ ! -f "$HERE/main.lua" ]; then
   if [ ! -f "$HERE/.content-editor-runtime/runtime/gen1recomp/src/mods/Runtime.lua" ] ||
@@ -23,19 +22,29 @@ fi
 
 # Packs built on Windows often extract without +x.
 chmod +x "$0" 2>/dev/null || true
-if [ -f "$LOVE" ]; then
-  chmod +x "$LOVE" 2>/dev/null || true
+BUNDLED="$HERE/love/love.app/Contents/MacOS/love"
+if [ -f "$BUNDLED" ]; then
+  chmod +x "$BUNDLED" 2>/dev/null || true
 fi
 
-if [ ! -x "$LOVE" ]; then
-  echo "The bundled LÖVE runtime is missing or not executable: $LOVE" >&2
-  echo "Run: chmod +x \"$LOVE\" \"$0\"" >&2
+LOVE=""
+if [ -x "$BUNDLED" ]; then
+  LOVE="$BUNDLED"
+elif [ -x "/Applications/love.app/Contents/MacOS/love" ]; then
+  LOVE="/Applications/love.app/Contents/MacOS/love"
+elif command -v love >/dev/null 2>&1; then
+  LOVE=$(command -v love)
+fi
+
+if [ -z "$LOVE" ]; then
+  echo "LÖVE 11.5 not found." >&2
+  echo "Install LÖVE, or from this folder run:  love . --content-editor" >&2
   exit 1
 fi
 
 if [ ! -f "$EDITOR_SOURCE/main.lua" ]; then
   echo "main.lua is missing from $EDITOR_SOURCE" >&2
-  echo "Run ContentEditor.command from the extracted pack folder." >&2
+  echo "Run ContentEditor.command from the extracted pack or source folder." >&2
   echo "Do not open love.app directly — that yields 'No code to run'." >&2
   exit 1
 fi

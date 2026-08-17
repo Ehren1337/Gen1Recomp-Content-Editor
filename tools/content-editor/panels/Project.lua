@@ -204,7 +204,9 @@ function Project.draw(S, x, y, w, h, App)
         cx = innerX
         cy = cy + chipH + chipGap
       end
-      if Kit.button(cx, cy, bw, chipH, mid, { kind = "accent" }) then
+      if Kit.button(cx, cy, bw, chipH, mid, {
+            kind = (S.project and S.project.id == mid) and "primary" or "ghost",
+          }) then
         App.openMod(ModIO.modsRoot() .. package.config:sub(1, 1) .. mid)
       end
       cx = cx + bw + chipGap
@@ -247,6 +249,10 @@ function Project.draw(S, x, y, w, h, App)
           .. "\n" .. cacheNote,
       }) then
       if App.setGameVersion then App.setGameVersion(vid) end
+      if S.project then
+        S.project.game = vid
+        App.markDirty()
+      end
     end
   end
   row = row + btnH + 8 * s

@@ -88,6 +88,66 @@ function Preview.resolve(S, path)
   return nil
 end
 
+local function imageFromCacheBytes(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  if not (love and love.graphics and love.graphics.newImage
+      and love.filesystem and love.filesystem.newFileData) then
+    return nil
+  end
+  local okC, CacheFs = pcall(require, "src.import.CacheFs")
+  if not (okC and CacheFs and CacheFs.readActive) then return nil end
+  local bytes = CacheFs.readActive(path)
+  if type(bytes) ~= "string" or bytes == "" then return nil end
+  local name = path:match("[^/\\]+$") or "preview.png"
+  local okFd, fileData = pcall(love.filesystem.newFileData, bytes, name)
+  if not (okFd and fileData) then return nil end
+  local okImg, img = pcall(love.graphics.newImage, fileData)
+  return okImg and img or nil
+end
+
+-- MapPreview / Assets.image go through love.filesystem. Gold (and Blue/Yellow)
+-- tiles live under gold/assets/generated/…; if the PhysFS overlay is missing,
+-- newImage("assets/generated/…") fails and world view draws an empty box.
+local assetsWrapped = false
+function Preview.installAssetCacheFallback()
+  if assetsWrapped then return end
+  local ok, Assets = pcall(require, "src.render.Assets")
+  if not (ok and Assets and type(Assets.image) == "function") then return end
+  assetsWrapped = true
+  local origImage, origData = Assets.image, Assets.imageData
+  local imgCache = {}
+  function Assets.image(path)
+    local okI, img = pcall(origImage, path)
+    if okI and img then return img end
+    if imgCache[path] ~= nil then return imgCache[path] end
+    local loaded = imageFromCacheBytes(path)
+    imgCache[path] = loaded
+    if loaded then return loaded end
+    if not okI then error(img) end
+    return img
+  end
+  if type(origData) == "function" then
+    function Assets.imageData(path)
+      local okD, data = pcall(origData, path)
+      if okD and data then return data end
+      local okC, CacheFs = pcall(require, "src.import.CacheFs")
+      if okC and CacheFs and CacheFs.readActive then
+        local bytes = CacheFs.readActive(path)
+        if type(bytes) == "string" and bytes ~= "" then
+          local name = tostring(path):match("[^/\\]+$") or "tile.png"
+          local okFd, fd = pcall(love.filesystem.newFileData, bytes, name)
+          if okFd and fd then
+            local okId, id = pcall(love.image.newImageData, fd)
+            if okId then return id end
+          end
+        end
+      end
+      if not okD then error(data) end
+      return data
+    end
+  end
+end
+
 function Preview.image(S, path)
   if type(path) ~= "string" or path == "" then return nil end
   local key = cacheKey(S, path)
@@ -105,6 +165,9 @@ function Preview.image(S, path)
     if ok and Assets and Assets.image then
       local ok2, result = pcall(Assets.image, resolved)
       if ok2 then img = result end
+    end
+    if not img then
+      img = imageFromCacheBytes(path)
     end
     if not img then
       local ok3, result = pcall(love.graphics.newImage, resolved)
@@ -181,7 +244,8 @@ function Preview.syncGbcWorldRuntime(S)
   if not (ok and PaletteFX) then return end
   WorldPaletteOverrides.install(PaletteFX)
   local use = Preview.useGbcPalettes(S)
-  if use then
+  local pack = use and PaletteFX.gbcPack and PaletteFX.gbcPack()
+  if use and pack then
     if PaletteFX.setMode then PaletteFX.setMode("redpp") end
     local gw = S and S.project and S.project.gbcWorld
     local groups = gw and gw.groupColors
@@ -697,7 +761,10 @@ function Preview.drawNamedSwatches(S, name, x, y, w, h)
 end
 
 -- Live SGB shade-remap for grayscale draw calls (map canvas / block thumbs).
--- Skips when ADVANCED/GBC pack is active (art is already true-color).
+-- Callers skip this when the sheet is already RGB (TrueColor / Gold bake /
+-- TileRenderer.gbcAtlas). Do not gate on PaletteFX.usesGbcPack(): that mode
+-- only means "try GBC atlas"; if the atlas did not bake, maps stay 2bpp and
+-- still need this shader.
 function Preview.pushPaletteShader(S, nameOrColors)
   local colors = nameOrColors
   if type(nameOrColors) == "string" then
@@ -706,9 +773,6 @@ function Preview.pushPaletteShader(S, nameOrColors)
   if type(colors) ~= "table" then return false end
   local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
   if not (ok and PaletteFX and PaletteFX.shader and PaletteFX.sendColors) then
-    return false
-  end
-  if PaletteFX.usesGbcPack and PaletteFX.usesGbcPack() then
     return false
   end
   local sh = PaletteFX.shader()

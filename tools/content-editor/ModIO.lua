@@ -317,6 +317,7 @@ function ModIO.create(id, name, version)
   if keep then keep:close() end
 
   local project = State.blankProject(id, display)
+  if version then project.game = version end
   local ok, werr = ModIO.save(dest, project)
   if not ok then return nil, werr end
   return dest, project
@@ -357,6 +358,51 @@ function ModIO.load(modDir)
   -- Drop typing partials (H / HI / HIDE_…) left in older editor_project.lua files.
   State.rebuildEventFlags(project)
   return project
+end
+
+-- Which game this mod is authored against (red/blue/yellow/gold).
+-- Stored on editor_project.game; inferred from maps or a pinned manifest.games.
+function ModIO.authoringGame(project, modDir)
+  local GameVersion = require("src.core.GameVersion")
+  local function valid(id)
+    return type(id) == "string" and GameVersion.VERSIONS
+      and GameVersion.VERSIONS[id] and id or nil
+  end
+  local stored = valid(project and project.game)
+  if stored then return stored end
+
+  local Generation = require("Generation")
+  local function bagLooksGen2(bag)
+    if type(bag) ~= "table" then return false end
+    for id, def in pairs(bag) do
+      if type(id) == "string" and id:sub(1, 8) == "TILESET_" then return true end
+      if type(def) == "table" and Generation.mapLooksGen2(def) then return true end
+    end
+    return false
+  end
+  if project and (bagLooksGen2(project.maps)
+      or bagLooksGen2(project.layeredMaps)
+      or bagLooksGen2(project.tilesets)) then
+    return "gold"
+  end
+
+  if type(modDir) ~= "string" or modDir == "" then return nil end
+  local body = ModIO.readText(join(modDir, "manifest.json"))
+  if not body then return nil end
+  local ok, mf = pcall(Json.decode, body)
+  if not ok or type(mf) ~= "table" or type(mf.games) ~= "table" then return nil end
+  local pinned = {}
+  local onlyGen2 = true
+  local any = false
+  for _, token in ipairs(mf.games) do
+    any = true
+    local key = tostring(token or ""):lower()
+    if valid(key) then pinned[#pinned + 1] = key end
+    if key ~= "gold" and key ~= "gen2" then onlyGen2 = false end
+  end
+  if #pinned == 1 then return pinned[1] end
+  if any and onlyGen2 then return "gold" end
+  return nil
 end
 
 function ModIO.save(modDir, project, version)

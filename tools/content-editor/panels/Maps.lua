@@ -328,11 +328,29 @@ local BGEVENT_KINDS = {
 }
 
 -- Gold connections store the dest name in mapId; numeric map is the group index.
-local function connMapId(conn)
+local function connMapId(conn, S)
   if type(conn) ~= "table" then return nil end
-  if type(conn.mapId) == "string" and conn.mapId ~= "" then return conn.mapId end
-  if type(conn.map) == "string" and conn.map ~= "" then return conn.map end
-  return nil
+  local function named(id)
+    return type(id) == "string" and id ~= "" and tonumber(id) == nil and id or nil
+  end
+  local id = named(conn.mapId) or named(conn.map)
+  if id then return id end
+  if not S then return nil end
+  local n = conn.map
+  if type(n) == "string" then n = tonumber(n) end
+  if type(n) ~= "number" then return nil end
+  local group = conn.group
+  local function find(bag)
+    if type(bag) ~= "table" then return nil end
+    for mapId, def in pairs(bag) do
+      if type(def) == "table" and def.map == n
+          and (group == nil or def.group == group) then
+        return mapId
+      end
+    end
+    return nil
+  end
+  return find(S.project and S.project.maps) or find(Generation.dataMaps(S))
 end
 
 local function makeConnection(destId, offset, prev)
@@ -674,7 +692,7 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
   from.connections = from.connections or {}
   local opp = oppositeDir(dir)
   local prev = from.connections[dir]
-  local prevMap = connMapId(prev)
+  local prevMap = connMapId(prev, S)
 
   local function clearBack(destId)
     if not destId or not opp then return end
@@ -682,7 +700,7 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
     if not backMap then return end
     backMap.connections = backMap.connections or {}
     local back = backMap.connections[opp]
-    if back and connMapId(back) == fromId then
+    if back and connMapId(back, S) == fromId then
       backMap.connections[opp] = nil
       if S.data and S.data.maps then S.data.maps[destId] = backMap end
       MapLoader.invalidate(destId)
@@ -1936,10 +1954,13 @@ end
 -- Palette id for SGB remap, or nil when the sheet is already RGB / Gold bake.
 -- Map-level TrueColor alone must not skip remap: ROM and layered grayscale
 -- atlases stay 2bpp, so skipping the shader is what turned edited maps grey.
-local function mapPreviewPalette(S, mapDef)
+-- Gate on the map record (TILESET_*), not the session: leftover Gold tables
+-- must not blank Pallet Town's SGB remap.
+local function mapPreviewPalette(S, mapDef, renderer)
   mapDef = mapDef or resolveMapDef(S, S.mapId)
   -- Gold atlases are baked true-color via tilePalettes × EnvironmentColors.
-  if Generation.isGen2(S) then return nil end
+  if Generation.mapLooksGen2(mapDef) then return nil end
+  if renderer and renderer.gbcAtlas then return nil end
   local ts = mapDef and tilesetDef(S, mapDef.tileset)
   if ts and ts.trueColor then
     if not ts._layeredGenerated then return nil end
@@ -2303,7 +2324,7 @@ local function buildWorldLayout(S)
 
   -- Outgoing neighbors from the current map.
   for dir, conn in pairs(rootDef.connections or {}) do
-    local dest = connMapId(conn)
+    local dest = connMapId(conn, S)
     if dest then
       local destDef = resolveMapDef(S, dest)
       edges[#edges + 1] = {
@@ -2327,7 +2348,7 @@ local function buildWorldLayout(S)
       local def = resolveMapDef(S, id)
       if def then
         for dir, conn in pairs(def.connections or {}) do
-          if conn and connMapId(conn) == rootId then
+          if conn and connMapId(conn, S) == rootId then
             edges[#edges + 1] = {
               from = id, to = rootId, dir = dir,
               offset = conn.offset or 0, ok = true,
@@ -2458,6 +2479,19 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     S._worldDrag = nil
   end
 
+  -- Bake Gold canvases before clip. A leftover scissored bake stays blank.
+  if not S._g2UnclippedBake then
+    S._g2MapBaker = nil
+    S._g2UnclippedBake = true
+  end
+  for id in pairs(layout.positions) do
+    local def = layout.maps[id] or resolveMapDef(S, id)
+    if def then
+      prepareLiveMap(S, id, def)
+      Maps.loadEditorMap(S, id)
+    end
+  end
+
   Kit.pushClip(viewX, viewY, viewW, viewH)
   Theme.col(PAL.bgBot, 1)
   love.graphics.rectangle("fill", viewX, viewY, viewW, viewH)
@@ -2479,7 +2513,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
           and (loaded.renderer.drawMapOnly or loaded.renderer.draw) then
         love.graphics.push()
         love.graphics.translate(p.x, p.y)
-        local pal = mapPreviewPalette(S, def)
+        local pal = mapPreviewPalette(S, def, loaded.renderer)
         local shaded = pal and Preview.pushPaletteShader(S, pal)
         love.graphics.setColor(1, 1, 1, sel and 1 or 0.92)
         -- Full map body in local space; cam 0,0 shows the whole sheet.
@@ -2608,11 +2642,17 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
   for _, dir in ipairs({ "north", "south", "east", "west" }) do
     if y + fh > listBottom then break end
     local cur = map.connections[dir]
-    local val = cur and cur.map or ""
+    local val = connMapId(cur, S) or ""
+    local rawMap = cur and cur.map
+    if type(rawMap) == "number" or (type(rawMap) == "string" and tonumber(rawMap)) then
+      local bak = S._vanillaMapBackup and S._vanillaMapBackup[fromId]
+      local vconn = bak and bak.connections and bak.connections[dir]
+      val = connMapId(vconn, S) or val
+    end
     local v = field(App, "mp_wc_" .. dir, px + 10 * s, y, propW - 20 * s, fh,
       val, dir)
     local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
-    local curMap = cur and cur.map or ""
+    local curMap = connMapId(cur, S) or ""
     local curOff = cur and (cur.offset or 0) or 0
     if (curMap or "") ~= (wantMap or "") then
       map = applyConnectionEdit(S, fromId, dir, wantMap, curOff, App,
@@ -2632,7 +2672,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
       local destDef = resolveMapDef(S, wantMap)
       local back = destDef and destDef.connections
         and destDef.connections[oppositeDir(dir)]
-      local ok = back and back.map == fromId
+      local ok = back and connMapId(back, S) == fromId
         and (back.offset or 0) == -(map.connections[dir].offset or 0)
       local known = layout.positions[wantMap] ~= nil or destDef ~= nil
       local label = ok and "<-> linked"
@@ -2857,6 +2897,9 @@ function Maps.loadEditorMap(S, mapId)
     if type(def.width) ~= "number" or type(def.height) ~= "number" then
       return false, "incomplete map record (missing width/height)"
     end
+    pcall(function()
+      require("Preview").installAssetCacheFallback()
+    end)
     local Map2 = require("src.world.gen2.Map")
     if S.data and def.tileset and not (S.data.tilesets and S.data.tilesets[def.tileset]) then
       local liveTs = Generation.dataTilesets(S)[def.tileset]
@@ -2909,7 +2952,15 @@ function Maps.loadEditorMap(S, mapId)
     end
     local daytime = Preview.gen2PreviewDaytime(S, def) or "DAY"
     local bgSet = select(1, Preview.gen2MapBgSet(S, def, daytime))
+    -- World View clips the canvas; MapPreview.bake uses renderTo and would
+    -- inherit that scissor, so the gym canvas is painted empty.
+    local sx, sy, sw, sh
+    if love.graphics.getScissor then
+      sx, sy, sw, sh = love.graphics.getScissor()
+      if sx then love.graphics.setScissor() end
+    end
     local okR, renderer = pcall(MapPreview.renderer, baker, map, daytime, bgSet)
+    if sx then love.graphics.setScissor(sx, sy, sw, sh) end
     if not okR then return false, renderer end
     map.renderer = renderer
     if not map.renderer then
@@ -2948,7 +2999,7 @@ local function editorNeighbors(S, rootDef)
   if not rootDef then return out end
   for dir, conn in pairs(rootDef.connections or {}) do
     -- Gold stores the dest name in mapId; numeric map is the group index.
-    local dest = connMapId(conn)
+    local dest = connMapId(conn, S)
     local destDef = dest and resolveMapDef(S, dest)
     if destDef and type(destDef.width) == "number"
         and type(destDef.height) == "number" then
@@ -3757,7 +3808,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
         prepareLiveMap(S, nb.id, nb.def)
         local nok, nmap = Maps.loadEditorMap(S, nb.id)
         if nok and nmap and nmap.renderer and nmap.renderer.drawMapOnly then
-          local nPal = mapPreviewPalette(S, nb.def)
+          local nPal = mapPreviewPalette(S, nb.def, nmap.renderer)
           local nShaded = nPal and Preview.pushPaletteShader(S, nPal)
           love.graphics.setColor(1, 1, 1, 0.75)
           nmap.renderer:drawMapOnly(camX - nb.ox, camY - nb.oy, worldW, worldH)
@@ -3771,7 +3822,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
       end
     end
 
-    local palName = mapPreviewPalette(S, mapDef)
+    local palName = mapPreviewPalette(S, mapDef, map.renderer)
     local shaded = palName and Preview.pushPaletteShader(S, palName)
     love.graphics.setColor(1, 1, 1, 1)
     map.renderer:draw(camX, camY, worldW, worldH)
@@ -5320,11 +5371,11 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
   for _, dir in ipairs({ "north", "south", "east", "west" }) do
     if py + fh > listBottom then break end
     local cur = map.connections[dir]
-    local val = connMapId(cur) or ""
+    local val = connMapId(cur, S) or ""
     local v = field(App, "mp_c_" .. dir, px + 10 * s, py, propW - 20 * s, fh,
       val, dir, function() return Autocomplete.mapIds(S) end)
     local wantMap = (v == "") and nil or v:upper():gsub("%s+", "_")
-    local curMap = connMapId(cur) or ""
+    local curMap = connMapId(cur, S) or ""
     local curOff = cur and (cur.offset or 0) or 0
     if (curMap or "") ~= (wantMap or "") then
       map = applyConnectionEdit(S, fromId, dir, wantMap, curOff, App) or mutate()
@@ -5339,7 +5390,7 @@ local function drawBasics(S, map, mutate, App, px, py, propW, listBottom, fh, s)
       Kit.text("micro", "offset", px + 78 * s, py + fh + 6 * s, PAL.faint)
       local dest = resolveMapDef(S, wantMap)
       local back = dest and dest.connections and dest.connections[oppositeDir(dir)]
-      local ok = back and connMapId(back) == fromId
+      local ok = back and connMapId(back, S) == fromId
         and (back.offset or 0) == -(map.connections[dir].offset or 0)
       Kit.text("micro", ok and "<-> linked" or (dest and "<-> pending" or "missing"),
         px + 120 * s, py + fh + 6 * s, ok and PAL.green or PAL.red)

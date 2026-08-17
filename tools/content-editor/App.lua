@@ -186,8 +186,13 @@ function App.reloadData(opts)
   refreshModsAndEvents()
   do
     local okP, Preview = pcall(require, "Preview")
-    if okP and Preview and Preview.syncGbcWorldRuntime then
-      Preview.syncGbcWorldRuntime(S)
+    if okP and Preview then
+      if Preview.installAssetCacheFallback then
+        Preview.installAssetCacheFallback()
+      end
+      if Preview.syncGbcWorldRuntime then
+        Preview.syncGbcWorldRuntime(S)
+      end
     end
   end
   say(status or DataSource.label(source))
@@ -323,8 +328,13 @@ function App.load(modPath, opts)
   refreshModsAndEvents()
   do
     local okP, Preview = pcall(require, "Preview")
-    if okP and Preview and Preview.syncGbcWorldRuntime then
-      Preview.syncGbcWorldRuntime(S)
+    if okP and Preview then
+      if Preview.installAssetCacheFallback then
+        Preview.installAssetCacheFallback()
+      end
+      if Preview.syncGbcWorldRuntime then
+        Preview.syncGbcWorldRuntime(S)
+      end
     end
   end
 
@@ -455,6 +465,13 @@ function App.openMod(path)
   S.path = path
   S.project = State.ensureProjectFields(project)
   S.dirty = false
+  local game = ModIO.authoringGame(S.project, path)
+  if game then
+    S.project.game = game
+    if game ~= (S.version or App.dataVersion) then
+      App.setGameVersion(game)
+    end
+  end
   S._liveTilesets = nil
   S.browseModId = path:match("[/\\]([^/\\]+)$") or S.browseModId
   S._manifestFor = nil
@@ -508,8 +525,13 @@ function App.openMod(path)
   History.clear(S)
   do
     local okP, Preview = pcall(require, "Preview")
-    if okP and Preview and Preview.syncGbcWorldRuntime then
-      Preview.syncGbcWorldRuntime(S)
+    if okP and Preview then
+      if Preview.installAssetCacheFallback then
+        Preview.installAssetCacheFallback()
+      end
+      if Preview.syncGbcWorldRuntime then
+        Preview.syncGbcWorldRuntime(S)
+      end
     end
   end
   say((note and (note .. " — ") or "") .. "Opened " .. path)
@@ -712,6 +734,26 @@ function App.validateMod()
   end
 end
 
+local function fileOk(path)
+  if not path or path == "" then return false end
+  local f = io.open(path, "rb")
+  if f then f:close(); return true end
+  return false
+end
+
+local function runningLoveExe()
+  if love and love.filesystem and love.filesystem.getExecutablePath then
+    local p = love.filesystem.getExecutablePath()
+    if fileOk(p) then return p end
+  end
+  if arg and fileOk(arg[-2]) then return arg[-2] end
+  local pf = os.getenv("ProgramFiles")
+  if pf and fileOk(pf .. "\\LOVE\\love.exe") then return pf .. "\\LOVE\\love.exe" end
+  local pf86 = os.getenv("ProgramFiles(x86)")
+  if pf86 and fileOk(pf86 .. "\\LOVE\\love.exe") then return pf86 .. "\\LOVE\\love.exe" end
+  return nil
+end
+
 local function resolveLoveExe(searchRoots)
   local sep = package.config:sub(1, 1)
   for _, root in ipairs(searchRoots or {}) do
@@ -743,10 +785,18 @@ local function resolveLoveExe(searchRoots)
   return "love", false
 end
 
+local playtestArmed = 0
+
 function App.playtestMod()
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
+  local now = (love.timer and love.timer.getTime and love.timer.getTime())
+    or os.time()
+  if now - playtestArmed < 1.5 then
+    return say("Playtest is already launching")
+  end
+  playtestArmed = now
   -- Hand-written mods need a fresh editor_apply.lua even when the project
   -- is not marked dirty (first playtest after a Save-format change).
   if (anyDirty(S) or S.project._protectMain) and not App.save() then return false end
@@ -817,14 +867,19 @@ function App.playtestMod()
     repoRoot(),
     os.getenv("POKEPORT_CONTENT_ROOT"),
   })
+  if not fused then
+    local running = runningLoveExe()
+    if running then loveExe = running end
+  end
   local cmd
   if sep == "\\" then
     if fused then
-      cmd = string.format('start "" /D "%s" "%s" --game=%s',
+      cmd = string.format('start "Gen1RecompPlaytest" /D "%s" "%s" --game=%s',
         recomp, loveExe, version)
     else
       cmd = PlaytestPaths.windowsLaunch(loveExe, recomp, version)
     end
+    cmd = PlaytestPaths.windowsDetach(cmd)
   else
     if fused then
       cmd = string.format('cd "%s" && "%s" --game=%s &',
