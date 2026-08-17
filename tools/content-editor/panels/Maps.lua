@@ -2465,14 +2465,16 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     if def then
       prepareLiveMap(S, id, def)
       local ok, loaded = Maps.loadEditorMap(S, id)
-      if ok and loaded and loaded.renderer and loaded.renderer.drawMapOnly then
+      if ok and loaded and loaded.renderer
+          and (loaded.renderer.drawMapOnly or loaded.renderer.draw) then
         love.graphics.push()
         love.graphics.translate(p.x, p.y)
         local pal = mapPreviewPalette(S, def)
         local shaded = pal and Preview.pushPaletteShader(S, pal)
         love.graphics.setColor(1, 1, 1, sel and 1 or 0.92)
         -- Full map body in local space; cam 0,0 shows the whole sheet.
-        loaded.renderer:drawMapOnly(0, 0, p.w, p.h)
+        local draw = loaded.renderer.drawMapOnly or loaded.renderer.draw
+        draw(loaded.renderer, 0, 0, p.w, p.h)
         Preview.popPaletteShader(shaded)
         love.graphics.pop()
       else
@@ -2900,6 +2902,11 @@ function Maps.loadEditorMap(S, mapId)
     map.renderer = renderer
     if not map.renderer then
       return false, "could not bake map preview (missing tileset image?)"
+    end
+    -- Recomp MapPreview only exposes draw(); world view / neighbors call
+    -- drawMapOnly like the Gen1 TileRenderer.
+    if not map.renderer.drawMapOnly then
+      map.renderer.drawMapOnly = map.renderer.draw
     end
     return true, map
   end
