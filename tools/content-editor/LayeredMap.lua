@@ -1356,7 +1356,8 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     local id = tileIds[key]
     if id ~= nil then return id end
     id = #tiles
-    if id >= 256 then
+    -- GBC sheets cap at 256; true-color atlases are just a PNG.
+    if id >= 256 and not trueColor then
       error(mapId .. ": composed graphics need more than 256 unique 8x8 tiles", 0)
     end
     tileIds[key] = id
@@ -1453,7 +1454,9 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     local id = blockIds[key]
     if id ~= nil then return id end
     id = #blocks
-    if id >= 256 then error(mapId .. ": map needs more than 256 blocks", 0) end
+    if id >= 256 and not trueColor then
+      error(mapId .. ": map needs more than 256 blocks", 0)
+    end
     blockIds[key] = id
     blocks[#blocks + 1] = block
     collisionQuads[#collisionQuads + 1] = quad

@@ -9,11 +9,6 @@ local TmxPokemonium = {}
 
 local SEP = package.config:sub(1, 1)
 local FLIP_UNIT = 0x20000000
-local SPECIAL = {
-  collisions = true, collision = true, water = true,
-  ledgesleft = true, ledgesright = true, ledgesdown = true, ledgesup = true,
-  ledges = true, fringe = true, overhead = true,
-}
 
 local function join(...)
   local parts = { ... }
@@ -59,8 +54,18 @@ local function resolvePath(base, rel)
   return out
 end
 
+local function unescapeXml(s)
+  s = tostring(s or "")
+  s = s:gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&lt;", "<"):gsub("&gt;", ">")
+  return (s:gsub("&amp;", "&"))
+end
+
 local function attr(tag, name)
-  return tag and tag:match(name .. '%s*=%s*"([^"]*)"')
+  local v = tag and tag:match(name .. '%s*=%s*"([^"]*)"')
+  if not v then
+    v = tag and tag:match(name .. "%s*=%s*'([^']*)'")
+  end
+  return v and unescapeXml(v) or v
 end
 
 local function safeId(name, fallback)
@@ -155,11 +160,32 @@ local function decodeBase64(text)
   return ""
 end
 
-local function decompress(raw, compression)
+local function decompress(raw, compression, expectLen)
   if not compression or compression == "" then return raw end
   if not (love and love.data and love.data.decompress) then return raw end
-  local ok, out = pcall(love.data.decompress, "string", compression, raw)
-  return (ok and type(out) == "string") and out or raw
+  local order = { compression }
+  if compression == "gzip" then
+    order[2], order[3] = "zlib", "deflate"
+  elseif compression == "zlib" then
+    order[2], order[3] = "gzip", "deflate"
+  end
+  local fallback
+  for i = 1, #order do
+    local ok, out = pcall(love.data.decompress, "string", order[i], raw)
+    if ok and type(out) == "string" and #out > 0 then
+      if expectLen and #out == expectLen then return out end
+      if not fallback then
+        fallback = out
+      elseif expectLen then
+        if math.abs(#out - expectLen) < math.abs(#fallback - expectLen) then
+          fallback = out
+        end
+      elseif #out > #fallback then
+        fallback = out
+      end
+    end
+  end
+  return fallback or raw
 end
 
 local function unpackU32(raw, width, height)
@@ -181,7 +207,7 @@ local function decodeLayer(dataOpen, text, width, height)
     return parseCsv(text, width, height)
   end
   if encoding == "base64" then
-    local raw = decompress(decodeBase64(text), compression)
+    local raw = decompress(decodeBase64(text), compression, width * height * 4)
     return unpackU32(raw, width, height)
   end
   return parseCsv(text, width, height)
@@ -285,15 +311,52 @@ local function crop(src, sx, sy, w, h)
   return dst
 end
 
-local function tilesetFromXml(openTag, inner, baseDir, firstgid, nameHint)
+local function parseTileImages(inner, baseDir)
+  local images = {}
+  if not inner then return images end
+  local pos = 1
+  while true do
+    local start = inner:find("<tile[%s>]", pos)
+    if not start then break end
+    local gt = inner:find(">", start)
+    if not gt then break end
+    local id = tonumber(attr(inner:sub(start, gt), "id"))
+    local close = inner:find("</tile>", gt)
+    local chunk = close and inner:sub(start, close + 6) or inner:sub(start, gt)
+    local imgStart = chunk:find("<image[%s>]")
+    local imgGt = imgStart and chunk:find(">", imgStart)
+    if id and imgStart and imgGt then
+      local src = attr(chunk:sub(imgStart, imgGt), "source")
+      if src and src ~= "" then
+        images[id] = resolvePath(baseDir, src)
+      end
+    end
+    pos = (close or gt) + 1
+  end
+  return images
+end
+
+local function tilesetFromXml(openTag, inner, baseDir, firstgid, nameHint, defaultTile)
   local name = attr(openTag, "name") or nameHint or "tiles"
-  local tilewidth = tonumber(attr(openTag, "tilewidth")) or 32
-  local tileheight = tonumber(attr(openTag, "tileheight")) or 32
+  local tilewidth = tonumber(attr(openTag, "tilewidth")) or defaultTile or 32
+  local tileheight = tonumber(attr(openTag, "tileheight")) or defaultTile or 32
   local columns = tonumber(attr(openTag, "columns")) or 0
   local tilecount = tonumber(attr(openTag, "tilecount")) or 0
-  local imgTag = inner and (inner:match("<image%s.-/>") or inner:match("<image%s.->"))
-  if not imgTag then return nil, "tileset " .. name .. " has no image" end
-  local imagePath = resolvePath(baseDir, attr(imgTag, "source") or "")
+  local spacing = tonumber(attr(openTag, "spacing")) or 0
+  local margin = tonumber(attr(openTag, "margin")) or 0
+  inner = inner or ""
+  local tileStart = inner:find("<tile[%s>]")
+  local imgStart = inner:find("<image[%s>]")
+  local imgTag
+  if imgStart and (not tileStart or imgStart < tileStart) then
+    local imgGt = inner:find(">", imgStart)
+    imgTag = imgGt and inner:sub(imgStart, imgGt) or nil
+  end
+  local imagePath = imgTag and resolvePath(baseDir, attr(imgTag, "source") or "") or nil
+  local tileImages = parseTileImages(inner, baseDir)
+  if not imagePath and not next(tileImages) then
+    return nil, "tileset " .. name .. " has no image"
+  end
   return {
     firstgid = firstgid,
     name = name,
@@ -301,24 +364,30 @@ local function tilesetFromXml(openTag, inner, baseDir, firstgid, nameHint)
     tileheight = tileheight,
     columns = columns,
     tilecount = tilecount,
+    spacing = spacing,
+    margin = margin,
     imagePath = imagePath,
-    trans = attr(imgTag, "trans"),
-    imageWidth = tonumber(attr(imgTag, "width")) or 0,
-    imageHeight = tonumber(attr(imgTag, "height")) or 0,
+    tileImages = next(tileImages) and tileImages or nil,
+    trans = imgTag and attr(imgTag, "trans") or nil,
+    imageWidth = imgTag and tonumber(attr(imgTag, "width")) or 0,
+    imageHeight = imgTag and tonumber(attr(imgTag, "height")) or 0,
   }
 end
 
-local function loadTsx(path, firstgid)
+local function loadTsx(path, firstgid, defaultTile)
   local body = ModIO.readText(path)
   if not body then return nil, "missing tsx " .. path end
-  local open = body:match("<tileset%s.->")
-  if not open then return nil, "invalid tsx " .. path end
-  local inner = body:match("<tileset%s.->(.-)</tileset>") or ""
+  local start = body:find("<tileset[%s>]")
+  local gt = start and body:find(">", start)
+  if not (start and gt) then return nil, "invalid tsx " .. path end
+  local open = body:sub(start, gt)
+  local close = body:find("</tileset>", gt)
+  local inner = close and body:sub(gt + 1, close - 1) or ""
   local name = attr(open, "name") or basename(path):gsub("%.[Tt][Ss][Xx]$", "")
-  return tilesetFromXml(open, inner, dirname(path), firstgid, name)
+  return tilesetFromXml(open, inner, dirname(path), firstgid, name, defaultTile)
 end
 
-local function parseTilesets(body, tmxDir, report)
+local function parseTilesets(body, tmxDir, report, defaultTile)
   local tilesets = {}
   local pos = 1
   while true do
@@ -331,7 +400,7 @@ local function parseTilesets(body, tmxDir, report)
     local source = attr(open, "source")
     if source then
       local tsxPath = resolvePath(tmxDir, source)
-      local ts, err = loadTsx(tsxPath, firstgid)
+      local ts, err = loadTsx(tsxPath, firstgid, defaultTile)
       if ts then
         ts.tsxPath = tsxPath
         tilesets[#tilesets + 1] = ts
@@ -342,7 +411,7 @@ local function parseTilesets(body, tmxDir, report)
     else
       local close = body:find("</tileset>", gt)
       local inner = close and body:sub(gt + 1, close - 1) or ""
-      local ts, err = tilesetFromXml(open, inner, tmxDir, firstgid)
+      local ts, err = tilesetFromXml(open, inner, tmxDir, firstgid, nil, defaultTile)
       if ts then
         tilesets[#tilesets + 1] = ts
       else
@@ -364,16 +433,36 @@ local function parseLayers(body, width, height)
     local close = body:find("</layer>", start)
     if not close then break end
     local chunk = body:sub(start, close + 7)
-    local open = chunk:match("<layer%s.->") or ""
-    local dataOpen = chunk:match("<data%s.->") or "<data>"
-    local text = chunk:match("<data[^>]*>(.-)</data>") or ""
+    local layerGt = chunk:find(">")
+    local open = layerGt and chunk:sub(1, layerGt) or ""
+    local lw = tonumber(attr(open, "width")) or width
+    local lh = tonumber(attr(open, "height")) or height
+    local dataStart = chunk:find("<data[%s>]")
+    local dataGt = dataStart and chunk:find(">", dataStart)
+    local dataClose = chunk:find("</data>")
+    local dataOpen = (dataStart and dataGt) and chunk:sub(dataStart, dataGt) or "<data>"
+    local text = (dataGt and dataClose and dataClose > dataGt)
+      and chunk:sub(dataGt + 1, dataClose - 1) or ""
     layers[#layers + 1] = {
       name = attr(open, "name") or "",
-      gids = decodeLayer(dataOpen, text, width, height),
+      width = lw,
+      height = lh,
+      gids = decodeLayer(dataOpen, text, lw, lh),
     }
     pos = close + 1
   end
   return layers
+end
+
+-- Pokemonium WalkBehind/Water layers are often 256x256; the map is the
+-- top-left window of that grid (layer stride is layer.width, not map width).
+local function sampleGid(layer, tx, ty, mapW, mapH)
+  if not layer then return 0 end
+  local lw = layer.width or mapW
+  local lh = layer.height or mapH
+  local lx, ly = tx, ty
+  if lx < 0 or ly < 0 or lx >= lw or ly >= lh then return 0 end
+  return (layer.gids and layer.gids[ly * lw + lx + 1]) or 0
 end
 
 local function objectRecord(obj)
@@ -430,7 +519,9 @@ local function ensureTilesetImage(ts, report, conv)
   end
   local img = loadImage(ts.imagePath)
   if not img then
-    report[#report + 1] = "missing tileset image: " .. tostring(ts.imagePath)
+    if ts.imagePath then
+      report[#report + 1] = "missing tileset image: " .. tostring(ts.imagePath)
+    end
     return nil
   end
   if ts.trans then applyColorKey(img, ts.trans) end
@@ -454,12 +545,25 @@ local function extractTile(ts, localId, report, conv)
   local cacheKey = tostring(ts.imagePath or ts.name) .. ":" .. tostring(localId)
   local cached = conv.tileCache[cacheKey]
   if cached then return cached end
+  if ts.tileImages and ts.tileImages[localId] then
+    local path = ts.tileImages[localId]
+    conv.imageCache = conv.imageCache or {}
+    local img = conv.imageCache[path] or loadImage(path)
+    if img then
+      conv.imageCache[path] = img
+      conv.tileCache[cacheKey] = img
+      return img
+    end
+    report[#report + 1] = "missing tile image: " .. tostring(path)
+  end
   local img = ensureTilesetImage(ts, report, conv)
   if not img then return nil end
   local cols = math.max(1, ts.columns)
   local tw, th = ts.tilewidth, ts.tileheight
-  local sx = (localId % cols) * tw
-  local sy = math.floor(localId / cols) * th
+  local spacing = ts.spacing or 0
+  local margin = ts.margin or 0
+  local sx = margin + (localId % cols) * (tw + spacing)
+  local sy = margin + math.floor(localId / cols) * (th + spacing)
   if sx < 0 or sy < 0 or sx + tw > img:getWidth() or sy + th > img:getHeight() then
     report[#report + 1] = string.format(
       "tile %s#%d out of range", ts.name, localId)
@@ -470,7 +574,8 @@ local function extractTile(ts, localId, report, conv)
   return tile
 end
 
-local function renderGid(rawGid, tilesets, report, conv)
+local function renderGid(rawGid, tilesets, report, conv, destSize)
+  destSize = destSize or 32
   local raw, flipH, flipV, flipD = decodeGid(rawGid)
   if raw == 0 then return nil end
   local ts, localId = gidToLocal(rawGid, tilesets)
@@ -478,20 +583,21 @@ local function renderGid(rawGid, tilesets, report, conv)
   local tile = extractTile(ts, localId, report, conv)
   if not tile then return nil end
   tile = applyFlips(tile, flipH, flipV, flipD)
-  if tile:getWidth() ~= 32 or tile:getHeight() ~= 32 then
-    tile = resizeNearest(tile, 32, 32)
+  if tile:getWidth() ~= destSize or tile:getHeight() ~= destSize then
+    tile = resizeNearest(tile, destSize, destSize)
   end
   return tile, ts
 end
 
-local function compositeStack(stack, tilesets, report, conv)
+local function compositeStack(stack, tilesets, report, conv, destSize)
+  destSize = destSize or 32
   local canvas
   for i = 1, #stack do
-    local tile, ts = renderGid(stack[i], tilesets, report, conv)
+    local tile, ts = renderGid(stack[i], tilesets, report, conv, destSize)
     if tile then
       if ts then report._used = report._used or {} ; report._used[ts.name] = true end
       if not canvas then
-        canvas = love.image.newImageData(32, 32)
+        canvas = love.image.newImageData(destSize, destSize)
       end
       pasteHard(canvas, tile, 0, 0)
     end
@@ -564,89 +670,215 @@ end
 local function convertOne(path, conv, report)
   local body, err = ModIO.readText(path)
   if not body then return nil, err end
-  local mapTag = body:match("<map%s.->")
+  local mapStart = body:find("<map[%s>]")
+  local mapGt = mapStart and body:find(">", mapStart)
+  local mapTag = (mapStart and mapGt) and body:sub(mapStart, mapGt) or nil
   if not mapTag then return nil, "not a TMX map" end
   local width = tonumber(attr(mapTag, "width"))
   local height = tonumber(attr(mapTag, "height"))
   local tilewidth = tonumber(attr(mapTag, "tilewidth")) or 32
   local tileheight = tonumber(attr(mapTag, "tileheight")) or 32
   if not (width and height) then return nil, "TMX missing width/height" end
-  if tilewidth ~= 32 or tileheight ~= 32 then
+  local pack = (tilewidth <= 16 and tileheight <= 16) and 2 or 1
+  local destSize = math.floor(32 / pack)
+  if pack == 2 then
+    report[#report + 1] = string.format(
+      "%s: %dx%d tiles at %dx%d (2x2 tiles = one engine block)",
+      basename(path), width, height, tilewidth, tileheight)
+  elseif tilewidth ~= 32 or tileheight ~= 32 then
     report[#report + 1] = string.format(
       "%s: tile size %dx%d (scaled to 32x32 blocks)",
       basename(path), tilewidth, tileheight)
   end
 
-  local tilesets = parseTilesets(body, dirname(path), report)
+  local tilesets = parseTilesets(body, dirname(path), report, tilewidth)
   if #tilesets == 0 then return nil, "TMX has no tilesets" end
   for i = 1, #tilesets do conv.allTilesets[#conv.allTilesets + 1] = tilesets[i] end
   local layers = parseLayers(body, width, height)
   if #layers == 0 then return nil, "TMX has no tile layers" end
 
+  -- Draw every tile layer in file order (Walkable, Water, Collisions,
+  -- WalkBehind). Pokemonium's client does the same; Collisions often holds
+  -- house walls and tree trunks. Passage still uses map-sized collision only.
   local ground, collisions, waterLayers = {}, {}, {}
   for i = 1, #layers do
     local key = layerKey(layers[i].name)
+    ground[#ground + 1] = layers[i]
     if key == "collisions" or key == "collision" then
-      collisions[#collisions + 1] = layers[i].gids
+      collisions[#collisions + 1] = layers[i]
     elseif key == "water" then
-      waterLayers[#waterLayers + 1] = layers[i].gids
-    elseif not SPECIAL[key] then
-      ground[#ground + 1] = layers[i]
+      waterLayers[#waterLayers + 1] = layers[i]
     end
   end
   if #ground == 0 then ground[1] = layers[1] end
-
-  local blocks = {}
-  local need = width * height
-  for i = 1, need do
-    local stack = {}
-    local any = false
-    for li = 1, #ground do
-      local gid = ground[li].gids[i] or 0
-      stack[li] = gid
-      if gid % FLIP_UNIT ~= 0 then any = true end
+  local sizedColl = {}
+  for i = 1, #collisions do
+    local lw = collisions[i].width or width
+    local lh = collisions[i].height or height
+    if lw <= width and lh <= height then
+      sizedColl[#sizedColl + 1] = collisions[i]
     end
-    if not any then
-      blocks[i] = 0
-    else
-      local key = stackKey(stack, tilesets)
-      local bid = conv.keyToBlock[key]
-      if bid == nil then
-        local composed = compositeStack(stack, tilesets, report, conv)
-        if not composed then
-          bid = 0
-        else
-          bid = conv.appendBlock(composed)
+  end
+  if #sizedColl > 0 then collisions = sizedColl end
+
+  local blockW = math.ceil(width / pack)
+  local blockH = math.ceil(height / pack)
+  conv.cellTiles = conv.cellTiles or {}
+  conv.cellKeyToId = conv.cellKeyToId or {}
+  local cellIds, cellCollision, cellFilled = {}, {}, {}
+  if pack == 2 then
+    for ty = 0, height - 1 do
+      for tx = 0, width - 1 do
+        local i = ty * width + tx + 1
+        local stack, any = {}, false
+        for li = 1, #ground do
+          local gid = sampleGid(ground[li], tx, ty, width, height)
+          stack[li] = gid
+          if gid % FLIP_UNIT ~= 0 then any = true end
         end
-        conv.keyToBlock[key] = bid
+        local key = stackKey(stack, tilesets)
+        local cid = conv.cellKeyToId[key]
+        if cid == nil then
+          local tile = any and compositeStack(stack, tilesets, report, conv, destSize)
+          conv.cellTiles[#conv.cellTiles + 1] = tile
+            or love.image.newImageData(destSize, destSize)
+          cid = #conv.cellTiles - 1
+          conv.cellKeyToId[key] = cid
+        end
+        cellIds[i] = cid
+        cellFilled[i] = any
+        local mode = "walk"
+        for li = 1, #collisions do
+          if sampleGid(collisions[li], tx, ty, width, height) % FLIP_UNIT ~= 0 then
+            mode = "solid"
+            break
+          end
+        end
+        if mode ~= "solid" then
+          for li = 1, #waterLayers do
+            if sampleGid(waterLayers[li], tx, ty, width, height) % FLIP_UNIT ~= 0 then
+              mode = "water"
+              break
+            end
+          end
+        end
+        cellCollision[i] = mode
       end
-      blocks[i] = bid
     end
   end
 
-  for i = 1, need do
-    local blocked = false
-    for li = 1, #collisions do
-      if (collisions[li][i] or 0) % FLIP_UNIT ~= 0 then
-        blocked = true
-        break
+  local blocks = {}
+  for by = 0, blockH - 1 do
+    for bx = 0, blockW - 1 do
+      local parts = {}
+      local any = false
+      for qy = 0, pack - 1 do
+        for qx = 0, pack - 1 do
+          local tx, ty = bx * pack + qx, by * pack + qy
+          local stack = {}
+          if tx < width and ty < height then
+            local cell = ty * width + tx + 1
+            if pack == 2 then
+              parts[#parts + 1] = tostring(cellIds[cell] or 0)
+              if cellFilled[cell] then any = true end
+            else
+              for li = 1, #ground do
+                local gid = sampleGid(ground[li], tx, ty, width, height)
+                stack[li] = gid
+                if gid % FLIP_UNIT ~= 0 then any = true end
+              end
+              parts[#parts + 1] = stackKey(stack, tilesets)
+            end
+          else
+            parts[#parts + 1] = pack == 2 and "0" or stackKey({}, tilesets)
+          end
+        end
+      end
+      local bi = by * blockW + bx + 1
+      if not any then
+        blocks[bi] = 0
+      else
+        local key = table.concat(parts, "/")
+        local bid = conv.keyToBlock[key]
+        if bid == nil then
+          local composed = love.image.newImageData(32, 32)
+          local painted = false
+          for qy = 0, pack - 1 do
+            for qx = 0, pack - 1 do
+              local tx, ty = bx * pack + qx, by * pack + qy
+              local tile
+              if tx < width and ty < height then
+                local cell = ty * width + tx + 1
+                if pack == 2 then
+                  tile = conv.cellTiles[(cellIds[cell] or 0) + 1]
+                else
+                  local stack = {}
+                  for li = 1, #ground do
+                    stack[li] = sampleGid(ground[li], tx, ty, width, height)
+                  end
+                  tile = compositeStack(stack, tilesets, report, conv, destSize)
+                end
+              end
+              if tile then
+                if tile:getWidth() ~= destSize or tile:getHeight() ~= destSize then
+                  tile = resizeNearest(tile, destSize, destSize)
+                end
+                pasteHard(composed, tile, qx * destSize, qy * destSize)
+                painted = true
+              end
+            end
+          end
+          bid = painted and conv.appendBlock(composed) or 0
+          conv.keyToBlock[key] = bid
+        end
+        blocks[bi] = bid
       end
     end
-    if blocked then
-      local row = conv.blockTiles[(blocks[i] or 0) + 1]
-      if row then conv.walkableSet[row[13] or 0] = nil end
-    end
-    local wet = false
-    for li = 1, #waterLayers do
-      if (waterLayers[li][i] or 0) % FLIP_UNIT ~= 0 then
-        wet = true
-        break
-      end
-    end
-    if wet then
-      local row = conv.blockTiles[(blocks[i] or 0) + 1]
+  end
+
+  for ty = 0, height - 1 do
+    for tx = 0, width - 1 do
+      local i = ty * width + tx + 1
+      local bx, by = math.floor(tx / pack), math.floor(ty / pack)
+      local qx, qy = tx % pack, ty % pack
+      local row = conv.blockTiles[(blocks[by * blockW + bx + 1] or 0) + 1]
       if row then
-        for t = 1, 16 do conv.waterSet[row[t]] = true end
+        local blocked = false
+        for li = 1, #collisions do
+          if sampleGid(collisions[li], tx, ty, width, height) % FLIP_UNIT ~= 0 then
+            blocked = true
+            break
+          end
+        end
+        if blocked then
+          if pack == 1 then
+            conv.walkableSet[row[13] or 0] = nil
+          else
+            local ox, oy = qx * 2, qy * 2
+            conv.walkableSet[row[oy * 4 + ox + 1]] = nil
+            conv.walkableSet[row[oy * 4 + ox + 2]] = nil
+            conv.walkableSet[row[(oy + 1) * 4 + ox + 1]] = nil
+            conv.walkableSet[row[(oy + 1) * 4 + ox + 2]] = nil
+          end
+        end
+        local wet = false
+        for li = 1, #waterLayers do
+          if sampleGid(waterLayers[li], tx, ty, width, height) % FLIP_UNIT ~= 0 then
+            wet = true
+            break
+          end
+        end
+        if wet then
+          if pack == 1 then
+            for t = 1, 16 do conv.waterSet[row[t]] = true end
+          else
+            local ox, oy = qx * 2, qy * 2
+            conv.waterSet[row[oy * 4 + ox + 1]] = true
+            conv.waterSet[row[oy * 4 + ox + 2]] = true
+            conv.waterSet[row[(oy + 1) * 4 + ox + 1]] = true
+            conv.waterSet[row[(oy + 1) * 4 + ox + 2]] = true
+          end
+        end
       end
     end
   end
@@ -655,9 +887,11 @@ local function convertOne(path, conv, report)
   local parsedObjs = parseObjects(body)
   for i = 1, #parsedObjs do
     local obj = parsedObjs[i]
-    local bx = math.floor(obj.x / tilewidth)
-    local by = math.floor(obj.y / tileheight)
-    local cx, cy = bx * 2, by * 2
+    local cx = math.floor(obj.x / tilewidth)
+    local cy = math.floor(obj.y / tileheight)
+    if pack == 1 then
+      cx, cy = cx * 2, cy * 2
+    end
     local props = obj.properties
     local otype = (obj.type or ""):lower()
     local name = (obj.name or ""):lower()
@@ -689,14 +923,18 @@ local function convertOne(path, conv, report)
   local wx, wy = worldCoords(path)
   return {
     id = mapIdFromPath(path),
-    width = width,
-    height = height,
+    width = blockW,
+    height = blockH,
     blocks = blocks,
     warps = warps,
     objects = objects,
     signs = signs,
     wx = wx,
     wy = wy,
+    cellIds = pack == 2 and cellIds or nil,
+    cellWidth = pack == 2 and width or nil,
+    cellHeight = pack == 2 and height or nil,
+    cellCollision = pack == 2 and cellCollision or nil,
   }
 end
 
@@ -804,6 +1042,36 @@ function TmxPokemonium.importPath(S, path, App)
   if S.data and S.data.tilesets then S.data.tilesets[tilesetId] = tsRec end
   copySourceTilesets(S, conv.allTilesets, report)
 
+  local LayeredMap = require("LayeredMap")
+  local cellSourceId
+  if conv.cellTiles and #conv.cellTiles > 0 then
+    local nCells = #conv.cellTiles
+    local cellCols = 16
+    local cellRows = math.max(1, math.ceil(nCells / cellCols))
+    local cellAtlas = love.image.newImageData(cellCols * 16, cellRows * 16)
+    for i = 1, nCells do
+      local tile = conv.cellTiles[i]
+      if tile then
+        if tile:getWidth() ~= 16 or tile:getHeight() ~= 16 then
+          tile = resizeNearest(tile, 16, 16)
+        end
+        cellAtlas:paste(tile, ((i - 1) % cellCols) * 16,
+          math.floor((i - 1) / cellCols) * 16, 0, 0, 16, 16)
+      end
+    end
+    local cellRel = "assets/mapbuilder/sources/" .. tilesetId:lower() .. "_cells.png"
+    ModIO.ensureDirectory(join(S.path, "assets", "mapbuilder", "sources"))
+    if writePng(cellAtlas, join(S.path, (cellRel:gsub("/", SEP)))) then
+      local src = LayeredMap.installTileSource(
+        S.project, tilesetId .. "_CELLS", cellRel,
+        cellAtlas:getWidth(), cellAtlas:getHeight())
+      if src then
+        cellSourceId = src.id
+        pcall(function() require("Preview").invalidatePath(cellRel) end)
+      end
+    end
+  end
+
   local byWorld = {}
   for i = 1, #converted do
     local m = converted[i]
@@ -856,10 +1124,44 @@ function TmxPokemonium.importPath(S, path, App)
     if map.outdoor == nil then
       map.outdoor = gen2 or map.environment == "outside"
     end
+    map.trueColor = true
     S.project.maps[rec.id] = map
     if S.data and S.data.maps then S.data.maps[rec.id] = map end
     if S.project.layeredMaps then S.project.layeredMaps[rec.id] = nil end
-    pcall(function() require("LayeredMap").convertMap(S, rec.id) end)
+    if rec.cellIds and cellSourceId then
+      local cw = rec.cellWidth + (rec.cellWidth % 2)
+      local ch = rec.cellHeight + (rec.cellHeight % 2)
+      local cells, collision = {}, {}
+      for y = 0, ch - 1 do
+        for x = 0, cw - 1 do
+          local index = y * cw + x + 1
+          local srcIndex = (y < rec.cellHeight and x < rec.cellWidth)
+            and (y * rec.cellWidth + x + 1) or nil
+          cells[index] = {
+            source = cellSourceId,
+            tile = srcIndex and (rec.cellIds[srcIndex] or 0) or 0,
+          }
+          collision[index] = (srcIndex and rec.cellCollision and rec.cellCollision[srcIndex])
+            or "solid"
+        end
+      end
+      S.project.layeredMaps = S.project.layeredMaps or {}
+      S.project.layeredMaps[rec.id] = {
+        id = rec.id,
+        cellWidth = cw,
+        cellHeight = ch,
+        baseTileset = tilesetId,
+        layers = {{
+          id = "ground", name = "Ground", visible = true, export = true,
+          opacity = 1, cells = cells,
+        }},
+        collision = collision,
+      }
+      map._layeredSource = rec.id
+      map.width, map.height = cw / 2, ch / 2
+    else
+      pcall(function() LayeredMap.convertMap(S, rec.id) end)
+    end
     pcall(function() require("src.world.MapLoader").invalidate(rec.id) end)
     report[#report + 1] = string.format(
       "%s: %dx%d blocks, %d warps, %d objects",
@@ -886,7 +1188,7 @@ function TmxPokemonium.importPath(S, path, App)
 
   S.mapId = firstId
   S.builderMapId = firstId
-  S.builderSourceId = require("LayeredMap").runtimeSourceId(tilesetId)
+  S.builderSourceId = cellSourceId or LayeredMap.runtimeSourceId(tilesetId)
   S.tilesetEditId = tilesetId
   S.mapPaletteTileset = tilesetId
   S._mapPaletteFor = firstId
