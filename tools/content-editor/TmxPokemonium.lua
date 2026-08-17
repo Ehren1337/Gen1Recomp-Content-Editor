@@ -96,22 +96,6 @@ local function worldCoords(path)
   if x then return tonumber(x), tonumber(y) end
 end
 
-local function imageKey(img)
-  local w, h = img:getWidth(), img:getHeight()
-  local parts = { tostring(w), tostring(h) }
-  for y = 0, h - 1 do
-    for x = 0, w - 1 do
-      local r, g, b, a = img:getPixel(x, y)
-      parts[#parts + 1] = string.char(
-        math.floor(r * 255 + 0.5),
-        math.floor(g * 255 + 0.5),
-        math.floor(b * 255 + 0.5),
-        math.floor(a * 255 + 0.5))
-    end
-  end
-  return table.concat(parts)
-end
-
 function TmxPokemonium.collectTmx(path)
   if type(path) ~= "string" or path == "" then return {} end
   if path:lower():match("%.tmx$") then return { path } end
@@ -429,8 +413,21 @@ local function gidToLocal(gid, tilesets)
   return nil
 end
 
-local function ensureTilesetImage(ts, report)
+local function ensureTilesetImage(ts, report, conv)
   if ts.image then return ts.image end
+  conv = conv or {}
+  conv.imageCache = conv.imageCache or {}
+  local cached = ts.imagePath and conv.imageCache[ts.imagePath]
+  if cached then
+    ts.image = cached
+    ts.imageWidth = cached:getWidth()
+    ts.imageHeight = cached:getHeight()
+    local derived = (ts.tilewidth > 0)
+      and math.max(1, math.floor(cached:getWidth() / ts.tilewidth)) or 1
+    if ts.columns <= 1 and derived > 1 then ts.columns = derived
+    elseif ts.columns <= 0 then ts.columns = derived end
+    return cached
+  end
   local img = loadImage(ts.imagePath)
   if not img then
     report[#report + 1] = "missing tileset image: " .. tostring(ts.imagePath)
@@ -447,11 +444,17 @@ local function ensureTilesetImage(ts, report)
   ts.image = img
   ts.imageWidth = img:getWidth()
   ts.imageHeight = img:getHeight()
+  if ts.imagePath then conv.imageCache[ts.imagePath] = img end
   return img
 end
 
-local function extractTile(ts, localId, report)
-  local img = ensureTilesetImage(ts, report)
+local function extractTile(ts, localId, report, conv)
+  conv = conv or {}
+  conv.tileCache = conv.tileCache or {}
+  local cacheKey = tostring(ts.imagePath or ts.name) .. ":" .. tostring(localId)
+  local cached = conv.tileCache[cacheKey]
+  if cached then return cached end
+  local img = ensureTilesetImage(ts, report, conv)
   if not img then return nil end
   local cols = math.max(1, ts.columns)
   local tw, th = ts.tilewidth, ts.tileheight
@@ -462,15 +465,17 @@ local function extractTile(ts, localId, report)
       "tile %s#%d out of range", ts.name, localId)
     return nil
   end
-  return crop(img, sx, sy, tw, th)
+  local tile = crop(img, sx, sy, tw, th)
+  conv.tileCache[cacheKey] = tile
+  return tile
 end
 
-local function renderGid(rawGid, tilesets, report)
+local function renderGid(rawGid, tilesets, report, conv)
   local raw, flipH, flipV, flipD = decodeGid(rawGid)
   if raw == 0 then return nil end
   local ts, localId = gidToLocal(rawGid, tilesets)
   if not ts then return nil end
-  local tile = extractTile(ts, localId, report)
+  local tile = extractTile(ts, localId, report, conv)
   if not tile then return nil end
   tile = applyFlips(tile, flipH, flipV, flipD)
   if tile:getWidth() ~= 32 or tile:getHeight() ~= 32 then
@@ -479,10 +484,10 @@ local function renderGid(rawGid, tilesets, report)
   return tile, ts
 end
 
-local function compositeStack(stack, tilesets, report)
+local function compositeStack(stack, tilesets, report, conv)
   local canvas
   for i = 1, #stack do
-    local tile, ts = renderGid(stack[i], tilesets, report)
+    local tile, ts = renderGid(stack[i], tilesets, report, conv)
     if tile then
       if ts then report._used = report._used or {} ; report._used[ts.name] = true end
       if not canvas then
@@ -492,6 +497,26 @@ local function compositeStack(stack, tilesets, report)
     end
   end
   return canvas
+end
+
+-- GIDs are per-file; key by tileset + local id + flip so maps can share blocks.
+local function stackKey(stack, tilesets)
+  local parts = {}
+  for i = 1, #stack do
+    local gid = stack[i] or 0
+    local raw = gid % FLIP_UNIT
+    if raw == 0 then
+      parts[i] = "0"
+    else
+      local ts, localId = gidToLocal(gid, tilesets)
+      parts[i] = table.concat({
+        ts and (ts.imagePath or ts.name) or "?",
+        tostring(localId or 0),
+        tostring(gid - raw),
+      }, ":")
+    end
+  end
+  return table.concat(parts, "|")
 end
 
 local function writePng(imageData, path)
@@ -584,18 +609,18 @@ local function convertOne(path, conv, report)
     if not any then
       blocks[i] = 0
     else
-      local composed = compositeStack(stack, tilesets, report)
-      if not composed then
-        blocks[i] = 0
-      else
-        local key = imageKey(composed)
-        local bid = conv.keyToBlock[key]
-        if bid == nil then
+      local key = stackKey(stack, tilesets)
+      local bid = conv.keyToBlock[key]
+      if bid == nil then
+        local composed = compositeStack(stack, tilesets, report, conv)
+        if not composed then
+          bid = 0
+        else
           bid = conv.appendBlock(composed)
-          conv.keyToBlock[key] = bid
         end
-        blocks[i] = bid
+        conv.keyToBlock[key] = bid
       end
+      blocks[i] = bid
     end
   end
 
@@ -695,6 +720,8 @@ function TmxPokemonium.importPath(S, path, App)
     walkableSet = {},
     waterSet = {},
     keyToBlock = {},
+    imageCache = {},
+    tileCache = {},
     allTilesets = {},
   }
   function conv.appendBlock(tile)

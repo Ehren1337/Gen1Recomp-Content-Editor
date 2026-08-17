@@ -4,8 +4,10 @@ local EditorApp
 
 local function mountPinnedRuntime()
   if not require("tools.content-editor.RuntimeMount").mount() then
-    error("Could not mount Gen1Recomp. Link a Recomp folder on Project, "
-      .. "or put a checkout in runtime/gen1recomp.")
+    error("Could not find Gen1Recomp.\n\n"
+      .. "Use a bundled runtime/gen1recomp folder, set POKEPORT_RECOMP, "
+      .. "or choose your Gen1Recomp checkout when asked.\n"
+      .. "That folder must contain src/core/GameVersion.lua.")
   end
 end
 
