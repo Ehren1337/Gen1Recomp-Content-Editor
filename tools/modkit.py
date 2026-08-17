@@ -751,8 +751,23 @@ def classify_error(message, fallback="MK100"):
 
 
 FIXTURE_BASE = 'require("tests.fixture_data").load()'
-IMPORTED_BASE = ('(function() local D = require("src.core.Data") '
-                 'D:load() return D end)()')
+# Game2.lua stores Gold maps/tilesets on gen2Maps / gen2Tilesets. Data:load
+# still fills the short names, so the loader's Gen 2 routing would see an
+# empty tileset id space and flag every vanilla TILESET_* as MK102.
+IMPORTED_BASE = (
+    '(function() local D = require("src.core.Data") D:load() '
+    'if require("src.core.GameVersion").generation() == 2 then '
+    'local a = { maps = "gen2Maps", tilesets = "gen2Tilesets", '
+    'sprites = "gen2Sprites", text = "gen2Text", '
+    'encounters = "gen2Encounters", trainers = "gen2Trainers", '
+    'constants = "gen2Constants", palettes = "gen2Palettes", '
+    'icons = "gen2Icons", battle_anims = "gen2BattleAnims", '
+    'pokedex = "gen2Pokedex" } '
+    'for s, g in pairs(a) do '
+    'if D[s] and D[g] == nil then D[g] = D[s] end '
+    'if D[g] and D[s] == nil then D[s] = D[g] end '
+    'end end return D end)()'
+)
 
 
 def resolve_base(repo, choice):
