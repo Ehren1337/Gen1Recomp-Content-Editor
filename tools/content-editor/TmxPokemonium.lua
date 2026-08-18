@@ -1197,12 +1197,15 @@ function TmxPokemonium.importPath(S, path, App)
   S.importReport = table.concat(report, "\n")
   pcall(function() require("Preview").invalidatePath(rel) end)
   if App and App.markDirty then App.markDirty() end
+  conv.cellTiles, conv.sheetTiles, conv.imageCache, conv.tileCache = nil, nil, nil, nil
   pcall(function() require("LayeredMap").compileProject(S) end)
   pcall(function() require("src.world.MapLoader").invalidate(firstId) end)
   pcall(function()
     local Maps = require("Maps")
     if Maps.invalidateGoldPreview then Maps.invalidateGoldPreview(S, firstId) end
   end)
+  pcall(function() require("History").clear(S) end)
+  collectgarbage("collect")
   local summary = #converted == 1
     and (firstId .. " (converted to engine blocks)")
     or string.format("%d maps + tileset %s", #converted, tilesetId)

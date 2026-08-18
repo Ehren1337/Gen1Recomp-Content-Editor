@@ -12,7 +12,7 @@
 
 local History = {}
 
-local MAX_STACK = 60
+local MAX_STACK = 8
 local COALESCE_SEC = 0.55
 
 local function deepCopy(v, seen)

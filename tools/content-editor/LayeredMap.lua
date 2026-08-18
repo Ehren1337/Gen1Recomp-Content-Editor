@@ -1624,15 +1624,15 @@ function LayeredMap.compileProject(S)
   -- The transform writes derived PNGs on game load. The editor world view
   -- uses MapLoader now, so bake the same atlases into the LÖVE save dir.
   writeEditorDerivedImages(context)
+  context.pixels, context.pixelIds, context.images, context.bases, context.outputs = nil, nil, nil, nil, nil
   pcall(function() require("src.world.MapLoader").invalidateAll() end)
   pcall(function() require("src.render.TileRenderer").invalidate() end)
-  if S._g2MapBaker then
-    local okP, MapPreview = pcall(require, "src.world.gen2.MapPreview")
-    if okP and MapPreview and MapPreview.invalidate then
-      MapPreview.invalidate(S._g2MapBaker)
-    end
-  end
+  pcall(function()
+    local Maps = require("Maps")
+    if Maps.invalidateGoldPreview then Maps.invalidateGoldPreview(S) end
+  end)
   Preview.invalidate()
+  collectgarbage("collect")
   return true, string.format("compiled %d layered map(s)", compiled)
 end
 

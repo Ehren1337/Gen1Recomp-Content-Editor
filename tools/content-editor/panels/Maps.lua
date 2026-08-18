@@ -1982,10 +1982,27 @@ local function mapPreviewPalette(S, mapDef, renderer)
 end
 
 function Maps.invalidateGoldPreview(S, mapId)
-  if not (S and S._g2MapBaker) then return end
-  local ok, MapPreview = pcall(require, "src.world.gen2.MapPreview")
-  if ok and MapPreview and MapPreview.invalidate then
-    MapPreview.invalidate(S._g2MapBaker, mapId)
+  local baker = S and S._g2MapBaker
+  if baker and baker.mapImages then
+    local function drop(id)
+      local img = baker.mapImages[id]
+      if img and img.release then pcall(img.release, img) end
+      baker.mapImages[id] = nil
+    end
+    if mapId then
+      drop(mapId)
+    else
+      local ids = {}
+      for id in pairs(baker.mapImages) do ids[#ids + 1] = id end
+      for i = 1, #ids do drop(ids[i]) end
+    end
+  end
+  if S and S._editorLiveMaps then
+    if mapId then
+      S._editorLiveMaps[mapId] = nil
+    else
+      S._editorLiveMaps = nil
+    end
   end
 end
 
@@ -2893,6 +2910,7 @@ prepareLiveMap = function(S, mapId, def)
   if S._mapNeedsRebuild == mapId then
     MapLoader.invalidate(mapId)
     Maps.invalidateGoldPreview(S, mapId)
+    if S._editorLiveMaps then S._editorLiveMaps[mapId] = nil end
     S._mapNeedsRebuild = nil
   end
 end
@@ -2900,6 +2918,13 @@ end
 function Maps.loadEditorMap(S, mapId)
   if not mapId then return false, "no map" end
   local def = select(1, resolveMapDef(S, mapId))
+  local daytimeHint = def and (Preview.gen2PreviewDaytime(S, def) or "DAY") or ""
+  local liveSig = tostring(mapId) .. "|" .. tostring(def and def.tileset)
+    .. "|" .. tostring(daytimeHint)
+  local live = S._editorLiveMaps and S._editorLiveMaps[mapId]
+  if live and live.sig == liveSig and live.map and live.map.renderer then
+    return true, live.map
+  end
   if Generation.isGen2(S) or Generation.mapLooksGen2(def) then
     if not def then return false, "unknown map" end
     if type(def.width) ~= "number" or type(def.height) ~= "number" then
@@ -2925,6 +2950,37 @@ function Maps.loadEditorMap(S, mapId)
     end
     local ok, map = pcall(Map2.new, def, tileset)
     if not ok then return false, map end
+    -- True-color / composed atlases: draw windowed. A full-map canvas for a
+    -- large import is what pushed the editor past a gigabyte.
+    if def.trueColor or (tileset and tileset.trueColor) then
+      local TileRenderer = require("src.render.TileRenderer")
+      local okR, renderer = pcall(TileRenderer.new, map, S.data)
+      if not okR or not renderer then return false, renderer end
+      map.renderer = renderer
+      if not map.renderer.drawMapOnly then
+        map.renderer.drawMapOnly = map.renderer.draw
+      end
+      S._editorLiveMaps = S._editorLiveMaps or {}
+      do
+        local prev = S._editorLiveMaps[mapId]
+        local pr = prev and prev.map and prev.map.renderer
+        if pr and pr.release then pcall(pr.release, pr) end
+      end
+      S._editorLiveMaps[mapId] = { sig = liveSig, map = map }
+      local kept = 0
+      for _ in pairs(S._editorLiveMaps) do kept = kept + 1 end
+      if kept > 8 then
+        for id, rec in pairs(S._editorLiveMaps) do
+          if id ~= mapId and id ~= S.mapId and kept > 8 then
+            local r = rec.map and rec.map.renderer
+            if r and r.release then pcall(r.release, r) end
+            S._editorLiveMaps[id] = nil
+            kept = kept - 1
+          end
+        end
+      end
+      return true, map
+    end
     local MapPreview = require("src.world.gen2.MapPreview")
     local tilesets = {}
     for id, ts in pairs(Generation.dataTilesets(S)) do
@@ -2979,6 +3035,22 @@ function Maps.loadEditorMap(S, mapId)
     if not map.renderer.drawMapOnly then
       map.renderer.drawMapOnly = map.renderer.draw
     end
+    local images = baker.mapImages
+    if images then
+      local n = 0
+      for _ in pairs(images) do n = n + 1 end
+      if n > 6 then
+        for id, img in pairs(images) do
+          if id ~= mapId and n > 6 then
+            if img and img.release then pcall(img.release, img) end
+            images[id] = nil
+            n = n - 1
+          end
+        end
+      end
+    end
+    S._editorLiveMaps = S._editorLiveMaps or {}
+    S._editorLiveMaps[mapId] = { sig = liveSig, map = map }
     return true, map
   end
   if S.data and def and def.tileset then
