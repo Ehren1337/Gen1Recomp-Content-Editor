@@ -7,8 +7,17 @@ local PAL = Theme.PAL
 local Preview = {}
 
 local cache = {}  -- key -> Image | false
--- Reject huge imports so decode cannot freeze the LOVE window.
+-- Reject huge user-picked imports so decode cannot freeze the LOVE window.
+-- Generated mapbuilder atlases from a TMX folder can be larger than this.
 local MAX_PREVIEW_BYTES = 8 * 1024 * 1024  -- 8 MiB
+local MAX_ATLAS_BYTES = 256 * 1024 * 1024  -- 256 MiB
+
+local function isGeneratedAtlas(path)
+  path = tostring(path or ""):gsub("\\", "/")
+  return path:find("assets/mapbuilder/", 1, true) ~= nil
+    or path:find("save/mod-derived/", 1, true) ~= nil
+    or path:find("_cells.png", 1, true) ~= nil
+end
 
 local function existsFs(path)
   local f = io.open(path, "rb")
@@ -27,23 +36,24 @@ local function cacheKey(S, path)
   return (S and S.path or "") .. "|" .. path
 end
 
-local function loadFromDisk(absPath)
+local function loadFromDisk(absPath, maxBytes)
+  maxBytes = maxBytes or MAX_PREVIEW_BYTES
   local f = io.open(absPath, "rb")
   if not f then return nil, "cannot open" end
   -- Size check without reading the whole file into Lua when possible.
   local size = f:seek("end")
   f:seek("set")
-  if type(size) == "number" and size > MAX_PREVIEW_BYTES then
+  if type(size) == "number" and size > maxBytes then
     f:close()
     return nil, string.format("image too large (%d bytes; max %d)",
-      size, MAX_PREVIEW_BYTES)
+      size, maxBytes)
   end
   local bytes = f:read("*a")
   f:close()
   if not bytes or #bytes == 0 then return nil, "empty file" end
-  if #bytes > MAX_PREVIEW_BYTES then
+  if #bytes > maxBytes then
     return nil, string.format("image too large (%d bytes; max %d)",
-      #bytes, MAX_PREVIEW_BYTES)
+      #bytes, maxBytes)
   end
   local name = absPath:match("[^/\\]+$") or "preview.png"
   local ok, fileData = pcall(love.filesystem.newFileData, bytes, name)
@@ -174,7 +184,8 @@ function Preview.image(S, path)
       if ok3 then img = result end
     end
   else
-    local loaded, err = loadFromDisk(resolved)
+    local cap = isGeneratedAtlas(path) and MAX_ATLAS_BYTES or MAX_PREVIEW_BYTES
+    local loaded, err = loadFromDisk(resolved, cap)
     img = loaded
     if not loaded and err then
       Preview._lastError = err .. " (" .. path .. ")"

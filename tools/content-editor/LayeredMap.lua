@@ -956,7 +956,7 @@ local function embeddedMicro(context, source, tile, micro)
       n = n + 4
     end
   end
-  local raw = string.char(unpack(pack, 1, 1024))
+  local raw = string.char(unpack(pack, 1, n))
   local id = context.pixelIds[raw]
   if not id then
     id = "P" .. tostring(#context.pixels + 1)
@@ -1734,5 +1734,77 @@ end
 
 LayeredMap.deepCopy = deepCopy
 LayeredMap.cleanId = cleanId
+
+function LayeredMap.usesCellPreview(source)
+  local layer = source and source.layers and source.layers[1]
+  local ref = layer and layer.cells and layer.cells[1]
+  return type(ref) == "table" and ref.source ~= nil
+    and not LayeredMap.isRuntimeSource(ref.source)
+end
+
+-- World view / engine preview for TMX imports: paint the same 16x16 cells
+-- the Map Builder uses. TileRenderer samples the 8x8 block atlas, which a
+-- folder import packs into a texture taller than the GPU allows.
+local previewQuads = setmetatable({}, { __mode = "k" })
+
+function LayeredMap.previewRenderer(S, source)
+  if not source then return nil end
+  LayeredMap.internSourceCells(source)
+  local CELL = LayeredMap.CELL_SIZE
+  local function quadFor(image, x, y, w, h)
+    local bucket = previewQuads[image]
+    if not bucket then
+      bucket = {}
+      previewQuads[image] = bucket
+    end
+    local key = x .. ":" .. y .. ":" .. w .. ":" .. h
+    if not bucket[key] then
+      local iw, ih = image:getDimensions()
+      bucket[key] = love.graphics.newQuad(x, y, w, h, iw, ih)
+    end
+    return bucket[key]
+  end
+  local function draw(_, camX, camY, vw, vh)
+    camX, camY = camX or 0, camY or 0
+    vw = vw or source.cellWidth * CELL
+    vh = vh or source.cellHeight * CELL
+    local x0 = math.max(0, math.floor(camX / CELL) - 1)
+    local y0 = math.max(0, math.floor(camY / CELL) - 1)
+    local x1 = math.min(source.cellWidth - 1,
+      math.floor((camX + vw) / CELL) + 1)
+    local y1 = math.min(source.cellHeight - 1,
+      math.floor((camY + vh) / CELL) + 1)
+    love.graphics.push()
+    love.graphics.translate(-math.floor(camX), -math.floor(camY))
+    love.graphics.setColor(1, 1, 1, 1)
+    for cy = y0, y1 do
+      for cx = x0, x1 do
+        for _, layer in ipairs(source.layers or {}) do
+          if layer.visible ~= false then
+            local ref = layer.cells[cy * source.cellWidth + cx + 1]
+            if ref then
+              local desc = LayeredMap.sourceDescriptor(S, ref.source)
+              local image = desc and desc.image
+                and Preview.image(S, desc.image)
+              if image then
+                local columns = desc.columns
+                  or math.max(1, math.floor(image:getWidth() / 16))
+                local tile = math.max(0, math.floor(tonumber(ref.tile) or 0))
+                local sx = (tile % columns) * 16
+                local sy = math.floor(tile / columns) * 16
+                love.graphics.setColor(1, 1, 1, layer.opacity or 1)
+                love.graphics.draw(image, quadFor(image, sx, sy, 16, 16),
+                  cx * CELL, cy * CELL)
+              end
+            end
+          end
+        end
+      end
+    end
+    love.graphics.pop()
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+  return { draw = draw, drawMapOnly = draw }
+end
 
 return LayeredMap

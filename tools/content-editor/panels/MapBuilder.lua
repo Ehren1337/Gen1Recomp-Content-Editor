@@ -784,7 +784,15 @@ local function filteredMapIds(S)
   local query = tostring(S.builderMapQuery or ""):upper()
   local ids = {}
   for _, id in ipairs(LayeredMap.allMapIds(S)) do
-    if query == "" or id:upper():find(query, 1, true) then ids[#ids + 1] = id end
+    if query == "" or id:upper():find(query, 1, true) then
+      ids[#ids + 1] = id
+    else
+      local map = S.project.maps and S.project.maps[id]
+      local label = map and map.label
+      if type(label) == "string" and label:upper():find(query, 1, true) then
+        ids[#ids + 1] = id
+      end
+    end
   end
   return ids
 end
@@ -914,7 +922,10 @@ local function drawMapList(S, x, y, w, h, App)
         end
       end
     end
-    Kit.text("micro", Kit.ellipsize("micro", id, innerW - 42 * Kit.scale),
+    local mapRec = S.project.maps and S.project.maps[id]
+    local title = (mapRec and type(mapRec.label) == "string" and mapRec.label ~= "")
+      and mapRec.label or id
+    Kit.text("micro", Kit.ellipsize("micro", title, innerW - 42 * Kit.scale),
       x + 14 * Kit.scale, ry + 6 * Kit.scale,
       layered and PAL.heading or PAL.muted)
     if layered then

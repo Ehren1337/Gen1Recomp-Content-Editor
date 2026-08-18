@@ -101,6 +101,31 @@ local function worldCoords(path)
   if x then return tonumber(x), tonumber(y) end
 end
 
+local function loadMapNames(mapsDir)
+  local names = {}
+  local candidates = {
+    join(mapsDir, "..", "language", "english", "_MAPNAMES.txt"),
+    join(mapsDir, "..", "res", "language", "english", "_MAPNAMES.txt"),
+    join(mapsDir, "..", "..", "language", "english", "_MAPNAMES.txt"),
+    join(mapsDir, "language", "english", "_MAPNAMES.txt"),
+  }
+  local body
+  for i = 1, #candidates do
+    body = ModIO.readText(candidates[i])
+    if body then break end
+  end
+  if not body then return names end
+  for line in body:gmatch("[^\r\n]+") do
+    if line ~= "" and line:sub(1, 1) ~= "*" then
+      local x, y, rest = line:match("^%s*(-?%d+)%s*,%s*(-?%d+)%s*,%s*(.-)%s*$")
+      if x and rest ~= "" then
+        names[tonumber(x) .. "," .. tonumber(y)] = rest
+      end
+    end
+  end
+  return names
+end
+
 function TmxPokemonium.collectTmx(path)
   if type(path) ~= "string" or path == "" then return {} end
   if path:lower():match("%.tmx$") then return { path } end
@@ -465,6 +490,21 @@ local function sampleGid(layer, tx, ty, mapW, mapH)
   return (layer.gids and layer.gids[ly * lw + lx + 1]) or 0
 end
 
+local function parseMapProperties(body)
+  local props = {}
+  local mapEnd = body:find("<tileset") or body:find("<layer") or #body
+  local chunk = body:sub(1, mapEnd)
+  for name, val in chunk:gmatch('<property%s+name="([^"]+)"[^>]*value="([^"]*)"') do
+    props[unescapeXml(name)] = unescapeXml(val)
+  end
+  for name, val in chunk:gmatch('<property%s+name="([^"]+)"[^>]*>([^<]*)</property>') do
+    if props[name] == nil then
+      props[unescapeXml(name)] = unescapeXml(val)
+    end
+  end
+  return props
+end
+
 local function objectRecord(obj)
   local rec = {
     name = attr(obj, "name") or "",
@@ -694,6 +734,9 @@ local function convertOne(path, conv, report)
   local tilesets = parseTilesets(body, dirname(path), report, tilewidth)
   if #tilesets == 0 then return nil, "TMX has no tilesets" end
   for i = 1, #tilesets do conv.allTilesets[#conv.allTilesets + 1] = tilesets[i] end
+  local mapProps = parseMapProperties(body)
+  local xOff = tonumber(mapProps.xOffsetModifier) or 0
+  local yOff = tonumber(mapProps.yOffsetModifier) or 0
   local layers = parseLayers(body, width, height)
   if #layers == 0 then return nil, "TMX has no tile layers" end
 
@@ -931,6 +974,11 @@ local function convertOne(path, conv, report)
     signs = signs,
     wx = wx,
     wy = wy,
+    xOff = xOff,
+    yOff = yOff,
+    -- Pokemonium modifiers are 32px per TMX tile. Engine offset is blocks
+    -- (32px = 2 cells). 16px tiles pack 2x2, so divide by 64; 32px tiles by 32.
+    alignDiv = pack == 2 and 64 or 32,
     cellIds = pack == 2 and cellIds or nil,
     cellWidth = pack == 2 and width or nil,
     cellHeight = pack == 2 and height or nil,
@@ -945,11 +993,16 @@ function TmxPokemonium.importPath(S, path, App)
   end
   local files = TmxPokemonium.collectTmx(path)
   if #files == 0 then return false, "no .tmx files" end
+  local mapsDir = path:lower():match("%.tmx$") and dirname(path) or path
+  local mapNames = loadMapNames(mapsDir)
 
   State.ensureProjectFields(S.project)
   local report = {
     string.format("converting %d Pokemonium TMX → engine blocks", #files),
   }
+  if next(mapNames) then
+    report[#report + 1] = "loaded map names from _MAPNAMES.txt"
+  end
   local emptyBlock = {}
   for i = 1, 16 do emptyBlock[i] = 0 end
   local conv = {
@@ -1076,7 +1129,7 @@ function TmxPokemonium.importPath(S, path, App)
   local byWorld = {}
   for i = 1, #converted do
     local m = converted[i]
-    if m.wx then byWorld[m.wx .. "," .. m.wy] = m.id end
+    if m.wx then byWorld[m.wx .. "," .. m.wy] = m end
   end
 
   local gen2 = Generation.isGen2(S)
@@ -1097,14 +1150,25 @@ function TmxPokemonium.importPath(S, path, App)
         { 0, -1, "north" }, { 0, 1, "south" },
         { -1, 0, "west" }, { 1, 0, "east" },
       }
+      local div = rec.alignDiv or 64
       for d = 1, 4 do
-        local nid = byWorld[(rec.wx + dirs[d][1]) .. "," .. (rec.wy + dirs[d][2])]
-        if nid then connections[dirs[d][3]] = { map = nid, offset = 0 } end
+        local neighbor = byWorld[(rec.wx + dirs[d][1]) .. "," .. (rec.wy + dirs[d][2])]
+        if neighbor then
+          local dir = dirs[d][3]
+          local px
+          if dir == "north" or dir == "south" then
+            px = (neighbor.xOff or 0) - (rec.xOff or 0)
+          else
+            px = (neighbor.yOff or 0) - (rec.yOff or 0)
+          end
+          connections[dir] = { map = neighbor.id, offset = px / div }
+        end
       end
     end
     local map = existing or {}
     map.id = rec.id
-    map.label = map.label or rec.id
+    local placeName = rec.wx and mapNames[rec.wx .. "," .. rec.wy]
+    map.label = placeName or map.label or rec.id
     map.index = index
     map.tileset = tilesetId
     map.width = rec.width
@@ -1198,6 +1262,7 @@ function TmxPokemonium.importPath(S, path, App)
   S.mapPaletteTileset = tilesetId
   S._mapPaletteFor = firstId
   S._mapCenteredFor = nil
+  S._builderFitFor = nil
   S._mapNeedsRebuild = firstId
   S.importReport = table.concat(report, "\n")
   pcall(function() require("Preview").invalidatePath(rel) end)

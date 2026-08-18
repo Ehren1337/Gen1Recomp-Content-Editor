@@ -2921,6 +2921,9 @@ function Maps.loadEditorMap(S, mapId)
   local daytimeHint = def and (Preview.gen2PreviewDaytime(S, def) or "DAY") or ""
   local liveSig = tostring(mapId) .. "|" .. tostring(def and def.tileset)
     .. "|" .. tostring(daytimeHint)
+  if S.project and S.project.layeredMaps and S.project.layeredMaps[mapId] then
+    liveSig = liveSig .. "|layered"
+  end
   local live = S._editorLiveMaps and S._editorLiveMaps[mapId]
   if live and live.sig == liveSig and live.map and live.map.renderer then
     return true, live.map
@@ -2953,6 +2956,21 @@ function Maps.loadEditorMap(S, mapId)
     -- True-color / composed atlases: draw windowed. A full-map canvas for a
     -- large import is what pushed the editor past a gigabyte.
     if def.trueColor or (tileset and tileset.trueColor) then
+      do
+        local layered = S.project and S.project.layeredMaps
+          and S.project.layeredMaps[mapId]
+        local LM = require("LayeredMap")
+        if layered and LM.usesCellPreview and LM.usesCellPreview(layered)
+            and LM.previewRenderer then
+          local okL, cellR = pcall(LM.previewRenderer, S, layered)
+          if okL and cellR then
+            map.renderer = cellR
+            S._editorLiveMaps = S._editorLiveMaps or {}
+            S._editorLiveMaps[mapId] = { sig = liveSig, map = map }
+            return true, map
+          end
+        end
+      end
       local TileRenderer = require("src.render.TileRenderer")
       local okR, renderer = pcall(TileRenderer.new, map, S.data)
       if not okR or not renderer then return false, renderer end
