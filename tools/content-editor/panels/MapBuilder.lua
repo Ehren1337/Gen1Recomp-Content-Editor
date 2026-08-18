@@ -602,11 +602,27 @@ local function drawCanvas(S, source, x, y, w, h, App)
   end
 
   local middle = love.mouse and love.mouse.isDown and love.mouse.isDown(3)
+  local rmb = love.mouse and love.mouse.isDown and love.mouse.isDown(2)
   local space = love.keyboard and love.keyboard.isDown
     and (love.keyboard.isDown("space") or love.keyboard.isDown("lalt"))
   local tool = S.builderTool or "pencil"
   local eventTool = EVENT_TOOL_BY_ID[tool]
   local panning = tool == "pan" or middle or space
+  if over and inMap and rmb and not S._builderRmbWasDown
+      and not Kit.blockClicks and not space then
+    local ref, layerIndex = sourceAtCell(S, source, cx, cy)
+    if ref then
+      S.builderSourceId, S.builderTile = ref.source, ref.tile
+      S.builderLayer = layerIndex
+      if tool == "picker" then S.builderTool = "pencil" end
+      if LayeredMap.isRuntimeSource(ref.source) then
+        S.paintBlock = math.floor((ref.tile or 0) / 4)
+        S.mapPaletteTileset = LayeredMap.runtimeTilesetId(ref.source)
+      end
+      S.status = "Copied tile — left click to paint"
+    end
+  end
+  S._builderRmbWasDown = rmb and true or false
   local eventHandled = false
   if eventTool and not Kit.blockClicks then
     local Maps = require("Maps")

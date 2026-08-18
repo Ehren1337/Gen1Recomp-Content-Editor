@@ -370,6 +370,29 @@ function LayeredMap.convertMap(S, mapId)
   return source
 end
 
+-- Point an editable map at a different runtime tileset. Cells that used the
+-- previous @runtime: source follow the new one; custom PNG cells stay put.
+function LayeredMap.assignTileset(S, mapId, tilesetId)
+  if not (S and S.project and mapId and tilesetId) then return false end
+  local source = ensureProject(S.project).layeredMaps[mapId]
+  if not source then return false end
+  local oldId = source.baseTileset
+  source.baseTileset = tilesetId
+  local oldSrc = oldId and LayeredMap.runtimeSourceId(oldId)
+  local newSrc = LayeredMap.runtimeSourceId(tilesetId)
+  for _, layer in ipairs(source.layers or {}) do
+    for _, cell in pairs(layer.cells or {}) do
+      if type(cell) == "table" then
+        if cell.source == oldSrc
+            or (not oldSrc and LayeredMap.isRuntimeSource(cell.source)) then
+          cell.source = newSrc
+        end
+      end
+    end
+  end
+  return true
+end
+
 -- Editable map operations
 
 function LayeredMap.resize(source, newWidth, newHeight)
@@ -1531,7 +1554,7 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
   end
   map.width, map.height = width / 2, height / 2
   map.blocks = mapBlocks
-  map.borderBlock = 0
+  if map.borderBlock == nil then map.borderBlock = 0 end
   map.warps = warpRecords or {}
   -- Carry this on both records.  The tileset flag is the canonical link, but
   -- editor/world previews can temporarily retain an older tileset object

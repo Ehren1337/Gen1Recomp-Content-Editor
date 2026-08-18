@@ -1919,7 +1919,15 @@ end
 local function applyMapTileset(S, map, tilesetId, App, mutate)
   if not tilesetId then return map end
   S.mapPaletteTileset = tilesetId
-  if not map or map.tileset == tilesetId then return map end
+  local LayeredMap = require("LayeredMap")
+  local mapId = map and (map.id or S.mapId)
+  local retargeted = mapId and LayeredMap.assignTileset(S, mapId, tilesetId)
+  if retargeted then
+    S.builderSourceId = LayeredMap.runtimeSourceId(tilesetId)
+  end
+  if not map or (map.tileset == tilesetId and not retargeted) then
+    return map
+  end
   map = mutate()
   map.tileset = tilesetId
   local maxB = math.max(0, blockCount(S, tilesetId) - 1)
