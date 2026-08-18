@@ -1046,7 +1046,7 @@ function TmxPokemonium.importPath(S, path, App)
   local cellSourceId
   if conv.cellTiles and #conv.cellTiles > 0 then
     local nCells = #conv.cellTiles
-    local cellCols = 16
+    local cellCols = math.max(1, math.ceil(math.sqrt(nCells)))
     local cellRows = math.max(1, math.ceil(nCells / cellCols))
     local cellAtlas = love.image.newImageData(cellCols * 16, cellRows * 16)
     for i = 1, nCells do
@@ -1070,6 +1070,7 @@ function TmxPokemonium.importPath(S, path, App)
         pcall(function() require("Preview").invalidatePath(cellRel) end)
       end
     end
+    if cellAtlas.release then pcall(cellAtlas.release, cellAtlas) end
   end
 
   local byWorld = {}
@@ -1131,16 +1132,20 @@ function TmxPokemonium.importPath(S, path, App)
     if rec.cellIds and cellSourceId then
       local cw = rec.cellWidth + (rec.cellWidth % 2)
       local ch = rec.cellHeight + (rec.cellHeight % 2)
+      local intern = {}
       local cells, collision = {}, {}
       for y = 0, ch - 1 do
         for x = 0, cw - 1 do
           local index = y * cw + x + 1
           local srcIndex = (y < rec.cellHeight and x < rec.cellWidth)
             and (y * rec.cellWidth + x + 1) or nil
-          cells[index] = {
-            source = cellSourceId,
-            tile = srcIndex and (rec.cellIds[srcIndex] or 0) or 0,
-          }
+          local tile = srcIndex and (rec.cellIds[srcIndex] or 0) or 0
+          local ref = intern[tile]
+          if not ref then
+            ref = { source = cellSourceId, tile = tile }
+            intern[tile] = ref
+          end
+          cells[index] = ref
           collision[index] = (srcIndex and rec.cellCollision and rec.cellCollision[srcIndex])
             or "solid"
         end
@@ -1197,6 +1202,21 @@ function TmxPokemonium.importPath(S, path, App)
   S.importReport = table.concat(report, "\n")
   pcall(function() require("Preview").invalidatePath(rel) end)
   if App and App.markDirty then App.markDirty() end
+  local function dropImage(img)
+    if img and img.release then pcall(img.release, img) end
+  end
+  if conv.cellTiles then
+    for i = 1, #conv.cellTiles do dropImage(conv.cellTiles[i]) end
+  end
+  if conv.sheetTiles then
+    for i = 1, #conv.sheetTiles do dropImage(conv.sheetTiles[i]) end
+  end
+  if conv.tileCache then
+    for _, img in pairs(conv.tileCache) do dropImage(img) end
+  end
+  if conv.imageCache then
+    for _, img in pairs(conv.imageCache) do dropImage(img) end
+  end
   conv.cellTiles, conv.sheetTiles, conv.imageCache, conv.tileCache = nil, nil, nil, nil
   pcall(function() require("LayeredMap").compileProject(S) end)
   pcall(function() require("src.world.MapLoader").invalidate(firstId) end)

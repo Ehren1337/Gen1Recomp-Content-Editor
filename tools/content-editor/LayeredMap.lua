@@ -148,12 +148,44 @@ local function cellIndex(mapSource, x, y)
   return y * mapSource.cellWidth + x + 1
 end
 
+-- Same (source, tile) shares one table. A 700x550 map is 385k cells; without
+-- this the editor holds hundreds of thousands of duplicate {source,tile} tables.
+local cellRefPool = {}
+
+local function internCellRef(ref)
+  if type(ref) ~= "table" then return nil end
+  local source = ref.source
+  local tile = math.max(0, math.floor(tonumber(ref.tile) or 0))
+  local key = tostring(source or "") .. "\0" .. tostring(tile)
+  local pooled = cellRefPool[key]
+  if pooled then return pooled end
+  pooled = { source = source, tile = tile }
+  cellRefPool[key] = pooled
+  return pooled
+end
+
+local internedSources = setmetatable({}, { __mode = "k" })
+
+function LayeredMap.internSourceCells(source)
+  if not source or internedSources[source] then return source end
+  for _, layer in ipairs(source.layers or {}) do
+    local cells = layer.cells
+    if cells then
+      for index, cell in pairs(cells) do
+        cells[index] = internCellRef(cell)
+      end
+    end
+  end
+  internedSources[source] = true
+  return source
+end
+
 local function defaultRuntimeRef(tilesetId, x, y, block)
   local quadrant = (y % 2) * 2 + (x % 2)
-  return {
+  return internCellRef({
     source = LayeredMap.runtimeSourceId(tilesetId),
     tile = (block or 0) * 4 + quadrant,
-  }
+  })
 end
 
 -- Map creation and conversion
@@ -381,11 +413,11 @@ function LayeredMap.assignTileset(S, mapId, tilesetId)
   local oldSrc = oldId and LayeredMap.runtimeSourceId(oldId)
   local newSrc = LayeredMap.runtimeSourceId(tilesetId)
   for _, layer in ipairs(source.layers or {}) do
-    for _, cell in pairs(layer.cells or {}) do
+    for index, cell in pairs(layer.cells or {}) do
       if type(cell) == "table" then
         if cell.source == oldSrc
             or (not oldSrc and LayeredMap.isRuntimeSource(cell.source)) then
-          cell.source = newSrc
+          layer.cells[index] = internCellRef({ source = newSrc, tile = cell.tile })
         end
       end
     end
@@ -507,7 +539,7 @@ function LayeredMap.setCell(source, layerIndex, x, y, ref)
   end
   local layer = source.layers[layerIndex]
   if not layer then return false end
-  layer.cells[cellIndex(source, x, y)] = ref and deepCopy(ref) or nil
+  layer.cells[cellIndex(source, x, y)] = internCellRef(ref)
   return true
 end
 
@@ -903,21 +935,35 @@ end
 -- generated recipe; base-game samples stay as coordinates into the player's
 -- own imported cache.
 local function embeddedMicro(context, source, tile, micro)
-  local bytes = {}
+  context.microIds = context.microIds or {}
+  local lookup = tostring(source.id or source.image) .. ":"
+    .. tostring(tile) .. ":" .. tostring(micro)
+  local cached = context.microIds[lookup]
+  if cached then return cached end
+  local pack = context._packBytes
+  if not pack then
+    pack = {}
+    context._packBytes = pack
+  end
+  local n = 0
   for y = 0, 7 do
     for x = 0, 7 do
       local r, g, b, a = sourcePixel(context, source, tile, micro, x, y, nil)
-      bytes[#bytes + 1] = string.char(
-        colorByte(r), colorByte(g), colorByte(b), colorByte(a))
+      pack[n + 1] = colorByte(r)
+      pack[n + 2] = colorByte(g)
+      pack[n + 3] = colorByte(b)
+      pack[n + 4] = colorByte(a)
+      n = n + 4
     end
   end
-  local raw = table.concat(bytes)
+  local raw = string.char(unpack(pack, 1, 1024))
   local id = context.pixelIds[raw]
   if not id then
     id = "P" .. tostring(#context.pixels + 1)
     context.pixelIds[raw] = id
     context.pixels[#context.pixels + 1] = { id = id, bytes = raw }
   end
+  context.microIds[lookup] = id
   return id
 end
 
@@ -1053,6 +1099,10 @@ local function writeEditorDerivedImages(context)
     local dir = dest:match("^(.*)/[^/]+$")
     if dir then love.filesystem.createDirectory(dir) end
     pcall(function() image:encode("png", dest) end)
+    if image.release then pcall(image.release, image) end
+  end
+  for _, image in pairs(baseImages) do
+    if image and image.release then pcall(image.release, image) end
   end
 end
 
@@ -1405,6 +1455,7 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
     return id
   end
 
+  local cellGraphicCache = {}
   for y = 0, height - 1 do
     for x = 0, width - 1 do
       local index = y * width + x + 1
@@ -1413,34 +1464,52 @@ local function compileMap(context, mapId, mapSource, warpRecords, activeWarpCell
       if frameErr then
         error(("%s (%d,%d): %s"):format(mapId, x, y, frameErr), 0)
       end
-      cells[index] = {}
-      for micro = 0, 3 do
-        local firstFrame = frames and frames[1].tile or nil
-        local spec = transformSpec(
-          context, refs, micro, animatedIndex, firstFrame, paletteColors)
-        local class
-        if micro == 2 then
-          class = mapSource.collision[index] or "solid"
-          if activeWarpCells and activeWarpCells[index] then
-            class = class .. "+warp"
-          end
+      local class = mapSource.collision[index] or "solid"
+      if activeWarpCells and activeWarpCells[index] then
+        class = class .. "+warp"
+      end
+      local cacheKey
+      if frames then
+        cacheKey = nil
+      else
+        local parts = { class }
+        for ri = 1, #refs do
+          local r = refs[ri]
+          parts[#parts + 1] = tostring(r.source.id or r.source.image)
+          parts[#parts + 1] = tostring(r.tile)
+          parts[#parts + 1] = tostring(r.opacity)
         end
-        local animationImages
-        if frames then
-          animationImages = {}
-          for frameIndex, frame in ipairs(frames) do
-            local frameSpec = transformSpec(context, refs, micro,
-              animatedIndex, frame.tile, paletteColors)
-            local rel = ("mapbuilder/%s/animations/%s_%d_%d_%d.png")
-              :format(safeFilename(project.id), safeFilename(mapId),
-                index, micro, frameIndex)
-            addTransformOutput(context, rel, 8, 8, {
-              { x = 0, y = 0, layers = frameSpec },
-            })
-            animationImages[#animationImages + 1] = derivedAssetPath(project, rel)
+        cacheKey = table.concat(parts, "\0")
+      end
+      local cached = cacheKey and cellGraphicCache[cacheKey]
+      if cached then
+        cells[index] = cached
+      else
+        local microIds = {}
+        for micro = 0, 3 do
+          local firstFrame = frames and frames[1].tile or nil
+          local spec = transformSpec(
+            context, refs, micro, animatedIndex, firstFrame, paletteColors)
+          local tileClass = micro == 2 and class or nil
+          local animationImages
+          if frames then
+            animationImages = {}
+            for frameIndex, frame in ipairs(frames) do
+              local frameSpec = transformSpec(context, refs, micro,
+                animatedIndex, frame.tile, paletteColors)
+              local rel = ("mapbuilder/%s/animations/%s_%d_%d_%d.png")
+                :format(safeFilename(project.id), safeFilename(mapId),
+                  index, micro, frameIndex)
+              addTransformOutput(context, rel, 8, 8, {
+                { x = 0, y = 0, layers = frameSpec },
+              })
+              animationImages[#animationImages + 1] = derivedAssetPath(project, rel)
+            end
           end
+          microIds[micro + 1] = addTile(spec, tileClass, animationImages, frames)
         end
-        cells[index][micro + 1] = addTile(spec, class, animationImages, frames)
+        if cacheKey then cellGraphicCache[cacheKey] = microIds end
+        cells[index] = microIds
       end
     end
   end
@@ -1597,6 +1666,7 @@ function LayeredMap.compileProject(S)
   local records, activeCells = warpPlan(project)
   local compiled = 0
   for _, mapId in ipairs(sortedKeys(project.layeredMaps)) do
+    LayeredMap.internSourceCells(project.layeredMaps[mapId])
     local ok, err = pcall(compileMap, context, mapId,
       project.layeredMaps[mapId], records[mapId], activeCells[mapId])
     if not ok then return false, err end
@@ -1624,7 +1694,13 @@ function LayeredMap.compileProject(S)
   -- The transform writes derived PNGs on game load. The editor world view
   -- uses MapLoader now, so bake the same atlases into the LÖVE save dir.
   writeEditorDerivedImages(context)
-  context.pixels, context.pixelIds, context.images, context.bases, context.outputs = nil, nil, nil, nil, nil
+  if context.images then
+    for _, img in pairs(context.images) do
+      if img and img.release then pcall(img.release, img) end
+    end
+  end
+  context.pixels, context.pixelIds, context.images, context.bases,
+    context.outputs, context.microIds, context._packBytes = nil, nil, nil, nil, nil, nil, nil
   pcall(function() require("src.world.MapLoader").invalidateAll() end)
   pcall(function() require("src.render.TileRenderer").invalidate() end)
   pcall(function()

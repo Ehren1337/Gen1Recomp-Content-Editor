@@ -65,8 +65,10 @@ local function field(App, id, x, y, w, h, value, placeholder)
 end
 
 local function mapSource(S)
-  return S.project and S.project.layeredMaps
+  local source = S.project and S.project.layeredMaps
     and S.project.layeredMaps[S.builderMapId]
+  if source then LayeredMap.internSourceCells(source) end
+  return source
 end
 
 local function quad(image, x, y, w, h)
@@ -539,10 +541,20 @@ local function drawCanvas(S, source, x, y, w, h, App)
   love.graphics.scale(zoom, zoom)
   love.graphics.translate(-(S.builderCamX or 0), -(S.builderCamY or 0))
 
-  for cy = 0, source.cellHeight - 1 do
-    for cx = 0, source.cellWidth - 1 do
+  local camX, camY = S.builderCamX or 0, S.builderCamY or 0
+  local x0 = math.max(0, math.floor(camX / CELL) - 1)
+  local y0 = math.max(0, math.floor(camY / CELL) - 1)
+  local x1 = math.min(source.cellWidth - 1,
+    math.floor((camX + vw / zoom) / CELL) + 1)
+  local y1 = math.min(source.cellHeight - 1,
+    math.floor((camY + vh / zoom) / CELL) + 1)
+  love.graphics.setColor(0.16, 0.18, 0.22, 1)
+  love.graphics.rectangle("fill", x0 * CELL, y0 * CELL,
+    math.max(0, x1 - x0 + 1) * CELL, math.max(0, y1 - y0 + 1) * CELL)
+
+  for cy = y0, y1 do
+    for cx = x0, x1 do
       local dx, dy = cx * CELL, cy * CELL
-      drawChecker(dx, dy, CELL)
       for _, layer in ipairs(source.layers or {}) do
         if layer.visible ~= false then
           local ref = layer.cells[cy * source.cellWidth + cx + 1]
@@ -568,11 +580,14 @@ local function drawCanvas(S, source, x, y, w, h, App)
   end
   if S.mapShowGrid ~= false then
     love.graphics.setColor(1, 1, 1, 0.18)
-    for gx = 0, source.cellWidth do
-      love.graphics.line(gx * CELL, 0, gx * CELL, source.cellHeight * CELL)
+    local mapW, mapH = source.cellWidth * CELL, source.cellHeight * CELL
+    for gx = x0, x1 + 1 do
+      local px = gx * CELL
+      love.graphics.line(px, y0 * CELL, px, math.min(mapH, (y1 + 1) * CELL))
     end
-    for gy = 0, source.cellHeight do
-      love.graphics.line(0, gy * CELL, source.cellWidth * CELL, gy * CELL)
+    for gy = y0, y1 + 1 do
+      local py = gy * CELL
+      love.graphics.line(x0 * CELL, py, math.min(mapW, (x1 + 1) * CELL), py)
     end
   end
   drawSelections(S, source)
