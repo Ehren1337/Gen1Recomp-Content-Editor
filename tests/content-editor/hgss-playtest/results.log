@@ -1,5 +1,8 @@
 
-PASS: mod loaded without errors; Pallet Town rendered at tilt 35
+PASS: mod loaded without errors; Pallet Town rendered with real 3D camera
 PASS: player movement with mod enabled
 PASS: field menu opens and closes
 PASS: outdoor-to-interior map load
+PASS: wild battle transition rendered
+PASS: battle completed; returned to field; no mod errors
+COMPLETE

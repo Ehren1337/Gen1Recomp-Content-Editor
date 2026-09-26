@@ -28,6 +28,13 @@ return [=[
         local surfing=opts.surfing
         if surfing==nil then surfing=Player.surfing end
         if not surfing or opts.dir~="down" then return false,"tile" end
+        -- Falls connect upper/lower pools. Native water entry rejects an
+        -- elevation change before the ride can begin. Match this one target
+        -- for that check; retain bounds, obstacles, entities and direction.
+        local entry={}
+        for k,v in pairs(opts) do entry[k]=v end
+        entry.elevation=Collision.elevationAt(x,y)
+        opts=entry
       end
       return proceed(game,x,y,opts,...)
     end)

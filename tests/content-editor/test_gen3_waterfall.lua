@@ -61,7 +61,8 @@ local stops=0
 package.loaded["src.core.game3.audio"].stopSe=function(id) stops=stops+1;playing[id]=0 end
 local map={pair="falls",midLayout={width=3,height=7,
   midAt=function(_,x,y) return x==1 and y>=2 and y<=4 and 2 or 1 end,
-  elevAt=function() return 0 end}}
+  -- Falls bridge different elevations: upper pool 3, falls 1, lower pool 1.
+  elevAt=function(_,x,y) return y<2 and 3 or 1 end}}
 Interaction.behaviors.falls={[1]=0x10,[2]=0x13}
 Collision._mapDef=map;Collision._mapId="FALLS"
 Collision._widthCells,Collision._heightCells=3,7
@@ -81,6 +82,7 @@ package.loaded["src.core.game3.scripting.space"]={vm={isRunning=function() retur
 Field._session={party={},flags={}}
 local function start(y,dir)
   Player.reset(1,y,dir);Player.surfing=true
+  Player.currentElevation=Collision.elevationAt(1,y)
   Field.running=true;Field.locked=false;Field._waterfall=nil
 end
 local function drive()
@@ -101,8 +103,16 @@ assert(drive()>=128,"Climb too fast")
 assert(Player.cellY==1 and not Field.locked)
 assert(#played>1 and stops==1,"Sound did not repeat and stop")
 start(1,"down")
-assert(Collision.canEnter(nil,1,2,{surfing=true,dir="down",fromX=1,fromY=1}),"Downhill entrance blocked")
-Player.scriptStep("down")
+local entry={surfing=true,dir="down",fromX=1,fromY=1,elevation=3}
+assert(Collision.canEnter(nil,1,2,entry),"Downhill entrance blocked")
+assert(entry.elevation==3,"Collision check mutated caller's elevation")
+local override=Field.metatileOverrideAt
+Field.metatileOverrideAt=function() return {impassable=true} end
+assert(not Collision.canEnter(nil,1,2,entry),"Downhill entry bypassed an explicit obstacle")
+Field.metatileOverrideAt=override
+assert(not Collision.canEnter(nil,0,2,{surfing=true,dir="down",fromX=0,fromY=1,elevation=3}),
+  "Ordinary water must still reject elevation changes")
+assert(Player.tryMove("down",nil,false)=="step","Normal downhill input did not enter waterfall")
 drive()
 assert(Player.cellY==5 and not Field.locked,"Descent did not finish on water")
 assert(#Field._session.party==0,"Descent test must have no move user")

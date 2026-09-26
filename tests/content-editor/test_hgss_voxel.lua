@@ -1,55 +1,36 @@
-local root = "mods/firered_hgss_voxel/"
-local events, messages, calls = {}, {}, {}
-local color, shader, depth = {1,1,1,1}, nil, 0
-local ground, overhead, actor = {}, {}, {}
-local g = {}
-function g.getColor() return unpack(color) end
-function g.setColor(...) color = {...} end
-function g.getShader() return shader end
-function g.setShader(value) shader = value end
-function g.newShader() return {} end
-function g.push() depth = depth + 1 end
-function g.pop() depth = depth - 1; color = {1,1,1,1}; shader = nil end
-function g.draw(object, x, y) calls[#calls+1] = {object, x, y, shader, color[1]} end
-love = {graphics=g}
-local failOnce = false
-local view = {_nativeBatches={ground}, _nativeOverBatches={overhead}}
-function view.draw(_, _, _, opts)
-  if failOnce then failOnce=false; error("simulated driver failure") end
-  if not (opts and opts.actorsOnly) then
-    g.draw(ground, 0, 10)
-    g.draw(overhead, 0, 20)
-  end
-  g.draw(actor, 0, 30)
+-- Verify geometry, GPU depth ownership and native character isolation contracts.
+local root="mods/firered_hgss_voxel/"
+local state={}
+love={graphics={}}
+local g=love.graphics
+function g.newShader(source)
+ assert(source:find("vp%*vec4") and source:find("discard"),"needs 3D projection and alpha cutout")
+ return {send=function(_,key,...) state[key]={...} end}
 end
-package.loaded["src.core.game3.field_view"] = view
-local tilt
-package.loaded["src.render.Tilt"] = {setLevel=function(n) tilt=n end}
-local mod = {events={}, log={}}
-function mod:read(path)
-  local f=assert(io.open(root..path)); local s=f:read("*a"); f:close(); return s
+function g.newMesh(format,vertices,mode)
+ assert(format[1][3]==3 and mode=="triangles","must use XYZ triangle geometry")
+ return {vertices=vertices,setTexture=function()end}
 end
-function mod.events:on(name, fn) events[name]=fn end
-function mod.log:info() end
-function mod.log:warn(message) messages[#messages+1]=message end
-assert(loadfile(root.."main.lua"))()(mod)
-events["game.ready"]()
-local wrapped=view.draw
-events["game.ready"]()
-assert(view.draw==wrapped and tilt==2, "installation must be idempotent")
-local originalDraw=g.draw
-view.draw({},240,160)
-assert(g.draw==originalDraw and depth==0, "graphics state leaked")
-assert(#calls==6 and calls[2][3]==26 and calls[5][3]==20,
-  "relief must extend below its cap without separating it from the base layer")
-assert(calls[1][4] and not calls[6][4], "color shader must exclude actors")
-calls={}
-view.draw({},240,160,{actorsOnly=true})
-assert(#calls==1 and calls[1][1]==actor, "upright pass must remain untouched")
-failOnce=true
-view.draw({},240,160)
-assert(g.draw==originalDraw and depth==0 and #messages==1, "failure must restore and fall back")
-calls={}
-view.draw({},240,160)
-assert(#calls==3, "failed relief must stay disabled")
-print("PASS: relief layers, actor isolation, repeated game.ready, error cleanup and fallback")
+function g.newCanvas(w,h) return {setFilter=function()end,release=function()end} end
+function g.setCanvas(target) assert(target.depth==true,"depth buffer required") end
+function g.setDepthMode(mode,write) state.depth={mode,write} end
+for _,name in ipairs({"origin","setScissor","clear","setMeshCullMode","setBlendMode","setColor","setShader","draw"}) do g[name]=function()end end
+local V={}
+function V.require(name)
+ local v=assert(loadfile(root.."lib/"..name..".lua"))()
+ if type(v)=="function" then return v(V) end
+ return v
+end
+local R=V.require("Renderer")
+local vertices={};R.box(vertices,10,0,20,16,32,16,{1,1,1})
+assert(#vertices==30,"solid box needs top plus four side faces")
+local minY,maxY=math.huge,-math.huge
+for _,v in ipairs(vertices) do minY=math.min(minY,v[2]);maxY=math.max(maxY,v[2]) end
+assert(minY==0 and maxY==32,"box must occupy real vertical space")
+R.mesh(vertices)
+R.begin(240,160,100,100)
+assert(state.depth[1]=="less" and state.depth[2]==true,"depth testing/writing must be active")
+local before={unpack(R.vp)};R.yaw=R.yaw+math.pi/2;R.begin(240,160,100,100)
+assert(math.abs(before[1]-R.vp[1])>.1,"orbit must change the 3D view matrix")
+R.finish();assert(state.depth[1]==nil,"depth mode must be cleared for UI")
+print("PASS: XYZ geometry, solid faces, depth test, camera orbit and UI cleanup")

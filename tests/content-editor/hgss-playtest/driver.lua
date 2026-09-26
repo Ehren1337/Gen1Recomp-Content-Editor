@@ -23,9 +23,9 @@ return function(game)
     U.wait(90)
   end
   place("FR_PALLET_TOWN",8,8)
-  assert(Tilt.level==2, "initial tilt not active")
+  assert(Tilt.level==0, "2D tilt must be disabled for the real 3D camera")
   shot("pallet-town")
-  report("PASS: mod loaded without errors; Pallet Town rendered at tilt 35")
+  report("PASS: mod loaded without errors; Pallet Town rendered with real 3D camera")
   local x,y=Player.px,Player.py
   U.hold(game,"down",30); U.wait(30)
   assert(Player.px~=x or Player.py~=y, "player did not walk")
@@ -37,7 +37,7 @@ return function(game)
   place("FR_VIRIDIAN_CITY_POKEMON_CENTER_1F",7,7)
   shot("interior")
   report("PASS: outdoor-to-interior map load")
-  place("FR_VIRIDIAN_CITY",12,12)
+  place("FR_VIRIDIAN_CITY",19,21)
   shot("viridian-city")
   local Runtime=require("src.core.game3.runtime")
   require("src.core.game3.party").giveMon(Runtime.getSession(),6,50)
@@ -63,5 +63,6 @@ return function(game)
   assert(#game.mods.errors==0,table.concat(game.mods.errors,"\n"))
   report("PASS: battle completed; returned to field; no mod errors")
   report("COMPLETE")
-  while true do U.wait(60) end
+  love.event.quit()
 end
+
