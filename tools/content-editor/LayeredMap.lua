@@ -349,6 +349,7 @@ function LayeredMap.createMap(S, wantedId, cellWidth, cellHeight, tilesetId)
     _layeredSource = id,
   }
   project.nextMapIndex = project.nextMapIndex + 1
+  if gen3 then require("Gen3MapProperties").apply(project.maps[id],1) end
   return source, project.maps[id]
 end
 

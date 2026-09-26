@@ -32,12 +32,12 @@ package.loaded["src.core.game3.collision"]={installWarps=function() end}
 package.loaded["src.mods.Runtime"]={}
 local canvas={setFilter=function() end}
 love={graphics=setmetatable({newCanvas=function() return canvas end},{__index=function() return function() end end})}
-local source={cellWidth=11,cellHeight=1,layers={{cells={[11]={source="@runtime:native",tile=1}}}},baseTileset="native",
+local source={cellWidth=12,cellHeight=1,layers={{cells={[11]={source="@runtime:native",tile=1}}}},baseTileset="native",
   gen3Border={width=0,height=0,mids={}},
-  collision={"water","grass","ledge_right","ledge_left","ledge_up","ledge_down","door","walk","solid","water","walk"},
+  collision={"water","grass","ledge_right","ledge_left","ledge_up","ledge_down","door","walk","solid","water","walk","waterfall"},
   gen3Collision={[10]=0x29,[11]=0},gen3Elevation={[10]=7},gen3Behavior={[11]=0x66}}
-local expected={0x29,0x18,0xA0,0xA1,0xA2,0xA3,0x71,0,255,0x29,0}
-local expectedBeh={0x10,2,0x38,0x39,0x3A,0x3B,0x69,0,0,0,0x66}
+local expected={0x29,0x18,0xA0,0xA1,0xA2,0xA3,0x71,0,255,0x29,0,255}
+local expectedBeh={0x10,2,0x38,0x39,0x3A,0x3B,0x69,0,0,0,0x66,0x13}
 local mod={id="test",events={on=function(_,_,fn) fn({game={data={maps={TEST={}}}}}) end},hooks={wrap=function() end}}
 local captured
 local Layout=require("src.core.game3.layout_native")
@@ -50,6 +50,9 @@ for i,c in ipairs(captured.cells) do
 end
 assert(captured.cells[10].elev==7)
 local L=require("LayeredMap")
+assert(L.setCollision(source,11,0,"waterfall"))
+local waterfallColl,waterfallBeh=C.resolve(source.collision[12],source.gen3Collision[12])
+assert(waterfallColl==255 and require("src.core.game3.field_moves").isWaterfallBehavior(waterfallBeh))
 -- Painting uses this shared lookup for single tiles and multi-tile stamps.
 local sea=assert(require("Gen3Map").layout(data,"FR_ROUTE_21_NORTH"))
 local blocked,water=0,0

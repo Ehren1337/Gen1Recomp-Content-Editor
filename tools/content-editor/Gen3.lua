@@ -37,6 +37,7 @@ function Gen3.load(data, read, list)
   data._g3Fame=nil
   data._editorGen3Audio,data._g3ShopLocations=nil,nil
   data._g3RomBytes,data._g3RomTrades,data._g3ShinyImages=nil,nil,nil
+  data._g3MapHeaders=nil
   data._editorMaps,data._editorTilesets=nil,nil
   data._g3CollisionDefaults=nil
   data._gen3EditorContent=nil

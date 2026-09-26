@@ -38,15 +38,19 @@ function M.draw(S,x,y,w,h,App)
   local map=require("Maps").resolveMap(S,S.mapId)
   if not map then return end
   if S._g3NameMap~=S.mapId then S._g3NameMap=S.mapId;S.g3MapNameDraft=map.label or map.name or S.mapId end
-  Kit.caption(x,y,"Map name")
+  Kit.caption(x,y,"Display name")
   S.g3MapNameDraft=Kit.textfield("g3MapName",x,y+22*s,w,28*s,S.g3MapNameDraft,"Map name",
     "Displayed map name. Renaming keeps the map ID, warps and script references unchanged.")
-  if Kit.button(x,y+56*s,w,27*s,"Rename map",{kind="accent",tooltip="Apply this name and save it with the project. The internal map ID stays the same."}) then
+  if Kit.button(x,y+56*s,w,27*s,"Rename display name",{kind="accent",tooltip="Apply this display name. Save editors and warps identify the map by its unchanged internal ID."}) then
     local changed,err=require("Gen3Workspace").rename(S,S.mapId,S.g3MapNameDraft)
     if changed then App.markDirty();S.status="Renamed map to "..S.project.maps[S.mapId].name;map=S.project.maps[S.mapId]
     elseif err then S.status=err end
   end
   y=y+94*s
+  Kit.text("micro",Kit.ellipsize("micro","Map ID: "..S.mapId,w),x,y,require("Theme").PAL.muted)
+  Kit.offerTooltip(x,y,w,18*s,"Internal ID: "..S.mapId..". Used by saves and warps; renaming the display name does not change it.")
+  y=y+24*s
+  y=require("Gen3MapProperties").draw(S,map,x,y,w,App)
   if Kit.button(x,y,w,27*s,S.g3ShowConnections and "Show events" or "Map connections",{tooltip="Add or edit multiple connections per side, each with its own offset."}) then S.g3ShowConnections=not S.g3ShowConnections end
   y=y+36*s
   if S.g3ShowConnections then return require("Gen3ConnectionEditor").draw(S,S.mapId,x,y,w,bottom-y,App) end

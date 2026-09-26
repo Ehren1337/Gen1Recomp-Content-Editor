@@ -34,6 +34,7 @@ local function beginNewMap(S)
   S.mapNewDraft = {
     id = "MY_FIRST_MAP", width = "20", height = "18",
     tileset = chosen,
+    mapType = 1,
   }
   Kit.blur()
 end
@@ -58,10 +59,11 @@ end
 
 local function drawNewMapForm(S, x, y, w, App)
   local d, s = S.mapNewDraft, Kit.scale
-  Kit.card(x, y, w, 146 * s, 10 * s)
+  local gen3 = Generation.isGen3(S)
+  Kit.card(x, y, w, (gen3 and 180 or 146) * s, 10 * s)
   local px, py = x + 14 * s, y + 10 * s
   Kit.text("caption", "CREATE A NEW MAP", px, py, PAL.heading)
-  Kit.text("micro", "Start with a preset. You can resize and change tiles later.",
+  Kit.text("micro", "Size presets only. Change gameplay type in Map setup.",
     px + 142 * s, py + 2 * s, PAL.muted)
   py = py + 25 * s
   Kit.text("micro", "Map name", px, py + 5 * s, PAL.caption)
@@ -123,6 +125,7 @@ local function drawNewMapForm(S, x, y, w, App)
     local created, err = LayeredMap.createMap(
       S, d.id, width, height, d.tileset)
     if created then
+      if gen3 then require("Gen3MapProperties").apply(S.project.maps[created.id],d.mapType) end
       S.mapId, S.builderMapId = created.id, created.id
       S.builderLayer = 1
       S.builderSourceId = LayeredMap.runtimeSourceId(created.baseTileset)
@@ -141,6 +144,11 @@ local function drawNewMapForm(S, x, y, w, App)
   end
   if Kit.button(x + w - 100 * s, py, 86 * s, 26 * s, "Cancel",
       { kind = "ghost", tooltip = "Close without creating a map" }) then S.mapNewDraft = nil; Kit.blur() end
+  if gen3 then
+    py=py+34*s
+    Kit.text("micro","Map type",px,py+5*s,PAL.caption)
+    require("Gen3MapProperties").picker(S,d,px+68*s,py,240*s,function(id) d.mapType=tonumber(id) end)
+  end
 end
 
 function MapsWorkspace.draw(S, x, y, w, h, App)
@@ -261,7 +269,7 @@ function MapsWorkspace.draw(S, x, y, w, h, App)
     if picked then Maps.importTmx(S, picked, App) end
   end
 
-  local formH = S.mapNewDraft and 154 * s or 0
+  local formH = S.mapNewDraft and (Generation.isGen3(S) and 188 or 154) * s or 0
   if S.mapNewDraft then drawNewMapForm(S, x, y + barH + 6 * s, w, App) end
   local bodyY = y + barH + 8 * s + formH
   local bodyH = h - barH - 8 * s - formH

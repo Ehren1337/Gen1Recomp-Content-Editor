@@ -17,6 +17,8 @@ local painted={
   stair_down_right={0x72,0x6E},stair_down_left={0x72,0x6F},
   -- Editor-defined (Gen3Whirlpool.BEHAVIOR): blocked, crossed with WHIRLPOOL.
   whirlpool={0xFF,0x1F0},
+  -- Native Waterfall behavior triggers the field move; normal entry is blocked.
+  waterfall={0xFF,0x13},
 }
 M.exitTypes={
   {id="door",label="Door",tip="Animated building door; use a native door graphic"},

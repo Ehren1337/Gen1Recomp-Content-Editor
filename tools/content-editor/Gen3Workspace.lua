@@ -163,6 +163,7 @@ function M.compile(S)
   p.gen3WorkspaceMaps={}
   for id,map in pairs(p.maps or {}) do
     local value={}
+    for k,v in pairs(require("Gen3MapProperties").resolve(S,map)) do value[k]=v end
     for k,v in pairs(map) do
       if not tostring(k):match("^_") and k~="blocks" and k~="width" and k~="height" and k~="tileset" and k~="signs" then value[k]=copy(v) end
     end

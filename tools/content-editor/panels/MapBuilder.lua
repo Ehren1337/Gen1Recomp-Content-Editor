@@ -468,7 +468,7 @@ local COLLISION_LABEL = {
   solid = "Wall", walk = "Land", grass = "Grass", water = "Water",
   shore = "Shore", ledge = "Ledge", face = "Cliff", cut = "Cut",
   door = "Door", stairs = "Stairs", cave = "Cave", panel = "Pad",
-  carpet = "Carpet", whirlpool = "Whirlpool",
+  carpet = "Carpet", whirlpool = "Whirlpool", waterfall = "Waterfall",
 }
 
 local COLLISION_TIP = {
@@ -486,6 +486,7 @@ local COLLISION_TIP = {
   panel = "Warp panel / floor pad (COLL_WARP_PANEL)",
   carpet = "Carpet — walk in the chosen direction to take the warp",
   whirlpool = "Whirlpool — blocked; surf up and press A to cross with WHIRLPOOL",
+  waterfall = "Waterfall — surf to the bottom, face up and use WATERFALL. Paint the full vertical climb; leave surfable water at both ends.",
 }
 
 local FACE_DIR_TIP = {
@@ -1141,6 +1142,7 @@ local function drawCanvas(S, source, x, y, w, h, App)
           face_left = { 0.95, 0.45, 0.2 }, face_right = { 0.95, 0.45, 0.2 },
           face = { 0.95, 0.45, 0.2 },
           whirlpool = { 0.55, 0.35, 1 },
+          waterfall = { 0.2, 0.75, 1 },
         }
         local color = colors[mode] or colors.solid
         love.graphics.setColor(color[1], color[2], color[3], 0.28)
@@ -2397,17 +2399,19 @@ local function drawToolbar(S, source, x, y, w, App)
     end
     -- FireRed only: whirlpools (Gen3Whirlpool), crossed with WHIRLPOOL.
     if Generation.isGen3(S) then
-      local label = COLLISION_LABEL.whirlpool
+      for _, mode in ipairs({"waterfall", "whirlpool"}) do
+      local label = COLLISION_LABEL[mode]
       local bw = Kit.textWidth("micro", label) + 16 * s
       if bx + bw > x + w and bx > x + 56 * s then
         modeY, bx = modeY + 27 * s, x + 56 * s
         barBottom = modeY + 24 * s
       end
-      if Kit.chip(bx, modeY, bw, 24 * s, label, S.builderCollision == "whirlpool",
-          PAL.green, PAL.steel, COLLISION_TIP.whirlpool) then
-        S.builderCollision = "whirlpool"
+      if Kit.chip(bx, modeY, bw, 24 * s, label, S.builderCollision == mode,
+          PAL.green, PAL.steel, COLLISION_TIP[mode]) then
+        S.builderCollision = mode
       end
       bx = bx + bw + 3 * s
+      end
       if S.builderCollision == "whirlpool" then
         local sw = Kit.textWidth("micro", "Crossing settings") + 16 * s
         if bx + sw > x + w and bx > x + 56 * s then

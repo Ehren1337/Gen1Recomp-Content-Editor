@@ -5078,7 +5078,7 @@ function Maps._section.drawBasics(S, map, mutate, App, px, py, propW, listBottom
     if v ~= (map.label or "") then map = mutate(); map.label = v end
   end) then return py end
 
-  if prow(Generation.isGen2(S) and "Environment" or "Locale", function(fx, fy, fw, fh_)
+  if prow("Map type / environment", function(fx, fy, fw, fh_)
     local cur = inferMapEnvironment(map, S)
     local opts
     if Generation.isGen2(S) then

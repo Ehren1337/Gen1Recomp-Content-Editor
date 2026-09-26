@@ -28,7 +28,31 @@ Maps already owned by the project show **EDIT** in the list.
 Both dimensions must be even because the runtime stores four 16×16 cells in
 each 32×32 block.
 
+### Gameplay map type
+
+**Small room**, **Town**, and **Large area** are size presets only.
+For FireRed/LeafGreen, choose **Map type** when creating a map, or open the
+right-hand **Map setup** drawer to change it later. Types include Town, City,
+Route, Cave / underground, Underwater, Ocean route, Indoor, and Secret base.
+Changing type keeps the map's terrain, size, and events.
+
+Cave sets the native cave and escape flags. Other types clear those flags;
+use **Dig / Escape Rope: Allowed / Blocked** to override escape permission
+after choosing a type. Outdoor types allow the runtime's Fly/Teleport checks;
+Dig also requires a cave type. Badges and destination requirements still apply.
+Enter a cave through a warp from outdoors to establish an escape destination.
+
+Red/Blue and Gold/Silver/Crystal expose their existing **Map type / environment**
+control under **Map setup → Map options**. Their runtime rules differ from
+FireRed/LeafGreen; in particular, Red/Blue also uses tileset rules for escape.
+
 ## Workspace layout
+
+For FireRed/LeafGreen waterfalls, select **Passage → Waterfall** and paint
+the entire vertical waterfall. Leave surfable **Water** at the bottom and top.
+Surf to the bottom, face up, and press A with a Pokémon that knows WATERFALL
+and the required badge. The brush assigns native waterfall behavior while
+blocking ordinary entry; painting plain Water does not create a climbable waterfall.
 
 - Left: map search/list and tileset sources.
 - Center: **Paint map** or **Add events** toolbar and canvas.
