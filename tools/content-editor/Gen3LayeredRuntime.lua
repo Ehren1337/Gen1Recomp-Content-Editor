@@ -64,7 +64,21 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
         if warp.disabled then Collision._warps[warp.y*1024+warp.x]=nil end
       end
     end)
-    local built,images={},{}
+    local built,images,sourceQuads={},{},{}
+    local okAnim,NativeAnim=pcall(require,"src.core.game3.tileset_anim")
+    -- Palette writes mutate an existing texture, so identity alone is not a
+    -- sufficient cache key. ResetSlotPalette delegates to this same setter.
+    if T.setSlotPalette and not T._editorLayerPaletteWatch then
+      local setPalette=T.setSlotPalette
+      T.setSlotPalette=function(pairOrTs,...)
+        local result=setPalette(pairOrTs,...)
+        local ts=type(pairOrTs)=="table" and pairOrTs or T._pairs[pairOrTs]
+        if result and ts then ts._editorLayerRevision=(ts._editorLayerRevision or 0)+1 end
+        return result
+      end
+      T._editorLayerPaletteWatch=true
+    end
+    local renderNative
     local frameClock=0
     local function frameFor(ref)
       local pair=ref.source:match("^@runtime:(.+)$")
@@ -82,7 +96,7 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       local tile=frameFor(ref)
       love.graphics.setColor(1,1,1,ref.opacity or 1)
       if pair then
-        local ts=assert(T.get(pair),"Missing native tileset "..pair)
+        local ts=assert(renderNative[pair],"Missing native tileset "..pair)
         local image=ts.image
         if over and not ref.bridge then image=ts.overImage end
         if image then love.graphics.draw(image,over and not ref.bridge and T.overQuad(ts,T.slotFor(ts,tile)) or T.quad(ts,T.slotFor(ts,tile)),x,y) end
@@ -92,12 +106,54 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
         local image=images[ref.source]
         if not image then image=mod.assets:image(source.image);image:setFilter("nearest","nearest");images[ref.source]=image end
         local columns=source.columns or math.floor(image:getWidth()/16)
-        local quad=love.graphics.newQuad(tile%columns*16,math.floor(tile/columns)*16,16,16,image:getDimensions())
+        local quads=sourceQuads[ref.source]
+        if not quads then quads={};sourceQuads[ref.source]=quads end
+        local quad=quads[tile]
+        if not quad then
+          quad=love.graphics.newQuad(tile%columns*16,math.floor(tile/columns)*16,16,16,image:getDimensions())
+          quads[tile]=quad
+        end
         love.graphics.draw(image,quad,x,y)
       end
     end
     local function render(entry)
+      if not entry.dependencies then
+        entry.dependencies,entry.frameRefs,entry.resolved={},{},{}
+        for _,refs in ipairs(entry.slots) do
+          for _,ref in ipairs(refs) do
+            local pair=ref.source:match("^@runtime:(.+)$")
+            if pair then entry.dependencies[pair]=entry.dependencies[pair] or {} end
+            local source=layered.sources[ref.source]
+            local frames=pair and (layered.animations[pair] or {})[ref.tile]
+              or source and (source.animations or {})[ref.tile]
+            if frames and #frames>0 then entry.frameRefs[#entry.frameRefs+1]={ref=ref} end
+          end
+        end
+      end
+      local changed=not entry.rendered
+      for pair,previous in pairs(entry.dependencies) do
+        -- Resolve/bind once per source, rather than once per tile and layer.
+        local ts=assert(T.get(pair),"Missing native tileset "..pair)
+        entry.resolved[pair]=ts
+        local anim=okAnim and NativeAnim._pairs and NativeAnim._pairs[pair]
+        local frames=anim and anim.frames or {}
+        if previous.ts~=ts or previous.image~=ts.image or previous.over~=ts.overImage
+          or previous.revision~=ts._editorLayerRevision
+          or previous.water~=frames.water or previous.sand~=frames.sand
+          or previous.flower~=frames.flower or not okAnim then changed=true end
+        previous.ts,previous.image,previous.over=ts,ts.image,ts.overImage
+        previous.revision=ts._editorLayerRevision
+        previous.water,previous.sand,previous.flower=frames.water,frames.sand,frames.flower
+      end
+      for _,state in ipairs(entry.frameRefs) do
+        local frame=frameFor(state.ref)
+        if state.frame~=frame then changed=true;state.frame=frame end
+      end
+      if not changed then return false end
+      entry.rendered=false
+      renderNative=entry.resolved
       love.graphics.push("all")
+      local ok,err=pcall(function()
       for _,over in ipairs({false,true}) do
         love.graphics.setCanvas(over and entry.ts.overImage or entry.ts.image)
         love.graphics.clear(0,0,0,0);love.graphics.origin()
@@ -106,7 +162,12 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
           for _,ref in ipairs(refs) do drawRef(ref,x,y,over) end
         end
       end
+      end)
       love.graphics.pop()
+      renderNative=nil
+      if not ok then error(err) end
+      entry.rendered=true
+      return true
     end
     for id,source in pairs(layered.maps) do
       local map=assert(ctx.game.data.maps[id],"Missing map "..id)
@@ -193,7 +254,9 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
         for _,neighbor in ipairs(Map.world or {}) do visible[neighbor.id]=true end
         for id in pairs(visible) do
           local entry=built[id]
-          if entry then render(entry);View._nativeDirty=true end
+          -- Batch geometry and texture identity have not changed. Updating
+          -- atlas pixels must not force the visible map tiles to be rebuilt.
+          if entry then render(entry) end
         end
       end
       return proceed(game,...)

@@ -27,6 +27,7 @@ local TOOLS = {
   { id = "exits", label = "Exit type",
     tip = "Paint door, stairs, cave, or pad so the warp uses the right kind" },
   { id = "bridge", label = "Bridge", tip = "Paint an elevated deck over existing ground, then mark its entrances" },
+  { id = "elevation", label = "Elevation", tip = "Paint a height from 0 to 15 on the selected map" },
   { id = "warp", label = "Warp", tip = "Place directed, two-way, or custom-return warps" },
   { id = "pan", label = "Pan", tip = "Drag the map without painting" },
 }
@@ -57,7 +58,7 @@ for _, tool in ipairs(EVENT_TOOLS) do EVENT_TOOL_BY_ID[tool.id] = tool end
 local LEGACY_TOOLS = { berry = true, path = true }
 
 function MapBuilder.supportsTool(S, id)
-  if id=="bridge" then return Generation.isGen3(S) end
+  if id=="bridge" or id=="elevation" then return Generation.isGen3(S) end
   return not (Generation.isGen3(S) and LEGACY_TOOLS[id])
 end
 
@@ -101,7 +102,7 @@ local function drawMapStencil(S, source)
 end
 
 local BASIC_TERRAIN_TOOLS = {
-  pencil = true, eraser = true, fill = true, pan = true, exits = true, bridge = true,
+  pencil = true, eraser = true, fill = true, pan = true, exits = true, bridge = true, elevation = true,
 }
 local BASIC_EVENT_TOOLS = {
   object = true, sign = true, berry = true, path = true, trigger = true,
@@ -1021,6 +1022,7 @@ local function drawConnectedNeighbors(S, source, camX, camY, viewW, viewH)
         end
       end
       love.graphics.pop()
+      require("MapElevations").draw(S, nb.id, localCamX, localCamY, viewW, viewH)
       love.graphics.setColor(0.27, 0.59, 1, 0.7)
       love.graphics.rectangle("line", 0.5, 0.5, nw - 1, nh - 1)
       love.graphics.pop()
@@ -1147,6 +1149,7 @@ local function drawCanvas(S, source, x, y, w, h, App)
     end
   end
   drawMapStencil(S, source)
+  require("MapElevations").draw(S, source.id, camX, camY, viewW, viewH)
   if S.mapShowGrid ~= false then
     love.graphics.setColor(1, 1, 1, 0.18)
     local mapW, mapH = source.cellWidth * CELL, source.cellHeight * CELL
@@ -1241,6 +1244,8 @@ local function drawCanvas(S, source, x, y, w, h, App)
     and (love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
       or love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui"))
   local tool = S.builderTool or "pencil"
+  if tool == "elevation" and S.builderElevationMode == "fill" then tool = "elevation_fill"
+  elseif tool == "elevation" and S.builderElevationMode == "rectangle" then tool = "elevation_rectangle" end
   local eventTool = EVENT_TOOL_BY_ID[tool]
   local panning = tool == "pan" or middle or space
   local stencilReady = type(source.stencilImage) == "string"
@@ -1383,8 +1388,13 @@ local function drawCanvas(S, source, x, y, w, h, App)
   elseif eventHandled then
     -- Event interaction owns this pointer gesture.
   elseif over and inMap and Kit.mouseClicked and not Kit.blockClicks
-      and (tool == "fill" or tool == "picker" or tool == "warp") then
-    if tool == "fill" then
+      and not panning
+      and (tool == "fill" or tool == "elevation_fill" or tool == "picker" or tool == "warp") then
+    if tool == "elevation_fill" then
+      App.beginEditBatch()
+      if require("MapElevations").fill(source, cx, cy, S.builderElevation or 3) then App.markDirty() end
+      App.endEditBatch()
+    elseif tool == "fill" then
       App.beginEditBatch()
       floodFill(S, source, cx, cy, App)
       App.endEditBatch()
@@ -1414,14 +1424,14 @@ local function drawCanvas(S, source, x, y, w, h, App)
         S.builderCamY = S._builderDrag.camY
           - (Kit.mouseY - S._builderDrag.my) / zoom
       end
-    elseif inMap and (tool == "rectangle" or tool == "select" or tool == "eraser") then
+    elseif inMap and (tool == "rectangle" or tool == "elevation_rectangle" or tool == "select" or tool == "eraser") then
       if not S._builderDrag then
-        S._builderDrag = { range = true, x0 = cx, y0 = cy, tool = tool }
+        S._builderDrag = { range = true, x0 = cx, y0 = cy, tool = tool, elevation = S.builderElevation or 3 }
       end
       S.builderRangeDraft = {
         x0 = S._builderDrag.x0, y0 = S._builderDrag.y0, x1 = cx, y1 = cy,
       }
-    elseif inMap and (tool == "pencil" or tool == "collision" or tool == "exits" or tool=="bridge") then
+    elseif inMap and (tool == "pencil" or tool == "collision" or tool == "exits" or tool=="bridge" or tool=="elevation") then
       local stroke = S._builderStroke
       if not stroke or stroke.tool ~= tool then
         if stroke then App.endEditBatch() end
@@ -1438,6 +1448,8 @@ local function drawCanvas(S, source, x, y, w, h, App)
             changed = paintCell(S, source, px, py, App, false, true) or changed
           elseif tool=="bridge" then
             changed=require("Gen3Bridges").paint(source,px,py,S.builderBridgeMode or "deck_horizontal",brushRef(S)) or changed
+          elseif tool=="elevation" then
+            changed=require("MapElevations").paint(source,px,py,S.builderElevation or 3) or changed
           else
             changed = paintCollisionCell(S, source, px, py) or changed
           end
@@ -1454,6 +1466,10 @@ local function drawCanvas(S, source, x, y, w, h, App)
         if not shift then S.builderSelections = {} end
         S.builderSelections = S.builderSelections or {}
         S.builderSelections[#S.builderSelections + 1] = rect
+      elseif S._builderDrag.tool == "elevation_rectangle" then
+        App.beginEditBatch()
+        if require("MapElevations").rectangle(source, rect, S._builderDrag.elevation) then App.markDirty() end
+        App.endEditBatch()
       elseif S._builderDrag.tool == "eraser" then
         App.beginEditBatch()
         applyRectangle(S, source, rect, App, true)
@@ -2118,6 +2134,10 @@ local function drawToolbar(S, source, x, y, w, App)
     if Kit.chip(tx, toolY, bw, 26 * s, tool.label,
         (S.builderTool or "pencil") == tool.id, PAL.blue, PAL.steel, tool.tip) then
       S.builderTool = tool.id
+      if tool.id == "elevation" then
+        S.mapShowElevations = true
+        S.mapShowNeighbors = true
+      end
       S.builderRangeDraft = nil
       if tool.id ~= "warp" then S.builderWarpDraft = nil end
       if tool.mapTool == "warp" then S.builderPane = "warps" end
@@ -2141,6 +2161,20 @@ local function drawToolbar(S, source, x, y, w, App)
       S.builderAdvancedTools == true, PAL.yellow, PAL.steel,
       "Show selection, collision, warp, trainer, and other advanced tools") then
     S.builderAdvancedTools = not S.builderAdvancedTools
+  end
+
+  if Generation.isGen3(S) then
+    tx = tx + moreW + 3 * s
+    if tx + 88 * s > x + w then
+      toolY = toolY + 29 * s
+      tx = x + 50 * s
+    end
+    if Kit.chip(tx, toolY, 88 * s, 26 * s, "Elevations",
+        S.mapShowElevations == true, PAL.blue, PAL.steel,
+        "Show elevation numbers on this map and connected neighbors. Compare values across map edges; 0 is a wildcard height.") then
+      S.mapShowElevations = not S.mapShowElevations
+      if S.mapShowElevations then S.mapShowNeighbors = true end
+    end
   end
 
   local barY = toolY + 31 * s
@@ -2303,6 +2337,31 @@ local function drawToolbar(S, source, x, y, w, App)
         x + 118 * s, barY + 5 * s, PAL.muted)
       barBottom = barY + 24 * s
     end
+  elseif S.builderTool=="elevation" then
+    local modeX = x
+    for _, mode in ipairs({{"pencil", "Pencil"}, {"fill", "Fill"}, {"rectangle", "Square"}}) do
+      if Kit.chip(modeX, barY, 72 * s, 26 * s, mode[2],
+          (S.builderElevationMode or "pencil") == mode[1], PAL.blue, PAL.steel,
+          mode[1] == "fill" and "Fill connected cells with the same elevation"
+            or mode[1] == "rectangle" and "Drag a filled rectangle of elevation cells"
+            or "Paint elevation by clicking or dragging") then
+        S.builderElevationMode = mode[1]
+      end
+      modeX = modeX + 75 * s
+    end
+    barY = barY + 30 * s
+    Kit.text("micro", "HEIGHT", x, barY + 5 * s, PAL.caption)
+    local bx, by = x + 56 * s, barY
+    for value = 0, 15 do
+      if bx + 30 * s > x + w then bx, by = x + 56 * s, by + 29 * s end
+      if Kit.chip(bx, by, 30 * s, 26 * s, tostring(value),
+          (S.builderElevation or 3) == value, PAL.blue, PAL.steel,
+          "Paint elevation " .. value .. ". Click or drag on the selected map; select a neighbor to edit its side.") then
+        S.builderElevation = value
+      end
+      bx = bx + 33 * s
+    end
+    barBottom = by + 28 * s
   elseif S.builderTool=="bridge" then
     local B=require("Gen3Bridges")
     require("ChoicePicker").field(S,{x=x,y=barY,w=240*s,h=26*s,current=S.builderBridgeMode or "deck_horizontal",ids=B.modes,labels=B.labels,title="BRIDGE PART",

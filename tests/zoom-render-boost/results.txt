@@ -1,0 +1,8 @@
+PASS: 640 ticks, 3 animation kinds, CPU/GPU pixels identical after every call. Allocations 480 -> 73; uploaded bytes 41943040 -> 5242880; 160 uploads each.
+PASS: fresh atlas, repeated game.ready, backend fallback, and hook removal.
+PASS: 204304 lookup comparisons, negative coordinates, overlapping neighbors, nil tiles, live tile edits, world replacement and void flags.
+BENCHMARK: 100 moving views, 960000 queries, 81 connected maps: original 739.1 ms, spatial 87.9 ms (8.41x). Synthetic CPU lookup workload only.
+PASS: draw integration, duplicate ready, error cleanup, custom connections, disabled-mod behavior; original/fast counters, refresh timings and stall reports.
+PASS: 301 animated layer updates pixel-identical (opacity, bridges, upper layers); atlas clears 602 -> 152, native gets 1505 -> 301, custom quads 301 -> 2.
+PASS: static layers render once instead of 301 times; palette mutation, texture replacement and retry after draw errors preserve output.
+PASS: Sevii Routes contains the tested renderer, removes redundant batch invalidation, and compiles.

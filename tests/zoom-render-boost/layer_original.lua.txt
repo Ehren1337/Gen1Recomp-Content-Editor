@@ -1,0 +1,44 @@
+    local built,images={},{}
+    local frameClock=0
+    local function frameFor(ref)
+      local pair=ref.source:match("^@runtime:(.+)$")
+      local source=layered.sources[ref.source]
+      local frames=pair and (layered.animations[pair] or {})[ref.tile] or source and (source.animations or {})[ref.tile]
+      if not frames or #frames==0 then return ref.tile end
+      local total=0;for _,f in ipairs(frames) do total=total+math.max(16,f.duration or 200) end
+      local clock=frameClock*1000%total
+      for _,f in ipairs(frames) do clock=clock-math.max(16,f.duration or 200);if clock<0 then return f.tile end end
+      return ref.tile
+    end
+    local function drawRef(ref,x,y,over)
+      if ref.bridge and not over then return end
+      local pair=ref.source:match("^@runtime:(.+)$")
+      local tile=frameFor(ref)
+      love.graphics.setColor(1,1,1,ref.opacity or 1)
+      if pair then
+        local ts=assert(T.get(pair),"Missing native tileset "..pair)
+        local image=ts.image
+        if over and not ref.bridge then image=ts.overImage end
+        if image then love.graphics.draw(image,over and not ref.bridge and T.overQuad(ts,T.slotFor(ts,tile)) or T.quad(ts,T.slotFor(ts,tile)),x,y) end
+        if ref.bridge and ts.overImage then love.graphics.draw(ts.overImage,T.overQuad(ts,T.slotFor(ts,tile)),x,y) end
+      elseif not over or ref.bridge then
+        local source=assert(layered.sources[ref.source],"Missing tile source "..ref.source)
+        local image=images[ref.source]
+        if not image then image=mod.assets:image(source.image);image:setFilter("nearest","nearest");images[ref.source]=image end
+        local columns=source.columns or math.floor(image:getWidth()/16)
+        local quad=love.graphics.newQuad(tile%columns*16,math.floor(tile/columns)*16,16,16,image:getDimensions())
+        love.graphics.draw(image,quad,x,y)
+      end
+    end
+    local function render(entry)
+      love.graphics.push("all")
+      for _,over in ipairs({false,true}) do
+        love.graphics.setCanvas(over and entry.ts.overImage or entry.ts.image)
+        love.graphics.clear(0,0,0,0);love.graphics.origin()
+        for i,refs in ipairs(entry.slots) do
+          local x,y=(i-1)%entry.ts.cols*16,math.floor((i-1)/entry.ts.cols)*16
+          for _,ref in ipairs(refs) do drawRef(ref,x,y,over) end
+        end
+      end
+      love.graphics.pop()
+    end
