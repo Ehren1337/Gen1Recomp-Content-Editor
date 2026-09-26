@@ -216,6 +216,9 @@ function Gen3.emit(project, encode)
     out[#out+1]=require("Gen3LayeredRuntime")
   end
   -- Whirlpools (map editor collision): crossed with WHIRLPOOL while surfing.
+  if project.gen3Layered and next(project.gen3Layered) then
+    out[#out+1]=require("Gen3WaterfallRuntime")
+  end
   local whirlpool = require("Gen3Whirlpool").compile(project)
   if whirlpool then
     out[#out+1]=require("Gen3WhirlpoolRuntime")(whirlpool,encode)

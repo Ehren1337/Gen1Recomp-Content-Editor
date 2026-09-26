@@ -50,6 +50,18 @@ function M.draw(S,x,y,w,h,App)
   Kit.text("micro",Kit.ellipsize("micro","Map ID: "..S.mapId,w),x,y,require("Theme").PAL.muted)
   Kit.offerTooltip(x,y,w,18*s,"Internal ID: "..S.mapId..". Used by saves and warps; renaming the display name does not change it.")
   y=y+24*s
+  if map._isNew then
+    if S._g3IdMap~=S.mapId then S._g3IdMap=S.mapId;S.g3MapIdDraft=S.mapId end
+    S.g3MapIdDraft=Kit.textfield("g3MapId",x,y,w,27*s,S.g3MapIdDraft,"MAP_ID",
+      "Change this new map's internal ID. Existing saves still reference the old ID.")
+    if Kit.button(x,y+32*s,w,27*s,"Change map ID",{kind="accent",
+        tooltip="Update exact map references in this project. Existing save files and external mods are not migrated."}) then
+      local changed,err=require("Gen3MapIdentity").rename(S,S.mapId,S.g3MapIdDraft)
+      if changed then App.markDirty();map=S.project.maps[S.mapId];S.status="Map ID changed to "..S.mapId
+      else S.status=err end
+    end
+    y=y+67*s
+  end
   y=require("Gen3MapProperties").draw(S,map,x,y,w,App)
   if Kit.button(x,y,w,27*s,S.g3ShowConnections and "Show events" or "Map connections",{tooltip="Add or edit multiple connections per side, each with its own offset."}) then S.g3ShowConnections=not S.g3ShowConnections end
   y=y+36*s

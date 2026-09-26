@@ -35,12 +35,13 @@ assert(not Properties.apply(map,"invalid"))
 assert(Properties.apply(map,"4"))
 assert(Workspace.compile(S))
 local exported = S.project.gen3.maps.TEST
-assert(exported.mapType==4 and exported.cave==1 and exported.allowEscaping==1)
+assert(exported.mapType==4 and exported.cave==0 and exported.allowEscaping==1)
 assert(exported.environment=="CAVE" and exported.kind=="cave")
 assert(original.mapType==nil and original.allowEscaping==nil)
 -- Exercise the actual controls and ensure a manual escape override survives export.
 local selected,dirty
-package.loaded.Kit={scale=1,caption=function() end,button=function() return true end}
+local click="Dig / Escape Rope"
+package.loaded.Kit={scale=1,caption=function() end,button=function(_,_,_,_,label) return label:find(click,1,true)==1 end}
 package.loaded.ChoicePicker={field=function(_,opts) selected=opts.onPick end}
 local convert=Workspace.convert
 Workspace.convert=function() return {} end
@@ -51,6 +52,18 @@ assert(S.project.gen3.maps.TEST.allowEscaping==0)
 selected("3")
 assert(map.mapType==3 and map.cave==0 and map.allowEscaping==0 and dirty==2)
 assert(Moves.isOutdoors(map.mapType))
+selected("4")
+click="Requires Flash"
+Properties.draw(S,map,0,0,280,{markDirty=function() dirty=(dirty or 0)+1 end})
+assert(map.cave==1 and map.mapType==4 and map.allowEscaping==1)
+assert(Workspace.compile(S))
+assert(S.project.gen3.maps.TEST.cave==1)
+selected("4")
+assert(map.cave==1,"Selecting a type must preserve explicit darkness")
+Properties.draw(S,map,0,0,280,{markDirty=function() dirty=(dirty or 0)+1 end})
+assert(map.cave==0 and map.mapType==4 and map.allowEscaping==1)
+assert(Moves.isDungeon(map.mapType,false),"Lit caves must still support Dig")
+selected("3")
 Workspace.convert=convert
 -- Lua serialization/reload preserves the numeric header flags (0 is significant).
 local Writer=require("ModWriter")

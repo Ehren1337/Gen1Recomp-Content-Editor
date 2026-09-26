@@ -48,7 +48,9 @@ function M.apply(map, value)
   map.outdoor = n == 1 or n == 2 or n == 3 or n == 6
   map.environment = map.outdoor and (n == 1 or n == 2) and "TOWN"
     or map.outdoor and "ROUTE" or n == 4 and "CAVE" or "INDOOR"
-  map.cave = n == 4 and 1 or 0
+  -- The native `cave` flag controls Flash darkness, not underground type.
+  -- Preserve an explicit lighting choice; new maps start fully lit.
+  if map.cave == nil then map.cave = 0 end
   map.allowEscaping = n == 4 and 1 or 0
   return true
 end
@@ -71,7 +73,10 @@ function M.draw(S, map, x, y, w, App)
     change(S.project.maps[S.mapId]);App.markDirty()
   end
   M.picker(S,map,x,y+21*s,w,function(id)
-    edit(function(target) M.apply(target,id) end)
+    edit(function(target)
+      if target.cave==nil then target.cave=M.resolve(S,target).cave end
+      M.apply(target,id)
+    end)
   end)
   local allowed = (tonumber(M.resolve(S,map).allowEscaping) or 0) ~= 0
   if Kit.button(x,y+54*s,w,27*s,"Dig / Escape Rope: "..(allowed and "Allowed" or "Blocked"),{
@@ -79,6 +84,12 @@ function M.draw(S, map, x, y, w, App)
       tooltip="Escape permission. Dig also requires a cave type. Enter through a warp from outdoors to establish an escape destination."}) then
     edit(function(target) target.allowEscaping=allowed and 0 or 1 end)
   end
-  return y+91*s
+  local dark = (tonumber(M.resolve(S,map).cave) or 0) ~= 0
+  if Kit.button(x,y+87*s,w,27*s,"Requires Flash: "..(dark and "Yes" or "No"),{
+      kind=dark and "accent" or "ghost",
+      tooltip="Toggle cave darkness independently of map type and Dig / Escape Rope permission."}) then
+    edit(function(target) target.cave=dark and 0 or 1 end)
+  end
+  return y+124*s
 end
 return M

@@ -36,7 +36,9 @@ right-hand **Map setup** drawer to change it later. Types include Town, City,
 Route, Cave / underground, Underwater, Ocean route, Indoor, and Secret base.
 Changing type keeps the map's terrain, size, and events.
 
-Cave sets the native cave and escape flags. Other types clear those flags;
+Cave enables escape permission without requiring Flash. **Requires Flash: Yes / No**
+controls darkness independently and preserves your choice when changing type.
+Other types clear escape permission;
 use **Dig / Escape Rope: Allowed / Blocked** to override escape permission
 after choosing a type. Outdoor types allow the runtime's Fly/Teleport checks;
 Dig also requires a cave type. Badges and destination requirements still apply.
@@ -53,6 +55,16 @@ the entire vertical waterfall. Leave surfable **Water** at the bottom and top.
 Surf to the bottom, face up, and press A with a Pokémon that knows WATERFALL
 and the required badge. The brush assigns native waterfall behavior while
 blocking ordinary entry; painting plain Water does not create a climbable waterfall.
+
+Waterfall rides keep the player surfing and take 32 frames per tile, with the
+Waterfall sound repeating until the ride ends. Surf down onto the top to descend
+automatically; descending does not require a move user or badge. Save/export the
+project again after updating the editor to include these runtime changes.
+
+For a new project map, **Map setup → Change map ID** changes its internal ID and
+updates exact references throughout the project, including warps and scripts.
+The display name stays separate. Existing saves, external mods, and references
+embedded inside custom Lua source are not migrated. Original game map IDs stay fixed.
 
 - Left: map search/list and tileset sources.
 - Center: **Paint map** or **Add events** toolbar and canvas.
