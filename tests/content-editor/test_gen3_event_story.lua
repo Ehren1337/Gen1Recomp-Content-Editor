@@ -27,6 +27,12 @@ for _,row in ipairs(numeric) do
   assert(row.text=="Native dialogue" and row.inputs==nil,"Numeric text pointers must stay out of action inputs")
 end
 catalog.numeric=nil
+-- Exercise the same command creation used by Add action > Show dialogue.
+catalog.added=A.create(S,"text")
+local added=Story.rows(S,"added",catalog)
+assert(#added==1 and added[1].label=="Show dialogue" and added[1].text~=nil)
+assert(added[1].inputs==nil,"New dialogue must open the text editor, not action inputs")
+catalog.added=nil
 assert(Story.rows(S,"loop",catalog)[1].label=="Repeat earlier behavior")
 assert(Story.rows(S,"missing",catalog)[1].label:find("unavailable"))
 assert(encode(catalog)==before,"Reading must preserve native scripts")

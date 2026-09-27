@@ -3,6 +3,10 @@ package.path="tools/content-editor/?.lua;"..runtime.."/?.lua;"..package.path
 require("src.core.GameVersion").set("firered")
 local I=require("Gen3ActionInputs");local Story=require("Gen3EventStory")
 local encode=require("ModWriter").encodeLua
+-- A stray text pointer must not crash rendering or modify the project.
+for _,pointer in ipairs({"dialogue_text",0x8123456,false}) do
+  assert(I.draw({},"dialogue",pointer,{},0,42,300,function() error("Unexpected edit") end)==42)
+end
 local S={project={gen3={map_scripts={}}},data={_g3StoryMovements={}}}
 local catalog={root={{op="call",target="prepare"},{op="setflag",flag=2055},{op="special",id=312},{op="end"}},
   prepare={{op="setvar",var=32772,value=410,[1]=32772,[2]=410},
