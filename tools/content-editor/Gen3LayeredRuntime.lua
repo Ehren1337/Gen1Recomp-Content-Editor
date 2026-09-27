@@ -104,12 +104,23 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       elseif not over or ref.bridge then
         local source=assert(layered.sources[ref.source],"Missing tile source "..ref.source)
         local image=images[ref.source]
-        if not image then
-          -- Baked sheets (TilePixels) carry their pixels; older ones load the PNG.
-          if source.pixels then image=love.graphics.newImage(tilePixels.imageData(source.pixels))
-          else image=mod.assets:image(source.image) end
-          image:setFilter("nearest","nearest");images[ref.source]=image
+        if image==nil then
+          -- Baked sheets (TilePixels) carry their pixels; older ones load the
+          -- PNG. A sheet whose PNG is gone draws nothing (once logged) rather
+          -- than stopping every map after this one.
+          local ok,loaded=pcall(function()
+            if source.pixels then return love.graphics.newImage(tilePixels.imageData(source.pixels)) end
+            return mod.assets:image(source.image)
+          end)
+          if ok and loaded then
+            image=loaded;image:setFilter("nearest","nearest")
+          else
+            image=false
+            print("[editor layers] tile sheet "..tostring(ref.source).." can't be drawn: "..tostring(loaded))
+          end
+          images[ref.source]=image
         end
+        if not image then return end
         local columns=source.columns or math.floor(image:getWidth()/16)
         local quads=sourceQuads[ref.source]
         if not quads then quads={};sourceQuads[ref.source]=quads end
@@ -174,7 +185,10 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       entry.rendered=true
       return true
     end
-    for id,source in pairs(layered.maps) do
+    -- One map that can't be built must not leave the rest unbuilt (which
+    -- ones come after it depends on table order, so it differs between
+    -- devices).
+    local function build(id,source)
       local map=assert(ctx.game.data.maps[id],"Missing map "..id)
       local slots,seen,cells,behaviors={},{},{},{}
       local width,height=source.cellWidth,source.cellHeight
@@ -240,6 +254,10 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       map._editorBridges=source.gen3Bridges
       map.midLayout=Layout.fromDecoded({width=width,height=height,cells=cells,
         borderWidth=border.width,borderHeight=border.height,borderMids=borderMids},id,pair)
+    end
+    for id,source in pairs(layered.maps) do
+      local ok,err=pcall(build,id,source)
+      if not ok then print("[editor layers] map "..tostring(id).." not built: "..tostring(err)) end
     end
     if not View._editorLayerDispatch then
       View._editorLayerDispatch=true

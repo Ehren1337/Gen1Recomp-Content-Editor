@@ -131,6 +131,9 @@ return function(data, encode)
             if ts.image and ts.image.replacePixels then ts.image:replacePixels(ts.imageData) end
             if over and ts.overImage and ts.overImage.replacePixels then ts.overImage:replacePixels(ts.overImageData) end
             if okV and View then View._nativeDirty=true end
+            -- Maps built in the editor draw from their own atlas, copied from
+            -- this one; tell them to copy again (Gen3LayeredRuntime).
+            ts._editorLayerRevision=(ts._editorLayerRevision or 0)+1
           end
         end
       end
@@ -205,9 +208,14 @@ return function(data, encode)
         local ok,t=pcall(E.tableFor,mapId)
         if not ok or type(t)~="table" then return end
         local period=currentPeriod()
+        -- The game keeps a table per name (ROUTE_1, FR_ROUTE_1, "3:19", ...);
+        -- the one the editor named and the one the map rolls on are matched
+        -- by map group and number, the way the content registry matches them.
+        local g,n=t.mapGroup,t.mapNum
         for id,periods in pairs(daynight.encounters) do
           local ok2,other=pcall(E.tableFor,id)
-          if ok2 and other==t then
+          if ok2 and type(other)=="table" and (other==t
+              or (g~=nil and n~=nil and other.mapGroup==g and other.mapNum==n)) then
             local orig=originals[t]
             if not orig then
               orig={}
