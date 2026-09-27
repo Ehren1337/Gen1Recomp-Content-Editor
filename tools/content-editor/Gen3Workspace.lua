@@ -20,6 +20,8 @@ end
 function M.prepare(S)
   local data=S.data
   if not data or not data._gen3Read then return end
+  -- The project's tileset copies must be known before any map draws.
+  require("Gen3Blocks").syncCopies(S)
   for _,map in pairs(S.project and S.project.maps or {}) do
     if map.connections and #map.connections>0 then
       map.connections=require("Gen3Connections").normalize(map.connections)
@@ -125,7 +127,7 @@ function M.convert(S,id)
   return source
 end
 function M.descriptor(S,pair)
-  local ts=require("Gen3Map").tileset(S.data,pair)
+  local ts=require("Gen3Blocks").nativeTileset(S,pair)
   if not ts then return end
   local count=0;for mid in pairs(ts.midToSlot) do count=math.max(count,mid+1) end
   -- Blocks made in GFX > Blocks extend the sheet.
@@ -141,7 +143,7 @@ end
 function M.drawTile(S,source,tile,x,y,size,alpha)
   -- Blocks made or changed in GFX > Blocks draw as edited.
   if require("Gen3Blocks").drawMapTile(S,source.nativePair,tile,x,y,size,alpha) then return true end
-  local ts,T=require("Gen3Map").tileset(S.data,source.nativePair)
+  local ts,T=require("Gen3Blocks").nativeTileset(S,source.nativePair)
   if not ts then return false end
   local slot=T.slotFor(ts,tile)
   love.graphics.setColor(1,1,1,alpha or 1)
@@ -208,8 +210,13 @@ function M.compile(S)
       p.gen3.maps[mapId].warps=warps
     end
   end
+  -- Keep PNG tile sheets as pixel data, so the mod needs no image files.
+  require("LayeredMap").bakeTileSources(S)
   p.gen3Layered=copy(p.layeredMaps or {})
   p.gen3TileSources=copy(p.mapTileSources or {})
+  for _,source in pairs(p.gen3TileSources) do
+    if type(source)=="table" then source._uniqueSig,source._uniqueTiles=nil,nil end
+  end
   p.gen3TileAnimations=copy(p.runtimeTileAnims or {})
   return true,"Compiled Gen 3 workspace"
 end

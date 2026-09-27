@@ -865,6 +865,35 @@ function ModIO.directoryNames(path)
   return out
 end
 
+function ModIO.isDirectory(path)
+  if type(path) ~= "string" or path == "" then return false end
+  if package.config:sub(1, 1) == "\\" then
+    local ok, ffi = pcall(require, "ffi")
+    if not ok then return false end
+    pcall(ffi.cdef, "unsigned long GetFileAttributesA(const char *path);")
+    local attributes = ffi.load("kernel32").GetFileAttributesA((path:gsub("/", "\\")))
+    return attributes ~= 0xFFFFFFFF and bit.band(tonumber(attributes), 0x10) ~= 0
+  end
+  local f = io.open(path, "rb")
+  if not f then return false end
+  local _, _, code = f:read(1)
+  f:close()
+  return code == 21 -- EISDIR
+end
+
+-- Remove a directory only if it is empty. True when it is gone.
+function ModIO.removeEmptyDirectory(path)
+  if type(path) ~= "string" or path == "" then return false end
+  if #ModIO.directoryNames(path) > 0 then return false end
+  if package.config:sub(1, 1) == "\\" then
+    local ok, ffi = pcall(require, "ffi")
+    if not ok then return false end
+    pcall(ffi.cdef, "int RemoveDirectoryA(const char *path);")
+    return ffi.load("kernel32").RemoveDirectoryA((path:gsub("/", "\\"))) ~= 0
+  end
+  return os.remove(path) ~= nil
+end
+
 function ModIO.modDir(id)
   if externalMods[id] then return externalMods[id] end
   if not id or id == "" then return nil end

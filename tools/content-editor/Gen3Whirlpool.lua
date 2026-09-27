@@ -101,9 +101,12 @@ function M.setWhirlpool(S, pair, mid, on)
   local Blocks = require("Gen3Blocks")
   local mids, back = { mid }, 0x15
   for _, rec in ipairs(((S.project.gen3Imports or {})[pair]) or {}) do
-    if mid >= rec.base and mid < rec.base + rec.count then
-      mids = {}
-      for m = rec.base, rec.base + rec.count - 1 do mids[#mids + 1] = m end
+    local list = require("Gen3ImageImport").mids(rec)
+    local hit = false
+    for _, m in ipairs(list) do if m == mid then hit = true break end end
+    -- a whole map made into blocks: only this block changes
+    if hit and not rec.map then
+      mids = list
       back = rec.behavior or back
       break
     end

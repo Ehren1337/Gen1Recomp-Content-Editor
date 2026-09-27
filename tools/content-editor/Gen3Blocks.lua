@@ -72,6 +72,7 @@ end
 local applyColours -- below, with the palette additions
 
 function M.pack(S, pair)
+  M.syncCopies(S)
   local data = S.data or {}
   data._g3Packs = data._g3Packs or {}
   local hit = data._g3Packs[pair]
@@ -79,14 +80,16 @@ function M.pack(S, pair)
     if hit then applyColours(S, pair, hit) end
     return hit or nil, "No saved blocks for " .. tostring(pair)
   end
-  local pack = TS.decodePair(read(S, NATIVE .. pair .. "/mids.idx"),
-    read(S, NATIVE .. pair .. "/mids_over.idx"))
+  -- A copy reads its game blocks from the tileset it copies.
+  local from = M.cachePair(S.project, pair)
+  local pack = TS.decodePair(read(S, NATIVE .. from .. "/mids.idx"),
+    read(S, NATIVE .. from .. "/mids_over.idx"))
   if pack then
     local NativePack = require("src.import.gba.native_pack")
-    local bgr = NativePack.decodePalettes(read(S, NATIVE .. pair .. "/palettes.bin"))
+    local bgr = NativePack.decodePalettes(read(S, NATIVE .. from .. "/palettes.bin"))
     pack.baseRgb = NativePack.palsToRgb8(bgr or {})
     pack.rgb = pack.baseRgb
-    pack.behaviors = behaviourTable(S)[pair] or {}
+    pack.behaviors = behaviourTable(S)[from] or {}
     pack.sheet = TS.harvest(pack)
   end
   data._g3Packs[pair] = pack or false
@@ -96,6 +99,64 @@ function M.pack(S, pair)
       .. " -- load FireRed on the Project tab"
   end
   return pack
+end
+
+-- Tileset copies ------------------------------------------------------------
+--
+-- A copy is the project's own tileset: it starts as a game tileset (its
+-- blocks, palettes and behaviours) and takes new blocks, tiles and colours
+-- without touching the original, which ROM maps keep using as it was.
+--   project.gen3TilesetCopies[<copy id>] = { base = <game pair>, name = "..." }
+-- In game, Gen3BlocksRuntime points the copy's cache reads at the base.
+
+function M.copies(project)
+  return (project and project.gen3TilesetCopies) or {}
+end
+
+--- The game tileset whose cache a pair reads (itself unless it's a copy).
+function M.cachePair(project, pair)
+  local copy = M.copies(project)[pair]
+  return copy and copy.base or pair
+end
+
+--- Tell the map drawing code (Gen3Map) which pairs are copies. Cheap when
+-- nothing changed, so it can run before every tileset lookup.
+function M.syncCopies(S)
+  local G = require("Gen3Map")
+  G.copies = G.copies or {}
+  local mine = M.copies(S and S.project)
+  local n, same = 0, G._copiesFrom == mine
+  for id, copy in pairs(mine) do
+    n = n + 1
+    if G.copies[id] ~= copy.base then same = false end
+  end
+  if same and n == G._copiesCount then return end
+  for k in pairs(G.copies) do G.copies[k] = nil end
+  for id, copy in pairs(mine) do G.copies[id] = copy.base end
+  G._copiesFrom, G._copiesCount = mine, n
+end
+
+--- The engine's tileset for a pair (a copy loads as its base does).
+function M.nativeTileset(S, pair)
+  M.syncCopies(S)
+  return require("Gen3Map").tileset(S.data, pair)
+end
+
+--- Make a copy of a game tileset. Returns its id ("my_<name>").
+function M.newCopy(S, base, name)
+  base = M.cachePair(S.project, base)
+  local slug = tostring(name or "tileset"):lower():gsub("[^%w]+", "_"):gsub("^_+", ""):gsub("_+$", "")
+  if slug == "" then slug = "tileset" end
+  S.project.gen3TilesetCopies = S.project.gen3TilesetCopies or {}
+  local copies = S.project.gen3TilesetCopies
+  local id, n = "my_" .. slug, 1
+  while copies[id] or (S.data and S.data._g3Packs and S.data._g3Packs[id]) do
+    n = n + 1
+    id = "my_" .. slug .. "_" .. n
+  end
+  copies[id] = { base = base, name = tostring(name or slug) }
+  M.syncCopies(S)
+  return id
 end
 
 -- Tileset pairs --------------------------------------------------------------
@@ -119,6 +180,7 @@ function M.pairs(S)
     add(type(src) == "table" and src.baseTileset, mapId)
   end
   for pair in pairs(((S.project or {}).gen3Blocks) or {}) do add(pair, nil) end
+  for pair in pairs(M.copies(S.project)) do add(pair, nil) end
   local ids = {}
   for pair, maps in pairs(usedBy) do
     table.sort(maps)
@@ -911,6 +973,12 @@ function M.compileRuntime(S)
   for _, rows in pairs(project.gen3Blocks or {}) do if next(rows) then any = true end end
   if not any then return nil, {} end
   local data = { pairs = {}, tiles = {} }
+  for id, copy in pairs(M.copies(project)) do
+    if project.gen3Blocks[id] then
+      data.copies = data.copies or {}
+      data.copies[id] = copy.base
+    end
+  end
   local warnings = {}
   for pair, rows in pairs(project.gen3Blocks) do
     local out = {}

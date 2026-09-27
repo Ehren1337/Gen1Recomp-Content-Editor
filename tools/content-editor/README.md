@@ -223,6 +223,67 @@ Limits: tiles that no saved block uses aren't available; a behaviour change
 doesn't alter collision already baked into vanilla maps; palettes can't be
 edited yet. Tests: `tests/content-editor/run-block-checks.ps1 -Runtime <runtime>`.
 
+## Gen 3 day and night (FireRed)
+
+**GFX → Day & night** turns on a Crystal-style clock: outdoor maps (map
+types Town, City, Route and Ocean route) follow the device's own time.
+Buildings, caves and battles look the same all day.
+
+- **Parts of the day.** Morning, day and night start at the hours you set
+  (Crystal's 4, 10 and 18 by default). A new part fades in over the fade
+  minutes.
+- **Looks.** Day is drawn as the game draws it. Morning and night multiply
+  every colour by a tint, in the GBA's 5-bit colours. Menus and text boxes
+  are not tinted.
+- **Night look.** In GFX → Blocks, open a block and turn on **Night look**
+  (next to the palette). Select pixels (drag; right-drag unselects; *Select a
+  colour* picks every pixel of one colour), then **Use this colour** gives them
+  their own night colour, or **Keep day colour** keeps them as they are by
+  day. Those pixels skip the night tint; everything else darkens.
+  **Find similar blocks** uses the block as an example: it learns which day
+  colours became which night colours and which colour framed them, then finds
+  blocks (this tileset, or every tileset outdoor maps use) where those colours
+  sit inside that frame -- windows, not blue roofs or water -- and shows them
+  day and night to tick before **Give … this look**. For a window it
+  missed, open that block, select its window pixels and press **Light like
+  <example>**: its colours, darkest to brightest, take the example's night
+  colours. Then search with **All lit blocks** as the examples to find more of
+  that kind too; **Looser match** accepts patches with frame on 40% of their
+  edge (from 2 pixels). **Hide already lit** hides blocks that already have a
+  night look. Right-click a result to fix it right there: the same pixel grid
+  and tools (plus **Remove night look** and **Give it this look**) -- before
+  it's given its look, edits change what it gets; after, they save straight
+  into the block. **Remove night look** takes one block's look away and
+  **Remove all night looks** (click twice) every block's; Undo brings them
+  back. The Day & night tab lists the blocks with a night look, each with
+  **Remove**.
+- **Wild encounters by time of day.** In Encounters, pick a map and a kind
+  (Grass, Surf, Rock Smash, Fishing), then **Morning**, **Day** or **Night**
+  and **Give morning, day and night their own lists**: each starts as a
+  copy of the all-day list, and the all-day list is off from then on (like
+  Crystal's grass). **Back to one all-day list** removes them. The Day &
+  night tab lists them. They follow the same clock and test hour and only
+  apply while day and night is on; with it off the all-day list is used.
+- **Default night looks.** The editor ships night looks for FireRed's own
+  outdoor blocks (455 blocks: windows, lamps, signs), in
+  `Gen3DayNightDefaults.lua`. Turning day and night on in a project with no
+  night looks starts from them; edit or remove any as usual. **Add default
+  night looks** in the Day & night tab gives the missing ones to blocks that
+  have no look of their own (yours are kept). (Colours marked lit in older
+  projects are still honoured and listed there.)
+- **Preview.** The **Time of day** button over the map (and the Day & night
+  tab) previews any time: Play runs a day in 36 seconds; the Blocks previews
+  follow the same time.
+- **Test hour.** Playtests use this hour instead of the clock; clear it
+  before sharing the mod.
+
+In game, `Gen3DayNightRuntime` wraps `Renderer.endWorldPass`: on an outdoor
+map the finished world canvas is redrawn once through a shader
+(`Gen3DayNightCore.SHADER`) before the menus are drawn. At night the night
+look's pixels are written into the tileset pictures (and put back at dawn or
+indoors); their colours are nudged one 5-bit step if a palette already uses
+them, so exactly those pixels skip the tint. No engine files change.
+
 ## Gen 3 map connections
 
 The map connections viewer defaults to **Full region**, following all edge

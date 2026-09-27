@@ -64,13 +64,23 @@ function M.resize(base,spec,id)
   return setmetatable(copy,require("src.core.game3.layout_native"))
 end
 
+-- Tileset copies (Gen3Blocks.newCopy): copy id -> the game pair it reads.
+M.copies = M.copies or {}
+
+--- A cache path with a copy's folder pointed at the tileset it copies.
+function M.alias(p)
+  return (tostring(p):gsub("/native/([^/]+)/", function(pair)
+    return "/native/" .. (M.copies[pair] or pair) .. "/"
+  end, 1))
+end
+
 function M.tileset(data, pair)
   local T = require("src.core.game3.tileset_native")
   if M._data ~= data then
     M._data = data
     T.install({
-      read=function(_,p) return data._gen3Read and data._gen3Read(p) end,
-      exists=function(_,p) return data._gen3Read and data._gen3Read(p) ~= nil end,
+      read=function(_,p) return data._gen3Read and data._gen3Read(M.alias(p)) end,
+      exists=function(_,p) return data._gen3Read and data._gen3Read(M.alias(p)) ~= nil end,
       write=function() return false end,
     })
   end

@@ -9,6 +9,8 @@
 
 local ModIO = require("ModIO")
 local Preview = require("Preview")
+local TilePixels = require("TilePixels")
+local pixelUniques = setmetatable({}, { __mode = "k" })
 
 local LayeredMap = {}
 
@@ -802,6 +804,8 @@ function LayeredMap.installTileSource(project, wantedId, image, width, height)
     id = id, name = id, animations = {},
   }
   source.image = image
+  -- A new image replaces any pixels baked from the previous one.
+  source.pixels, source.imageFile = nil, nil
   source.tileWidth = 16
   source.tileHeight = 16
   source.columns = width / 16
@@ -811,7 +815,23 @@ function LayeredMap.installTileSource(project, wantedId, image, width, height)
   return source
 end
 
--- Turn a PNG into this map: one 16x16 cell per image tile, even cell size.
+-- Size of a PNG as a map: its pixel scale (an image blown up 2x, 3x ...),
+-- and how many 16x16 cells it holds at the game's own size. Cells are
+-- rounded up to even numbers unless the map allows odd sizes (Gen 3).
+function LayeredMap.measurePng(S, imagePath, mapId)
+  local ok, imageData = pcall(LayeredMap.readImageData, S, imagePath)
+  if not ok then return nil, imageData end
+  local m = require("PixelScale").measure(imageData)
+  local map = mapId and S.project and S.project.layeredMaps
+    and S.project.layeredMaps[mapId]
+  local oddOk = map and map.gen3Collision ~= nil
+  m.cellWidth = oddOk and m.cols or m.cols + (m.cols % 2)
+  m.cellHeight = oddOk and m.rows or m.rows + (m.rows % 2)
+  return m, imageData
+end
+
+-- Turn a PNG into this map: one 16x16 cell per image tile. Gen 3 finds the
+-- image's pixel scale first, so a 2x/3x screenshot still gives 16x16 tiles.
 function LayeredMap.applyPngAsMap(S, mapId, imagePath, pixelWidth, pixelHeight)
   local project = ensureProject(assert(S and S.project, "no project"))
   local source = project.layeredMaps and project.layeredMaps[mapId]
@@ -820,13 +840,45 @@ function LayeredMap.applyPngAsMap(S, mapId, imagePath, pixelWidth, pixelHeight)
   pixelHeight = tonumber(pixelHeight) or 0
   local cols = math.floor(pixelWidth / 16)
   local rows = math.floor(pixelHeight / 16)
+  local gen3 = require("Generation").isGen3(S)
+  local pixels, scale
+  if gen3 then
+    local m, imageData = LayeredMap.measurePng(S, imagePath, mapId)
+    if not m then return nil, imageData end
+    cols, rows, scale = m.cols, m.rows, m.scale
+    pixels = require("PixelScale").shrink(imageData, m.scale, m.phaseX, m.phaseY)
+  end
   if cols < 1 or rows < 1 then
     return nil, "PNG must be at least 16x16 pixels"
   end
   local cellWidth = cols + (cols % 2)
   local cellHeight = rows + (rows % 2)
+  if source.gen3Collision then cellWidth, cellHeight = cols, rows end
+  -- Gen 3: real FireRed blocks (GFX > Blocks edits them). Only when no
+  -- tileset has room does the map keep the picture as a pixel sheet.
   local stem = tostring(imagePath or mapId):match("([^/\\]+)%.[Pp][Nn][Gg]$")
     or tostring(mapId) .. "_png"
+  local blockErr
+  if gen3 then
+    -- The old ground's native collision, heights and bridges don't apply to
+    -- the new picture.
+    source.gen3Collision, source.gen3Elevation = {}, {}
+    source.gen3Behavior, source.gen3Bridges = nil, nil
+    local rec, plan = require("Gen3MapBlocks").convert(S, mapId, pixels, cols, rows, stem)
+    if rec then
+      local collision = {}
+      for i = 1, cols * rows do collision[i] = "walk" end
+      source.collision = collision
+      for _, map in pairs(project.layeredMaps or {}) do
+        if type(map) == "table" and map.stencilImage == imagePath then
+          map.stencilImage, map.stencilVisible = nil, nil
+        end
+      end
+      return { id = LayeredMap.runtimeSourceId(plan.pair), blocks = rec, plan = plan },
+        cols, rows, scale or 1
+    end
+    blockErr = plan
+  end
   local tileSource, err = LayeredMap.installTileSource(
     project, stem, imagePath, cols * 16, rows * 16)
   if not tileSource then return nil, err end
@@ -853,7 +905,12 @@ function LayeredMap.applyPngAsMap(S, mapId, imagePath, pixelWidth, pixelHeight)
   for layerIndex = 2, #(source.layers or {}) do
     source.layers[layerIndex].cells = {}
   end
-  return tileSource, cellWidth, cellHeight
+  -- Gen 3: keep the pixels in the project, so the PNG can be deleted.
+  if gen3 then
+    local baked, bakeErr = LayeredMap.bakeTileSource(S, tileSource, pixels)
+    if not baked then return nil, bakeErr end
+  end
+  return tileSource, cellWidth, cellHeight, scale or 1, blockErr
 end
 
 function LayeredMap.sourceDescriptor(S, sourceId)
@@ -937,6 +994,10 @@ function LayeredMap.sourceIds(S, mapId)
     add(LayeredMap.runtimeSourceId(tilesetId))
   end
 
+  -- The project's own tileset copies (Gen3Blocks.newCopy).
+  for _, pair in ipairs(sortedKeys(S.project and S.project.gen3TilesetCopies)) do
+    add(LayeredMap.runtimeSourceId(pair))
+  end
   for _, id in ipairs(sortedKeys(S.project and S.project.mapTileSources)) do
     add(id)
   end
@@ -1142,6 +1203,15 @@ end
 -- Source sampling -----------------------------------------------------------
 
 local function readImageData(S, path)
+  local pixelId = TilePixels.idFor(path)
+  if pixelId then
+    local source = S and S.project and S.project.mapTileSources
+      and S.project.mapTileSources[pixelId]
+    if not (source and source.pixels) then
+      error("tile source has no pixel data: " .. tostring(pixelId), 0)
+    end
+    return TilePixels.imageData(source.pixels)
+  end
   local resolved, kind = Preview.resolve(S, path)
   if not resolved then error("image is unavailable: " .. tostring(path), 0) end
   if kind == "love" then
@@ -1161,6 +1231,145 @@ local function readImageData(S, path)
   local ok, image = pcall(love.image.newImageData, fileData)
   if ok and image then return image end
   error("could not decode " .. tostring(path) .. ": " .. tostring(image), 0)
+end
+
+LayeredMap.readImageData = readImageData
+
+-- Copy a tile source's PNG into the project as pixel data (TilePixels).
+-- The source then draws from image "@pixels/<id>" and needs no file.
+-- imageData (optional) is used instead of reading source.image.
+function LayeredMap.bakeTileSource(S, source, imageData)
+  if not (source and source.id) then return nil, "no tile source" end
+  if not imageData and source.pixels
+      and TilePixels.idFor(source.image) == source.id then
+    return true
+  end
+  if type(source.image) ~= "string" or source.image == ""
+      or LayeredMap.isRuntimeSource(source.id) then
+    return nil, "tile source has no image"
+  end
+  if not imageData then
+    local ok, loaded = pcall(readImageData, S, source.image)
+    if not ok then return nil, loaded end
+    imageData = loaded
+  end
+  local file = TilePixels.idFor(source.image) and source.imageFile or source.image
+  source.pixels = TilePixels.encode(imageData, source.columns, source.count,
+    source.tileWidth, source.tileHeight)
+  source.imageFile = file
+  source.image = TilePixels.path(source.id)
+  source._uniqueSig, source._uniqueTiles = nil, nil
+  -- A stencil of the same PNG has served its purpose: forget it too.
+  for _, map in pairs(S.project.layeredMaps or {}) do
+    if type(map) == "table" and map.stencilImage == file then
+      map.stencilImage, map.stencilVisible = nil, nil
+    end
+  end
+  Preview.invalidatePath(source.image)
+  return true
+end
+
+-- Gen 3, after a successful save: delete PNGs under assets/mapbuilder/ that
+-- the project no longer uses (their pixels are baked in), then any folders
+-- that leaves empty, up to and including assets/. Nothing else is touched:
+-- a PNG still named anywhere in the project (a stencil still being traced, a
+-- source that could not be baked) stays. Returns the deleted relative paths,
+-- then "path: reason" for any file that could not be deleted.
+function LayeredMap.removeUnusedMapImages(S)
+  local removed, failed = {}, {}
+  if not (S and S.path and S.project and require("Generation").isGen3(S)) then
+    return removed, failed
+  end
+  local used, seen = {}, {}
+  local function walk(value, key)
+    if type(value) == "string" then
+      if value:lower():match("%.png$") then
+        local path = value:gsub("\\", "/")
+        used[path] = true
+        used[path:match("^mods/[^/]+/(.+)$") or path] = true
+      end
+    elseif type(value) == "table" and not seen[value] then
+      seen[value] = true
+      for k, child in pairs(value) do
+        -- imageFile only records where baked pixels came from.
+        if k ~= "imageFile" and k ~= "pixels" then walk(child, k) end
+      end
+    end
+  end
+  walk(S.project)
+  local sep = package.config:sub(1, 1)
+  local function sweep(rel)
+    local dir = S.path .. sep .. rel:gsub("/", sep)
+    for _, name in ipairs(ModIO.directoryNames(dir)) do
+      local file = rel .. "/" .. name
+      if ModIO.isDirectory(dir .. sep .. name) then
+        sweep(file)
+      elseif name:lower():match("%.png$") and not used[file] then
+        local ok, why = os.remove(dir .. sep .. name)
+        if ok then
+          removed[#removed + 1] = file
+          Preview.invalidatePath(file)
+        else
+          failed[#failed + 1] = file .. ": " .. tostring(why)
+        end
+      end
+    end
+    ModIO.removeEmptyDirectory(dir)
+  end
+  if ModIO.isDirectory(S.path .. sep .. "assets" .. sep .. "mapbuilder") then
+    sweep("assets/mapbuilder")
+    ModIO.removeEmptyDirectory(S.path .. sep .. "assets")
+  end
+  return removed, failed
+end
+
+-- One line for the status bar about removeUnusedMapImages' result.
+function LayeredMap.describeImageCleanup(ok, removed, failed)
+  if not ok then return "could not remove map PNGs: " .. tostring(removed) end
+  local parts = {}
+  if removed and #removed > 0 then
+    parts[#parts + 1] = string.format("removed %d PNG%s the mod no longer needs",
+      #removed, #removed == 1 and "" or "s")
+  end
+  if failed and #failed > 0 then
+    parts[#parts + 1] = "could not delete " .. table.concat(failed, "; ")
+  end
+  return #parts > 0 and table.concat(parts, "; ") or nil
+end
+
+-- Drop a PNG tile source nothing paints with any more (no map cell, stamp
+-- or bridge names it), so it isn't saved into the mod.
+function LayeredMap.dropUnusedSource(S, id)
+  local project = S and S.project
+  if not (project and project.mapTileSources and project.mapTileSources[id]) then return false end
+  local used = false
+  local function scan(value, seen)
+    if used or type(value) ~= "table" or seen[value] then return end
+    seen[value] = true
+    if value.source == id then used = true return end
+    for _, child in pairs(value) do scan(child, seen) end
+  end
+  scan(project.layeredMaps, {})
+  scan(project.mapStamps, {})
+  scan(project.mapAssemblies, {})
+  if used then return false end
+  project.mapTileSources[id] = nil
+  return true
+end
+
+-- Bake every file-backed tile source; one that can't be read keeps its file.
+function LayeredMap.bakeTileSources(S)
+  local project = S and S.project
+  local missing = {}
+  for _, id in ipairs(sortedKeys(project and project.mapTileSources)) do
+    local source = project.mapTileSources[id]
+    if type(source) == "table"
+        and not (source.pixels and TilePixels.idFor(source.image)) then
+      local ok = LayeredMap.bakeTileSource(S, source)
+      if not ok then missing[#missing + 1] = id end
+    end
+  end
+  return missing
 end
 
 local function imageFor(context, source)
@@ -2947,8 +3156,16 @@ end
 -- First-seen unique 16x16 tiles (skips identical copies on the sheet).
 function LayeredMap.uniqueTiles(S, source)
   if not source then return {} end
+  if source.pixels then
+    local list = pixelUniques[source.pixels]
+    if not list then
+      list = TilePixels.uniqueTiles(source.pixels)
+      pixelUniques[source.pixels] = list
+    end
+    return list
+  end
   if source.nativePair then
-    local ts=require("Gen3Map").tileset(S.data,source.nativePair)
+    local ts=require("Gen3Blocks").nativeTileset(S,source.nativePair)
     local result={};for id in pairs(ts and ts.midToSlot or {}) do result[#result+1]=id end;table.sort(result)
     -- Blocks made or changed in GFX > Blocks aren't in the cache; list them too.
     result=require("Gen3Blocks").mapPickerIds(S,source.nativePair,result)

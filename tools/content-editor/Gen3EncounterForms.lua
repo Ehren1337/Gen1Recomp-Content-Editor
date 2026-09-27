@@ -5,6 +5,8 @@ local Pane=require("FormPane")
 local PAL=require("Theme").PAL
 local kinds={{id="land",label="Grass",count=12},{id="water",label="Surf",count=5},
   {id="rocks",label="Rock Smash",count=5},{id="fishing",label="Fishing",count=10}}
+local times={{id="all",label="All day"},{id="morning",label="Morning",tip="Its own list in the morning (GFX > Day & night)"},
+  {id="day",label="Day",tip="Its own list by day"},{id="night",label="Night",tip="Its own list at night"}}
 function M.draw(S,x,y,w,h,App)
   require("Gen3ContentAdapter").prepare(S)
   local s=Kit.scale
@@ -33,39 +35,88 @@ function M.draw(S,x,y,w,h,App)
     if not S.project.encounters[id] then S.project.encounters[id]=require("src.mods.Merge").deepCopy(rec) end
     rec=S.project.encounters[id];return rec
   end
-  local top=List.modeChips(S,"g3EncounterKind",kinds,fx,y,s)+8*s
+  local top=List.modeChips(S,"g3EncounterKind",kinds,fx,y,s)+4*s
   local kind=S.g3EncounterKind or "land"
   local def=kinds[1];for _,v in ipairs(kinds) do if v.id==kind then def=v end end
-  local area=rec[kind]
+  -- Time of day (GFX > Day & night): a list of its own for morning, day or
+  -- night replaces the usual one then, like Crystal's grass.
+  local DN=require("Gen3DayNight")
+  top=List.modeChips(S,"g3EncounterTime",times,fx,top,s)
+  local period=S.g3EncounterTime or "all"
+  local function defaultArea()
+    local slots={};for i=1,def.count do slots[i]={species="PIDGEY",minLevel=2,maxLevel=5} end
+    return {rate=20,slots=slots}
+  end
+  local area,write
+  local timed=DN.hasTimeLists(S.project,id,kind)
+  local function hint(text,colour)
+    Kit.text("small",text,fx,top,colour or PAL.detail);top=top+24*s
+  end
+  if not DN.enabled(S.project) and (timed or period~="all") then
+    hint("Turn on day and night (GFX > Day & night) for morning / day / night lists to apply",PAL.yellow)
+  end
+  if period=="all" then
+    if timed then
+      -- Off while morning, day and night have lists of their own.
+      Kit.caption(fx,top,"All-day "..def.label.." list is off: morning, day and night have their own lists")
+      if Kit.button(fx,top+36*s,260*s,28*s,"Back to one all-day list",{kind="ghost",
+          tooltip="Removes the morning, day and night lists"}) then
+        DN.clearTimeLists(S.project,id,kind);App.markDirty()
+      end
+      return
+    end
+    area=rec[kind]
+    write=function(fn) rec=mutate();fn(rec[kind]) end
+  else
+    local cfg=DN.settings(S.project)
+    local after={morning="day",day="night",night="morning"}
+    hint(("%s %d:00 to %d:00"):format(period=="morning" and "Morning" or period=="day" and "Day" or "Night",
+      cfg[period],cfg[after[period]]))
+    area=DN.timeArea(S.project,id,period,kind)
+    write=function(fn) fn(DN.timeArea(S.project,id,period,kind)) end
+    if not area then
+      Kit.caption(fx,top,timed and ("No "..def.label.." list for this time yet")
+        or ("Uses the all-day "..def.label.." list"))
+      if Kit.button(fx,top+36*s,340*s,28*s,timed and "Give it its own list" or "Give morning, day and night their own lists",{kind="good",
+          tooltip="Each starts as a copy of the all-day list, which is then off"}) then
+        DN.startTimeLists(S.project,id,kind,rec[kind] or defaultArea());App.markDirty()
+      end
+      return
+    end
+  end
   if not area then
     Kit.caption(fx,top,"No "..def.label.." encounters on this map")
     if Kit.button(fx,top+36*s,210*s,28*s,"Add encounter table",{kind="good"}) then
-      rec=mutate();local slots={};for i=1,def.count do slots[i]={species="PIDGEY",minLevel=2,maxLevel=5} end
-      rec[kind]={rate=20,slots=slots};App.markDirty()
+      rec=mutate();rec[kind]=defaultArea();App.markDirty()
     end
     return
   end
+  local tag=period..kind
   Kit.caption(fx,top,"Encounter rate")
-  local rate=math.max(0,math.min(255,math.floor(List.num(App,"g3_enc_rate",fx+150*s,top,100*s,28*s,area.rate or 0))))
-  if rate~=area.rate then rec=mutate();rec[kind].rate=rate;App.markDirty() end
+  local rate=math.max(0,math.min(255,math.floor(List.num(App,"g3_enc_rate"..tag,fx+150*s,top,100*s,28*s,area.rate or 0))))
+  if rate~=area.rate then write(function(a) a.rate=rate end);App.markDirty() end
   if Kit.button(fx+270*s,top,150*s,28*s,"Disable table",{}) then
-    rec=mutate();rec[kind].rate=0;App.markDirty()
+    write(function(a) a.rate=0 end);App.markDirty()
+  end
+  if period~="all" and Kit.button(fx+426*s,top,220*s,28*s,"Back to one all-day list",{kind="ghost",
+      tooltip="Removes the morning, day and night lists; the all-day list is on again"}) then
+    DN.clearTimeLists(S.project,id,kind);App.markDirty();return
   end
   top=top+38*s
   Kit.caption(fx,top,kind=="fishing" and "Slots 1–2 Old Rod, 3–5 Good Rod, 6–10 Super Rod" or "Slot order preserves the game's encounter weights")
   top=top+28*s
-  Pane.track(S,"g3EncounterScroll",id..kind)
+  Pane.track(S,"g3EncounterScroll",id..tag)
   local first,view=Pane.begin(S,"g3EncounterScroll",fx,top,fw,h-(top-y)-42*s)
   local yy=first
   for i,slot in ipairs(area.slots or {}) do
     Kit.caption(fx,yy,"Slot "..i);yy=yy+22*s
     require("SpeciesPicker").field(S,{x=fx,y=yy,w=view.contentW*.6,h=28*s,current=slot.species,
-      onPick=function(species) rec=mutate();rec[kind].slots[i].species=species;App.markDirty() end})
+      onPick=function(species) write(function(a) a.slots[i].species=species end);App.markDirty() end})
     local nx=fx+view.contentW*.62;local nw=view.contentW*.17
-    local low=math.max(1,math.min(100,math.floor(List.num(App,"g3_enc_min_"..i,nx,yy,nw,28*s,slot.minLevel or 1))))
-    local high=math.max(low,math.min(100,math.floor(List.num(App,"g3_enc_max_"..i,nx+nw+4*s,yy,nw,28*s,slot.maxLevel or low))))
+    local low=math.max(1,math.min(100,math.floor(List.num(App,"g3_enc_min_"..tag..i,nx,yy,nw,28*s,slot.minLevel or 1))))
+    local high=math.max(low,math.min(100,math.floor(List.num(App,"g3_enc_max_"..tag..i,nx+nw+4*s,yy,nw,28*s,slot.maxLevel or low))))
     if low~=slot.minLevel or high~=slot.maxLevel then
-      rec=mutate();rec[kind].slots[i].minLevel=low;rec[kind].slots[i].maxLevel=high;App.markDirty()
+      write(function(a) a.slots[i].minLevel=low;a.slots[i].maxLevel=high end);App.markDirty()
     end
     yy=yy+40*s
     local forms=require("Gen3Forms")
@@ -78,12 +129,12 @@ function M.draw(S,x,y,w,h,App)
           local staged=setmetatable({project=require("src.mods.Merge").deepCopy(S.project)},{__index=S})
           local ok,species=pcall(forms.encounterSpecies,staged,parent,choice)
           if not ok then S.status=tostring(species);return end
-          S.project=staged.project;rec=mutate();rec[kind].slots[i].species=species;App.markDirty()
+          S.project=staged.project;write(function(a) a.slots[i].species=species end);App.markDirty()
         end});yy=yy+40*s
     end
   end
   Pane.finish(S,"g3EncounterScroll",first,yy,view)
-  if S.project.encounters[id] and Kit.button(fx,y+h-32*s,130*s,28*s,"Revert map",{}) then
+  if period=="all" and S.project.encounters[id] and Kit.button(fx,y+h-32*s,130*s,28*s,"Revert map",{}) then
     S.project.encounters[id]=nil;App.markDirty()
   end
 end
