@@ -35,6 +35,7 @@ function M.play(S,kind)
       assets.nidoranFront=assets.nidoranF;assets.pikachuBg=assets.pikachuIntroBg
       p.oak=require("src.ui.game3.new_game_scene").new(assets)
       require("Gen3OakRuntime").configure(p.oak,S.project.gen3OakScene or {},S.project.gen3Oak or {})
+      if require("Gen3Clean").enabled(S.project) then require("Gen3CleanIntro").configure(p.oak) end
     elseif kind=="title" then
       p.title={assets=assets,titleLogo=assets.titleLogo,titleMon=assets.boxArtMon,titleScreen=assets.titleScreen,
         copyrightLayer=assets.copyrightPressStart,pressStart=assets.pressStart,titleBorder=assets.titleBorderBg}

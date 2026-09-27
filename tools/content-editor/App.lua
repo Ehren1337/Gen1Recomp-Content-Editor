@@ -76,6 +76,8 @@ local TABS = {
     tip = "Custom cart: pin local or published mods, preview the cartridge, pack a .g1rcart.\nGitHub/GameBanana are only needed if you turn ONLINE on to check the index." },
   { id = "code",     label = "CODE",
     tip = "Browse and edit Lua files under mods/" },
+  { id = "patches",  label = "GAME PATCHES",
+    tip = "Switch features this mod adds to the game on or off (FireRed: real time clock)" },
   { id = "maps",     label = "MAPS",
     tip = "Unified 16x16 terrain, events, encounters, and map settings" },
   { id = "encounters", label = "ENCOUNTERS",
@@ -120,7 +122,7 @@ local TABS = {
 
 local function activeTabs()
   if not require("Generation").isGen3(S) then return TABS end
-  local extra={trades=true,effects=true,rules=true,ai=true,breeding=true,shops=true,types=true,project=true,manifest=true,cart=true,code=true,player=true,ui=true,anims=true,audio=true,gfx=true}
+  local extra={trades=true,effects=true,rules=true,ai=true,breeding=true,shops=true,types=true,project=true,manifest=true,cart=true,code=true,patches=true,player=true,ui=true,anims=true,audio=true,gfx=true}
   local result={}
   for _,tab in ipairs(TABS) do if extra[tab.id] or require("Gen3").tabs[tab.id] then result[#result+1]=tab end end
   return result
@@ -131,6 +133,7 @@ local PANELS = {
   manifest = Manifest,
   cart = Cart,
   code = Code,
+  patches = require("GamePatches"),
   pokemon = Pokemon,
   breeding = Breeding,
   items = Items,
@@ -1712,7 +1715,7 @@ function App.draw()
   RegList.clearNav(S)
   local panel = PANELS[S.tab]
   if require("Generation").isGen3(S) and S.tab ~= "project" and S.tab ~= "manifest"
-      and S.tab ~= "code" and S.tab ~= "cart" then
+      and S.tab ~= "code" and S.tab ~= "cart" and S.tab ~= "patches" then
     panel = (S.tab == "pokemon" or S.tab == "items" or S.tab == "moves" or S.tab == "trainers" or S.tab == "encounters" or S.tab == "dialog" or S.tab == "shops" or S.tab == "types" or S.tab == "breeding" or S.tab == "rules" or S.tab == "ai" or S.tab == "effects" or S.tab == "trades") and PANELS[S.tab]
       or S.tab == "events" and require("Gen3Events")
       or S.tab == "maps" and MapsWorkspace

@@ -49,14 +49,38 @@ function M.draw(S,x,y,w,h,App)
   end
   local area,write
   local timed=DN.hasTimeLists(S.project,id,kind)
+  -- GAME PATCHES > Encounter tables: Crystal's grass lists, where a table
+  -- has no morning / day / night lists of its own.
+  local crystalName,crystal
+  if kind=="land" and not timed then crystalName,crystal=DN.crystalFor(S,id) end
+  local clockOn=DN.enabled(S.project)
+  local timeOn=clockOn and DN.encountersEnabled(S.project)
+  local pinned=DN.isAllDay(S.project,id,kind)
+  local changes=timed or crystal~=nil -- does this table change with the time?
   local function hint(text,colour)
     Kit.text("small",text,fx,top,colour or PAL.detail);top=top+24*s
   end
-  if not DN.enabled(S.project) and (timed or period~="all") then
-    hint("Turn on day and night (GFX > Day & night) for morning / day / night lists to apply",PAL.yellow)
+  if period~="all" or changes then
+    if not clockOn then
+      hint("The real time clock is off (GAME PATCHES): every table uses its all-day list",PAL.yellow)
+    elseif not timeOn then
+      hint("Encounter tables are off (GAME PATCHES): every table uses its all-day list",PAL.yellow)
+    elseif pinned then
+      hint("This table keeps its all-day list at every time; the others still change with the time",PAL.yellow)
+    end
+  end
+  -- Keep this one table on its all-day list, whatever the time lists say.
+  local function keepAllDayChip()
+    if not changes then return end
+    local label="Keep the all-day list at every time"
+    if Kit.chip(fx,top,Kit.textWidth("micro",label)+24*s,26*s,label,pinned,PAL.yellow,nil,
+        "This table ignores morning / day / night lists (yours or Crystal's); other tables still change with the time")
+        then DN.setAllDay(S.project,id,kind,not pinned);pinned=not pinned;App.markDirty() end
+    top=top+32*s
   end
   if period=="all" then
-    if timed then
+    keepAllDayChip()
+    if timed and not pinned then
       -- Off while morning, day and night have lists of their own.
       Kit.caption(fx,top,"All-day "..def.label.." list is off: morning, day and night have their own lists")
       if Kit.button(fx,top+36*s,260*s,28*s,"Back to one all-day list",{kind="ghost",
@@ -64,6 +88,9 @@ function M.draw(S,x,y,w,h,App)
         DN.clearTimeLists(S.project,id,kind);App.markDirty()
       end
       return
+    end
+    if crystal and timeOn and not pinned then
+      hint("In game, Pokemon Crystal's morning / day / night lists ("..crystalName..") are used instead",PAL.yellow)
     end
     area=rec[kind]
     write=function(fn) rec=mutate();fn(rec[kind]) end
@@ -74,6 +101,23 @@ function M.draw(S,x,y,w,h,App)
       cfg[period],cfg[after[period]]))
     area=DN.timeArea(S.project,id,period,kind)
     write=function(fn) fn(DN.timeArea(S.project,id,period,kind)) end
+    if not area and crystal then
+      -- Crystal's list for this time, read-only; "Edit a copy" makes them yours.
+      Kit.caption(fx,top,("Pokemon Crystal's %s list (%s) -- GAME PATCHES > Encounter tables"):format(period,crystalName))
+      if Kit.button(fx,top+32*s,300*s,28*s,"Edit a copy of Crystal's lists",{kind="good",
+          tooltip="Morning, day and night get lists of their own, copied from Crystal's; you can change them"}) then
+        for _,p in ipairs({"morning","day","night"}) do DN.setTimeArea(S.project,id,p,kind,crystal[p]) end
+        App.markDirty();return
+      end
+      local yy=top+72*s
+      local weights={20,20,10,10,10,10,5,5,4,4,1,1}
+      for i,slot in ipairs(crystal[period].slots) do
+        Kit.text("small",("Slot %2d  %3d%%   %-12s  Lv %d"):format(i,weights[i],tostring(slot.species),slot.minLevel),
+          fx,yy,PAL.text)
+        yy=yy+22*s
+      end
+      return
+    end
     if not area then
       Kit.caption(fx,top,timed and ("No "..def.label.." list for this time yet")
         or ("Uses the all-day "..def.label.." list"))

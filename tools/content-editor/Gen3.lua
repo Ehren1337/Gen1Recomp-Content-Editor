@@ -224,6 +224,8 @@ function Gen3.emit(project, encode)
   if whirlpool then
     out[#out+1]=require("Gen3WhirlpoolRuntime")(whirlpool,encode)
   end
+  -- GAME PATCHES > Clean Project: no story on a new game, the short intro.
+  require("Gen3Clean").emit(project, encode, out)
   -- Day and night (GFX > Day & night): outdoor maps follow the device clock.
   local dayNight = require("Gen3DayNight")
   dayNight.validate(project)

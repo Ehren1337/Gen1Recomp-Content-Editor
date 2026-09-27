@@ -21,7 +21,11 @@
 -- list uses it at that time, on any map. Just before the game rolls (a step,
 -- Rock Smash, a rod), that table's lists are swapped for the current part of
 -- the day, and swapped back when the part has none of its own. The same
--- clock and test hour as the looks.
+-- clock and test hour as the looks. With GAME PATCHES > Encounter tables on,
+-- Pokemon Crystal's morning / day / night grass lists (`daynight.crystal`)
+-- are used on FireRed's own tables that have no lists of your own. Tables in
+-- `daynight.allDay` keep their all-day list; with Encounter tables off,
+-- nothing here is emitted and every table uses its all-day list.
 return function(data, encode)
   return "  local daynight=" .. encode(data) .. "\n"
     .. "  local dnCore=(function()\n"
@@ -175,10 +179,11 @@ return function(data, encode)
 
     -- Wild encounters by time of day.
     local okE,E=pcall(require,"src.core.game3.encounters")
-    if okE and type(E)=="table" and next(daynight.encounters or {}) then
+    if okE and type(E)=="table" and (next(daynight.encounters or {}) or next(daynight.crystal or {})) then
       local okP,Pokemon=pcall(require,"src.core.game3.pokemon")
       local originals=setmetatable({},{__mode="k"})
       local converted={}
+      local KINDS={"land","water","rocks","fishing"}
       -- Species ids to the game's species numbers (custom species too).
       local function speciesNum(id)
         if type(id)=="number" then return id end
@@ -187,11 +192,11 @@ return function(data, encode)
         local n=okP and Pokemon and Pokemon.speciesFromName and Pokemon.speciesFromName(id)
         return n or tonumber(id)
       end
-      local function areaFor(id,period,kind)
-        local key=id.."|"..period.."|"..kind
+      local function areaFor(set,tag,id,period,kind,fallbackRate)
+        local key=tag.."|"..id.."|"..period.."|"..kind
         if converted[key]==nil then
-          local src=daynight.encounters[id][period][kind]
-          local area={rate=src.rate,slots={}}
+          local src=set[id][period][kind]
+          local area={rate=src.rate or fallbackRate or 21,slots={}}
           for i,slot in ipairs(src.slots or {}) do
             area.slots[i]={species=speciesNum(slot.species) or 0,minLevel=slot.minLevel,maxLevel=slot.maxLevel}
           end
@@ -203,36 +208,61 @@ return function(data, encode)
         local h,m=clock()
         return dnCore.period(daynight,h,m)
       end
+      -- The game keeps a table per name (ROUTE_1, FR_ROUTE_1, "3:19", ...);
+      -- the one the editor named and the one the map rolls on are matched
+      -- by map group and number, the way the content registry matches them.
+      local function find(set,t,mapId)
+        if set[mapId] then return mapId,set[mapId] end
+        local g,n=t.mapGroup,t.mapNum
+        for id,periods in pairs(set) do
+          local ok2,other=pcall(E.tableFor,id)
+          if ok2 and type(other)=="table" and (other==t
+              or (g~=nil and n~=nil and other.mapGroup==g and other.mapNum==n)) then
+            return id,periods
+          end
+        end
+      end
+      local function hasKind(periods,kind)
+        for _,kinds in pairs(periods) do if kinds[kind] then return true end end
+        return false
+      end
+      -- Lists for the time of day: your own first; else Crystal's
+      -- (GAME PATCHES > Encounter tables); else the table's usual list.
       local function apply(mapId)
         if mapId==nil or not E.tableFor then return end
         local ok,t=pcall(E.tableFor,mapId)
         if not ok or type(t)~="table" then return end
+        local uid,user=find(daynight.encounters or {},t,mapId)
+        local cid,cry=find(daynight.crystal or {},t,mapId)
+        if not user and not cry then return end
+        -- kinds kept on their all-day list (Encounters > All day)
+        local _,pinned=find(daynight.allDay or {},t,mapId)
+        pinned=pinned or {}
+        local orig=originals[t]
+        if not orig then
+          orig={}
+          for kind in pairs({land=1,grass=1,water=1,rocks=1,fishing=1}) do orig[kind]=t[kind] or false end
+          originals[t]=orig
+        end
         local period=currentPeriod()
-        -- The game keeps a table per name (ROUTE_1, FR_ROUTE_1, "3:19", ...);
-        -- the one the editor named and the one the map rolls on are matched
-        -- by map group and number, the way the content registry matches them.
-        local g,n=t.mapGroup,t.mapNum
-        for id,periods in pairs(daynight.encounters) do
-          local ok2,other=pcall(E.tableFor,id)
-          if ok2 and type(other)=="table" and (other==t
-              or (g~=nil and n~=nil and other.mapGroup==g and other.mapNum==n)) then
-            local orig=originals[t]
-            if not orig then
-              orig={}
-              for kind in pairs({land=1,grass=1,water=1,rocks=1,fishing=1}) do orig[kind]=t[kind] or false end
-              originals[t]=orig
+        for _,kind in ipairs(KINDS) do
+          local area
+          if pinned[kind] then
+            area=nil
+          elseif user and hasKind(user,kind) then
+            if (user[period] or {})[kind] then area=areaFor(daynight.encounters,"u",uid,period,kind) end
+          elseif cry and hasKind(cry,kind) then
+            if (cry[period] or {})[kind] then
+              local base=orig[kind] or (kind=="land" and orig.grass) or nil
+              area=areaFor(daynight.crystal,"c",cid,period,kind,base and base.rate)
             end
-            local mine=periods[period] or {}
-            for _,kind in ipairs({"land","water","rocks","fishing"}) do
-              if mine[kind] then
-                t[kind]=areaFor(id,period,kind)
-                if kind=="land" then t.grass=nil end
-              else
-                t[kind]=orig[kind] or nil
-                if kind=="land" then t.grass=orig.grass or nil end
-              end
-            end
-            return
+          end
+          if area then
+            t[kind]=area
+            if kind=="land" then t.grass=nil end
+          else
+            t[kind]=orig[kind] or nil
+            if kind=="land" then t.grass=orig.grass or nil end
           end
         end
       end

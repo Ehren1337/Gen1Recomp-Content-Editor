@@ -223,11 +223,34 @@ Limits: tiles that no saved block uses aren't available; a behaviour change
 doesn't alter collision already baked into vanilla maps; palettes can't be
 edited yet. Tests: `tests/content-editor/run-block-checks.ps1 -Runtime <runtime>`.
 
+## GAME PATCHES (FireRed / LeafGreen)
+
+The **GAME PATCHES** tab (between CODE and MAPS) lists features a mod adds
+on top of the game; each patch has its own box, its sub settings share it
+with smaller switches, and **Description** explains it. Patches only change
+the base game; maps you add are set up with the editor's own tools.
+
+- **Clean Project** -- **Apply** (asks first, with a warning: only at the
+  start of a project; every change made so far is gone) wipes the open
+  project, saves it and reopens it with one blank starter map
+  (`FR_STARTER_MAP`, set as the start map in PLAYER). A new game starts
+  there with no story flags or variables; the intro only asks boy or girl
+  and the player's name (no professor, no rival -- `Gen3CleanIntro.lua`);
+  the title screen and menu are unchanged. FireRed's own maps and scripts
+  are hidden in the editor and can't be reached in game. **MAPS → Import
+  template map** copies a FireRed map's layout (tiles, collision, heights,
+  border) into a new map, never its events or story. Pokemon, moves, items,
+  types, tilesets, graphics and trainers stay.
+- **Real Time Clock** with **Encounter tables** -- see below.
+
 ## Gen 3 day and night (FireRed)
 
-**GFX → Day & night** turns on a Crystal-style clock: outdoor maps (map
-types Town, City, Route and Ocean route) follow the device's own time.
-Buildings, caves and battles look the same all day.
+The **GAME PATCHES** tab (between CODE and MAPS) switches the real time
+clock on or off; **GFX → Day & night** holds its settings. With it on, a
+Crystal-style clock runs: outdoor maps (map types Town, City, Route and
+Ocean route) follow the device's own time. Buildings, caves and battles
+look the same all day. Turning it off keeps every setting, night look and
+time-of-day encounter list for when it's turned on again.
 
 - **Parts of the day.** Morning, day and night start at the hours you set
   (Crystal's 4, 10 and 18 by default). A new part fades in over the fade
@@ -264,6 +287,18 @@ Buildings, caves and battles look the same all day.
   Crystal's grass). **Back to one all-day list** removes them. The Day &
   night tab lists them. They follow the same clock and test hour and only
   apply while day and night is on; with it off the all-day list is used.
+- **Encounter tables.** GAME PATCHES → Real time clock → **Encounter
+  tables** (its own On / Off; on unless turned off, so it comes on with the
+  clock). On: each table changes with the time of day -- your own
+  morning / day / night lists first, else Pokemon Crystal's lists
+  (`Gen3CrystalEncounters.lua`, Kanto, from pret/pokecrystal) as a placeholder mix.
+  Crystal's seven slots are spread over FireRed's twelve with the same
+  chances. Only FireRed's own tables are used: Kanto's routes and caves
+  (31 tables, keeping their encounter rate); maps added in a mod are never
+  touched. Off: every table uses its all-day list; your lists are
+  kept. In Encounters → All day, **Keep the all-day list at every time**
+  keeps one table on its all-day list while the rest still change; Morning
+  / Day / Night shows Crystal's list with **Edit a copy of Crystal's lists**.
 - **Default night looks.** The editor ships night looks for FireRed's own
   outdoor blocks (455 blocks: windows, lamps, signs), in
   `Gen3DayNightDefaults.lua`. Turning day and night on in a project with no

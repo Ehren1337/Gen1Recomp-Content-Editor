@@ -39,6 +39,10 @@ local function tidy(project)
     for pair, set in pairs(d.paint) do if not next(set) then d.paint[pair] = nil end end
     if not next(d.paint) then d.paint = nil end
   end
+  if d and d.allDay then
+    for id, kinds in pairs(d.allDay) do if not next(kinds) then d.allDay[id] = nil end end
+    if not next(d.allDay) then d.allDay = nil end
+  end
   if d and d.encounters then
     for id, periods in pairs(d.encounters) do
       for period, kinds in pairs(periods) do if not next(kinds) then periods[period] = nil end end
@@ -107,7 +111,8 @@ function M.settings(project)
   local out = {}
   for k, v in pairs(Core.DEFAULTS) do out[k] = v end
   for k, v in pairs((project or {}).gen3DayNight or {}) do
-    if k ~= "lit" and k ~= "enabled" and k ~= "paint" and k ~= "encounters" then out[k] = v end
+    if k ~= "lit" and k ~= "enabled" and k ~= "paint" and k ~= "encounters" and k ~= "crystal"
+        and k ~= "encountersOff" and k ~= "allDay" then out[k] = v end
   end
   return out
 end
@@ -685,6 +690,119 @@ function M.compileEncounters(project)
   return out
 end
 
+-- Pokemon Crystal's encounters (GAME PATCHES > Encounter tables) -----------------
+
+--- Crystal's seven grass slots (30, 30, 20, 10, 5, 4, 1 %) spread over
+-- FireRed's twelve (20, 20, 10, 10, 10, 10, 5, 5, 4, 4, 1, 1 %) with the
+-- same chances: FireRed slot i shows Crystal slot CRYSTAL_SLOTS[i].
+M.CRYSTAL_SLOTS = { 1, 2, 1, 2, 3, 3, 4, 4, 5, 6, 5, 7 }
+
+--- Encounter tables (GAME PATCHES > Real time clock): on unless turned off,
+-- so turning the clock on turns them on too. While on, tables change with
+-- the time of day -- your own morning / day / night lists, else Crystal's.
+-- Off, every table uses its all-day list (your lists are kept).
+function M.encountersEnabled(project)
+  return ((project or {}).gen3DayNight or {}).encountersOff ~= true
+end
+
+function M.setEncounters(project, on)
+  if M.encountersEnabled(project) == (on == true) then return false end
+  local d = own(project)
+  d.encountersOff = (not on) or nil
+  d.crystal = nil -- an earlier switch, folded into this one
+  tidy(project)
+  return true
+end
+
+--- A table that keeps its all-day list at every time, whatever the time
+-- lists (yours or Crystal's) say.
+function M.isAllDay(project, id, kind)
+  local t = ((((project or {}).gen3DayNight or {}).allDay) or {})[id]
+  return t ~= nil and t[kind] == true
+end
+
+function M.setAllDay(project, id, kind, on)
+  if M.isAllDay(project, id, kind) == (on == true) then return false end
+  local d = own(project)
+  d.allDay = d.allDay or {}
+  d.allDay[id] = d.allDay[id] or {}
+  d.allDay[id][kind] = on == true or nil
+  tidy(project)
+  return true
+end
+
+--- Tables kept on their all-day list: { {id=, kind=}, ... }, sorted.
+function M.allDayList(project)
+  local out = {}
+  for id, kinds in pairs((((project or {}).gen3DayNight or {}).allDay) or {}) do
+    for kind in pairs(kinds) do out[#out + 1] = { id = id, kind = kind } end
+  end
+  table.sort(out, function(a, b) return a.id == b.id and a.kind < b.kind or a.id < b.id end)
+  return out
+end
+
+-- kept for older callers
+M.crystalEnabled = M.encountersEnabled
+M.setCrystal = M.setEncounters
+
+--- A FireRed land list from Crystal's seven { level, species } slots.
+function M.crystalArea(slots, rate)
+  local area = { rate = rate, slots = {} }
+  for i, k in ipairs(M.CRYSTAL_SLOTS) do
+    local c = slots[k]
+    area.slots[i] = { species = c[2], minLevel = c[1], maxLevel = c[1] }
+  end
+  return area
+end
+
+--- Where Crystal's lists go: FireRed's own tables, { {crystal=, id=}, ... },
+-- sorted. Maps added in a mod are never touched.
+function M.crystalTargets(project)
+  local C = require("Gen3CrystalEncounters")
+  local out = {}
+  for name, ids in pairs(C.kanto) do
+    for _, id in ipairs(ids) do out[#out + 1] = { crystal = name, id = id } end
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
+
+--- For the game: { [table id] = { [period] = { land = { slots } } } }. The
+-- tables keep their own encounter rate.
+function M.compileCrystal(project)
+  local C = require("Gen3CrystalEncounters")
+  local out = {}
+  for _, e in ipairs(M.crystalTargets(project)) do
+    local m = C.maps[e.crystal]
+    out[e.id] = {}
+    for _, period in ipairs(Core.PERIODS) do
+      out[e.id][period] = { land = M.crystalArea(m[period], nil) }
+    end
+  end
+  return out
+end
+
+--- Crystal's lists for an encounter table the editor shows (matched by map
+-- group and number, like the game does), or nil: name, { [period] = area }.
+function M.crystalFor(S, id)
+  local C = require("Gen3CrystalEncounters")
+  local catalog = (S.data or {}).encounters or {}
+  local rec = catalog[id] or ((S.project or {}).encounters or {})[id]
+  for _, e in ipairs(M.crystalTargets(S.project)) do
+    local other = catalog[e.id]
+    if e.id == id or (rec and other and rec.mapGroup ~= nil and other.mapGroup == rec.mapGroup
+        and other.mapNum == rec.mapNum) then
+      local m = C.maps[e.crystal]
+      local lists = {}
+      for i, period in ipairs(Core.PERIODS) do
+        local base = rec and (rec.land or rec.grass)
+        lists[period] = M.crystalArea(m[period], (base and base.rate) or 21)
+      end
+      return e.crystal, lists
+    end
+  end
+end
+
 -- In the game ------------------------------------------------------------------
 
 --- What the game needs, or nil when day and night is off.
@@ -697,7 +815,9 @@ function M.compile(project)
     morning = tonumber(s.morning), day = tonumber(s.day), night = tonumber(s.night),
     blend = tonumber(s.blend), morningTint = tostring(s.morningTint), nightTint = tostring(s.nightTint),
     testHour = tonumber(s.testHour), lit = lit, paint = M.compilePaint(project),
-    encounters = M.compileEncounters(project),
+    encounters = M.encountersEnabled(project) and M.compileEncounters(project) or {},
+    crystal = M.encountersEnabled(project) and M.compileCrystal(project) or nil,
+    allDay = M.encountersEnabled(project) and (((project.gen3DayNight or {}).allDay)) or nil,
   }
 end
 

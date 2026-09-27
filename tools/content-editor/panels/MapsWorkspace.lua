@@ -221,6 +221,26 @@ function MapsWorkspace.draw(S, x, y, w, h, App)
       S.mapBorderEditor and "Back to map" or "Border",{kind="ghost",enabled=S.project~=nil}) then
     S.mapBorderEditor=not S.mapBorderEditor;S.g3MapId=selected;S.g3MapMode="border";S.g3Tool="Paint"
   end
+  -- A FireRed map's layout under a new name, without its events or story
+  -- (used by GAME PATCHES > Clean Project, handy in any Gen 3 mod).
+  if Generation.isGen3(S) and Kit.button(x+614*s,actionY,150*s,28*s,"Import template map",{kind="ghost",
+      enabled=S.project~=nil,tooltip="Copy a FireRed map's layout into a new map: tiles, collision, heights and border -- no events, scripts or warps"}) then
+    local Clean=require("Gen3Clean")
+    local ids,labels=Clean.templateMaps(S)
+    require("ChoicePicker").open(S,{ids=ids,labels=labels,title="IMPORT TEMPLATE MAP",onPick=function(id)
+      local newId,err=Clean.importTemplate(S,id)
+      if newId then
+        S.mapId,S.builderMapId=newId,newId
+        S.builderLayer=1
+        S.builderSourceId=LayeredMap.runtimeSourceId(S.project.layeredMaps[newId].baseTileset)
+        S.builderSelections={};S._builderDoFit=true;S.builderPane="layers"
+        App.markDirty()
+        S.status="Imported "..id.." as "..newId.." (layout only -- no events, scripts or warps)"
+      else
+        S.status="Import failed: "..tostring(err)
+      end
+    end})
+  end
   local actionRight = x + w - 12 * s
   if Kit.button(actionRight - 104 * s, actionY, 104 * s, 28 * s,
       S.dirty and "Save changes" or "Saved", {
