@@ -46,6 +46,18 @@ function M.draw(S,ev,kind,indexKey,x,y,w,App,context)
     pick("movementType","Movement",{[0]="Stay in place",[1]="Look around",[2]="Walk around",[7]="Face up",[8]="Face down",[9]="Face left",[10]="Face right"})
   end
   if kind~="warps" then
+    local scripts=require("RegList").mergeIds((S.project.gen3 or {}).map_scripts or {},require("Gen3").catalog(S.data,"map_scripts"))
+    K.caption(x,y,"Event / cutscene script");y=y+22*s
+    P.field(S,{x=x,y=y,w=w,h=28*s,ids=scripts,current=ev.touchScriptKey or ev.scriptKey,title="EVENT / CUTSCENE SCRIPT",
+      onPick=function(id)
+        if ev.touchScriptKey then
+          set("touchScriptKey",id)
+          local owner=kind.."/"..tostring(ev.localId or index)
+          for _,row in ipairs(S.project.maps[mapId].coordEvents or {}) do
+            if row._editorTriggerOwner==owner then row.scriptKey=id end
+          end
+        else set("scriptKey",id) end
+      end});y=y+37*s
     local levels={[0]="Any height"};for i=1,15 do levels[i]="Height "..i end
     pick("elevation","Walking height",levels)
   else

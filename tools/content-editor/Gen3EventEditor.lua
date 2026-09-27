@@ -112,6 +112,12 @@ function M.draw(S,x,y,w,h,App)
       if id then S.gen3Id=id;App.markDirty();S.status="Separate command list attached to this event." else S.status=err end
     end
     yy=yy+38*s
+    local cutsceneScript=ev.scriptKey or ev.touchScriptKey
+    if cutsceneScript and K.button(x,yy,width,29*s,"Cutscene maker / viewer",{}) then
+      S.g3CutsceneId=cutsceneScript;S.g3EventMode="cutscenes";S._cutscenePlayer=nil
+      S._cutsceneTarget={script=cutsceneScript,map=S.g3EventMap,actor=selected.kind=="objects" and (ev.localId or selected.index) or nil}
+    end
+    if cutsceneScript then yy=yy+38*s end
     caption("Other events may share this script.")
     caption("A unique copy gets its own actions.")
   else
