@@ -58,8 +58,15 @@ local function drawBlock(S, pair, mid, def, x, y, size)
   local under, over = Blocks.blockImages(S, pair, mid, def)
   if not under then return end
   love.graphics.setColor(1, 1, 1, 1)
+  -- GFX > Day & night preview: as the block looks at that time outdoors.
+  local DayNight = require("Gen3DayNight")
+  local night = DayNight.beginPreview(S)
   love.graphics.draw(under, x, y, 0, size / 16, size / 16)
   love.graphics.draw(over, x, y, 0, size / 16, size / 16)
+  if night then DayNight.endPreview() end
+  -- pixels with their own night colour (Night look)
+  local lit = DayNight.previewIsNight(S) and DayNight.nightOverlay(S, pair, mid)
+  if lit then love.graphics.draw(lit, x, y, 0, size / 16, size / 16) end
 end
 
 local function save(S, App, pair, mid, def, message)
@@ -409,6 +416,8 @@ local function drawBlockEditor(S, App, pair, mid, x, y, w)
   end
   y = y + 26 * s
   local colours = Blocks.paletteColours(S, pair, current)
+  local DayNight = require("Gen3DayNight")
+  local lights = S.g3PickLights == true
   local sw = 14 * s
   for i = 0, 15 do
     local sx = x + i * (sw + 2 * s)
@@ -422,12 +431,29 @@ local function drawBlockEditor(S, App, pair, mid, x, y, w)
       if mine and mine[tostring(current)] and mine[tostring(current)][tostring(i)] then
         Theme.col(PAL.heading, 1)
         love.graphics.circle("fill", sx + sw / 2, y + sw + 3 * s, 2 * s)
-        Kit.offerTooltip(sx, y, sw, sw, ("Colour %d: added by a merge"):format(i))
+        Kit.offerTooltip(sx, y, sw, sw, ("Colour %d: added to this palette"):format(i))
+      end
+      -- Day and night: colours that stay lit (GFX > Day & night).
+      local lit = DayNight.isLit(S.project, pair, current, i)
+      if lit then
+        Theme.col(PAL.yellow, 1)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", sx - 1, y - 1, sw + 2, sw + 2)
+        love.graphics.setLineWidth(1)
+        Kit.offerTooltip(sx, y, sw, sw, ("Colour %d: stays lit at night"):format(i))
       end
     end
   end
   love.graphics.setColor(1, 1, 1, 1)
+  local lx = x + 16 * (sw + 2 * s) + 10 * s
+  if Kit.chip(lx, y - 4 * s, 96 * s, 22 * s, "Night look", lights, PAL.yellow, nil,
+      "Choose what this block's pixels look like at night (windows, lamps). See GFX > Day & night.") then
+    S.g3PickLights = not lights
+  end
   y = y + sw + 14 * s
+  if lights then
+    y = require("Gen3DayNightPanel").nightPainter(S, App, pair, mid, x, y, w) + 4 * s
+  end
 
   -- Block-wide settings.
   Kit.text("micro", "LAYER TYPE", x, y, PAL.caption)

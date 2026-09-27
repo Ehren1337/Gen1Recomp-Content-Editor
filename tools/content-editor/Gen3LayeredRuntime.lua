@@ -104,7 +104,12 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       elseif not over or ref.bridge then
         local source=assert(layered.sources[ref.source],"Missing tile source "..ref.source)
         local image=images[ref.source]
-        if not image then image=mod.assets:image(source.image);image:setFilter("nearest","nearest");images[ref.source]=image end
+        if not image then
+          -- Baked sheets (TilePixels) carry their pixels; older ones load the PNG.
+          if source.pixels then image=love.graphics.newImage(tilePixels.imageData(source.pixels))
+          else image=mod.assets:image(source.image) end
+          image:setFilter("nearest","nearest");images[ref.source]=image
+        end
         local columns=source.columns or math.floor(image:getWidth()/16)
         local quads=sourceQuads[ref.source]
         if not quads then quads={};sourceQuads[ref.source]=quads end

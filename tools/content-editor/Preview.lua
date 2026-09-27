@@ -196,6 +196,8 @@ function Preview.installAssetCacheFallback()
   end
 end
 
+local pixelImages = setmetatable({}, { __mode = "k" })
+
 function Preview.image(S, path)
   if type(path)=="string" and path:match("^mod%-pokemon%-art/") then
     return require("ModPokemonArt").image(S,path)
@@ -213,6 +215,22 @@ function Preview.image(S, path)
     return S.data._g3ShinyImages[path]
   end
   if type(path) ~= "string" or path == "" then return nil end
+  -- Tile sheets baked into the project (TilePixels): no file on disk.
+  local pixelId = path:match("^@pixels/(.+)$")
+  if pixelId then
+    local source = S and S.project and S.project.mapTileSources
+      and S.project.mapTileSources[pixelId]
+    local pixels = source and source.pixels
+    if type(pixels) ~= "table" then return nil end
+    local img = pixelImages[pixels]
+    if img == nil then
+      local ok, data = pcall(require("TilePixels").imageData, pixels)
+      img = ok and love.graphics.newImage(data) or false
+      if img then img:setFilter("nearest", "nearest") end
+      pixelImages[pixels] = img
+    end
+    return img or nil
+  end
   if S and S.data and S.data._gen3Read and (path:match("/pokemon/[^/]+/%d+%.rgba$") or path:match("/trainers/front/%d+%.rgba$")) then
     local override=S.project and (S.project.gen3Assets or {})[path]
     local key=cacheKey(S,path)..tostring(override or "")

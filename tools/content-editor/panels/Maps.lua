@@ -2423,6 +2423,7 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
   local viewW = canvasW - 2 * pad
   local viewH = canvasH - 2 * pad
   S._worldViewHit = Kit.hit(viewX, viewY, viewW, viewH)
+    and not (Generation.isGen3(S) and require("Gen3DayNightPanel").mapBarHit(S))
   S._worldViewW, S._worldViewH = viewW, viewH
 
   local fitKey = worldFitKey(S, layout)
@@ -2522,7 +2523,13 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
     if visible(p) then
       if preview then
         love.graphics.setColor(1,1,1,sel and 1 or 0.92)
+        -- GFX > Day & night preview time (outdoor map types)
+        local dayNight = Generation.isGen3(S) and require("Gen3DayNight").beginMapPreview(S, id)
         love.graphics.draw(preview.image,p.x,p.y,0,1/preview.scale,1/preview.scale)
+        if dayNight then
+          require("Gen3DayNight").endPreview()
+          require("Gen3DayNight").drawWorldNight(S, id, p.x, p.y, p.w)
+        end
       else
         Theme.col(PAL.rowBg,0.9)
         love.graphics.rectangle("fill",p.x,p.y,p.w,p.h)
@@ -2590,6 +2597,10 @@ local function drawWorldView(S, App, vx, vy, vw, vh, propW)
 
   Kit.text("micro", "drag empty / MMB / hold WASD to pan · click map · wheel zoom",
     viewX + 6 * s, viewY + viewH - 16 * s, PAL.faint)
+  -- GFX > Day & night: preview the world at any time of day.
+  if Generation.isGen3(S) then
+    require("Gen3DayNightPanel").mapTimeBar(S, App, viewX, viewY, viewW, viewH - 18 * s, S.mapId)
+  end
 
   -- Side panel: connections for the selected map
   local px = vx + canvasW + 12 * s

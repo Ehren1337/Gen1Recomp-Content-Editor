@@ -36,6 +36,14 @@ local function sourceBytes(S, source)
   if not (source and source.image) then
     return nil, "tileset source has no image"
   end
+  -- Baked into the project (TilePixels): write the pixels out as a PNG.
+  if source.pixels and require("TilePixels").idFor(source.image) then
+    local ok, bytes = pcall(function()
+      return require("TilePixels").imageData(source.pixels):encode("png"):getString()
+    end)
+    if ok then return bytes end
+    return nil, "could not encode " .. tostring(source.id) .. ": " .. tostring(bytes)
+  end
 
   local resolved, kind = Preview.resolve(S, source.image)
   if not resolved then

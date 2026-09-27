@@ -380,8 +380,18 @@ local function imports(project, pair, create)
 end
 
 --- The imports made on a tileset: { {name, base, count, w, h, frames}, ... }.
+-- A whole map made into blocks (Gen3MapBlocks) may also list `mids` when
+-- its blocks aren't one run of ids.
 function M.list(project, pair)
   return imports(project, pair) or {}
+end
+
+--- The block ids an import made.
+function M.mids(rec)
+  if rec.mids then return rec.mids end
+  local out = {}
+  for mid = rec.base, rec.base + rec.count - 1 do out[#out + 1] = mid end
+  return out
 end
 
 --- Remove an import: its blocks, its tiles and its animations.
@@ -390,7 +400,7 @@ function M.remove(S, pair, index)
   local rec = list and list[index]
   if not rec then return false end
   local rows = S.project.gen3Blocks and S.project.gen3Blocks[pair]
-  for mid = rec.base, rec.base + rec.count - 1 do
+  for _, mid in ipairs(M.mids(rec)) do
     local def = rows and rows[tostring(mid)]
     if def then
       for _, slot in ipairs(def.slots or {}) do

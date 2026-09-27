@@ -2,12 +2,15 @@ local M={}
 function M.draw(S,x,y,w,h,App)
   local top=require("RegList").modeChips(S,"g3GfxMode",{{id="pokemon",label="Pokemon"},
     {id="ow",label="Overworld"},{id="trainers",label="Trainers"},{id="native",label="Tilesets"},{id="blocks",label="Blocks"},
-    {id="field_effects",label="Field effects"}},x,y,require("Kit").scale)
+    {id="field_effects",label="Field effects"},{id="daynight",label="Day & night"}},x,y,require("Kit").scale)
   if S.g3GfxMode=="pokemon" then
     return require("Gen3Sprites").draw(S,x,top,w,h-(top-y),App)
   end
   if S.g3GfxMode=="blocks" then
     return require("Gen3BlockEditor").draw(S,x,top,w,h-(top-y),App)
+  end
+  if S.g3GfxMode=="daynight" then
+    return require("Gen3DayNightPanel").draw(S,x,top,w,h-(top-y),App)
   end
   require("Gen3Assets").draw(S,x,top,w,h-(top-y),App,function(path)
     return path:find("/"..S.g3GfxMode.."/",1,true)

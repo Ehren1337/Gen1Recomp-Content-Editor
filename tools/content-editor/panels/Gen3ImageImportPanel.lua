@@ -108,7 +108,9 @@ local function drawImported(S, App, st, pair, x, y, w, s, drawBlock, checker)
     Kit.text("micro", "IMPORTED HERE", x, y, PAL.caption)
     y = y + 16 * s
     for i, rec in ipairs(list) do
-      Kit.text("small", ("%s  -  blocks %d-%d, %d x %d, %d frame%s"):format(rec.name, rec.base,
+      Kit.text("small", rec.map and ("%s  -  %d blocks, map %s (%d x %d)"):format(rec.name, rec.count,
+          rec.map, rec.w, rec.h)
+        or ("%s  -  blocks %d-%d, %d x %d, %d frame%s"):format(rec.name, rec.base,
         rec.base + rec.count - 1, rec.w, rec.h, rec.frames, rec.frames == 1 and "" or "s"),
         x, y + 5 * s, PAL.text)
       if Kit.button(x + w - 200 * s, y, 96 * s, 24 * s, "Show", { kind = "ghost", font = "small",

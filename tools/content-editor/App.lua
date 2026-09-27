@@ -751,6 +751,14 @@ function App.save()
   ModIO._emitBaseData = nil
   if ok then
     S.dirty = false
+    -- Gen 3: PNGs baked into the project are no longer needed; the saved mod
+    -- is scripts only. Only after a good save, so nothing is lost on failure.
+    local cleanup = LayeredMap.describeImageCleanup(
+      pcall(LayeredMap.removeUnusedMapImages, S))
+    if cleanup then
+      say("Saved " .. S.path .. " — " .. cleanup)
+      return true
+    end
     if err == "kept-main" then
       say("Saved " .. S.path
         .. " (editor_project.lua + editor_apply.lua; left hand-written main.lua)")

@@ -15,7 +15,8 @@ return function(data, encode)
   local out = {}
   -- One constructor per bag / per tileset, so no single function grows past
   -- LuaJIT's constant limits on big projects.
-  out[#out + 1] = "  local g3blocks=(function() local d={pairs={},tiles={},palettes=" .. encode(data.palettes or {}) .. "}"
+  out[#out + 1] = "  local g3blocks=(function() local d={pairs={},tiles={},palettes=" .. encode(data.palettes or {})
+    .. ",copies=" .. encode(data.copies or {}) .. "}"
   local function sortedKeys(t)
     local keys = {}
     for k in pairs(t or {}) do keys[#keys + 1] = k end
@@ -48,6 +49,54 @@ return function(data, encode)
     local NATIVE=(okE and Extract and (Extract.NATIVE_ROOT
       or (Extract.CACHE_ROOT and Extract.CACHE_ROOT.."/native"))) or "data/generated/gba/native"
     local TS=g3tileSource
+
+    -- Tileset copies: the mod's own tilesets, read from the game tileset
+    -- they copy. Cache paths under native/<copy>/ go to native/<base>/, and
+    -- the copy's behaviours fall back to the base's. The originals and the
+    -- ROM maps using them are left exactly as they are.
+    local copies=g3blocks.copies
+    if next(copies) then
+      local function alias(path)
+        if type(path)~="string" then return path end
+        return (path:gsub("/native/([^/]+)/",function(p) return "/native/"..(copies[p] or p).."/" end,1))
+      end
+      local function proxy(cache)
+        if type(cache)~="table" or rawget(cache,"_editorCopies") then return cache end
+        return setmetatable({_editorCopies=true},{__index=function(self,k)
+          local v=cache[k]
+          if type(v)~="function" then return v end
+          return function(me,p,...) if me==self then me=cache end return v(me,alias(p),...) end
+        end})
+      end
+      T._cache=proxy(T._cache)
+      local okA,Anim=pcall(require,"src.core.game3.tileset_anim")
+      if okA and Anim then Anim._cache=proxy(Anim._cache) end
+      if not T._editorCopiesDispatch then
+        T._editorCopiesDispatch=true
+        local install=T.install
+        T.install=function(...) return Runtime.call("editor.gen3.copies.install",install,...) end
+      end
+      mod.hooks:wrap("editor.gen3.copies.install",function(proceed,cache,...)
+        return proceed(proxy(cache),...)
+      end)
+      local function copyBehaviors()
+        local all=Interactions.behaviors
+        if type(all)~="table" then return end
+        for copy,base in pairs(copies) do
+          local row=all[copy] or {}
+          all[copy]=setmetatable(row,{__index=function(_,mid) local b=all[base] return b and b[mid] end})
+        end
+      end
+      if not Interactions._editorCopiesDispatch then
+        Interactions._editorCopiesDispatch=true
+        local install=Interactions.install
+        Interactions.install=function(...) return Runtime.call("editor.gen3.copies.behaviors",install,...) end
+      end
+      mod.hooks:wrap("editor.gen3.copies.behaviors",function(proceed,...)
+        local a,b=proceed(...);copyBehaviors();return a,b
+      end)
+      copyBehaviors()
+    end
 
     -- Behaviours. The engine may install its behaviour table after this
     -- runs (or again later), so reapply whenever it does.

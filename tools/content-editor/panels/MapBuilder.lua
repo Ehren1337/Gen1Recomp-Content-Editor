@@ -190,6 +190,69 @@ local function ownSelectedTalk(S, App)
   return steps, scriptId, target.mapId
 end
 
+-- A map nobody has painted yet: one tile everywhere, upper layers empty.
+local function mapIsBlank(source)
+  local first
+  for index, layer in ipairs(source.layers or {}) do
+    for _, ref in pairs(layer.cells or {}) do
+      if index > 1 then return false end
+      if type(ref) == "table" then
+        first = first or ref
+        if ref.source ~= first.source or ref.tile ~= first.tile then return false end
+      end
+    end
+  end
+  return true
+end
+
+-- Stencil size as a map (pixel scale found in the image). Cached per path.
+local function stencilMeasure(S, source)
+  local path = source and source.stencilImage
+  if type(path) ~= "string" or path == "" then return nil end
+  S._stencilMeasure = S._stencilMeasure or {}
+  local key = tostring(source.id) .. "|" .. path
+  if S._stencilMeasure[key] == nil then
+    S._stencilMeasure[key] = LayeredMap.measurePng(S, path, source.id) or false
+  end
+  return S._stencilMeasure[key] or nil
+end
+
+-- Resize the map to the stencil and lay the stencil 1:1 over the cells.
+local function sizeMapToStencil(S, source, App, m)
+  App.beginEditBatch()
+  local ok, err = LayeredMap.resizeMap(S.project, source.id or S.builderMapId,
+    m.cellWidth, m.cellHeight)
+  App.endEditBatch()
+  if not ok then
+    S.status = "Could not resize the map: " .. tostring(err)
+    return false
+  end
+  S._builderDoFit = true
+  App.markDirty()
+  return true
+end
+
+local function placeStencil(S, source, App, fitOld)
+  local m = stencilMeasure(S, source)
+  if not m then return fitOld() end
+  source.stencilScale = 1 / m.scale
+  source.stencilX = -m.phaseX / m.scale
+  source.stencilY = -m.phaseY / m.scale
+  local label = string.format("%dx%d cells", m.cellWidth, m.cellHeight)
+    .. (m.scale > 1 and string.format(" (image is %dx size)", m.scale) or "")
+  local w, h = source.cellWidth or 0, source.cellHeight or 0
+  if m.cellWidth == w and m.cellHeight == h then
+    S.status = "Stencil fits the map: " .. label
+  elseif mapIsBlank(source) or (m.cellWidth >= w and m.cellHeight >= h) then
+    if sizeMapToStencil(S, source, App, m) then
+      S.status = "Map sized to the stencil: " .. label
+    end
+  else
+    S.status = "Stencil is " .. label
+      .. " — press Size to crop the map to it (painted cells outside are lost)"
+  end
+end
+
 local function importStencil(S, source, App)
   if not (S.project and S.path and source and App and App.pickFile) then return end
   App.pickFile("Map stencil PNG", "PNG (*.png)|*.png|All files (*.*)|*.*",
@@ -207,8 +270,13 @@ local function importStencil(S, source, App)
         local image = Preview.image(S, imported)
         if image then
           local iw, ih = image:getDimensions()
-          source.stencilScale = stencilFitScale(source, iw, ih)
-          S.status = "Stencil over the map — Scale it, or Fit to the map"
+          if S._stencilMeasure then
+            S._stencilMeasure[tostring(source.id) .. "|" .. imported] = nil
+          end
+          placeStencil(S, source, App, function()
+            source.stencilScale = stencilFitScale(source, iw, ih)
+            S.status = "Stencil over the map — Scale it, or Fit to the map"
+          end)
         else
           local err = Preview.lastError and Preview.lastError() or "unknown error"
           S.status = "Stencil copied but did not load: " .. tostring(err)
@@ -219,7 +287,7 @@ end
 
 local function applyImagePathAsMap(S, source, App, path, iw, ih)
   App.beginEditBatch()
-  local tileSource, widthOrErr, height = LayeredMap.applyPngAsMap(
+  local tileSource, widthOrErr, height, scale, blockErr = LayeredMap.applyPngAsMap(
     S, source.id or S.builderMapId, path, iw, ih)
   if not tileSource then
     App.endEditBatch()
@@ -228,15 +296,51 @@ local function applyImagePathAsMap(S, source, App, path, iw, ih)
   end
   source.stencilVisible = false
   S.builderSourceId = tileSource.id
-  S.builderTile = 0
+  S.builderTile = tileSource.blocks and tileSource.blocks.base or 0
   S.builderLayer = 1
   S.builderSelections = {}
   S._builderDoFit = true
   App.markDirty()
   App.endEditBatch()
-  S.status = string.format(
-    "Map is the PNG — %dx%d cells. Paint collision as needed.",
-    widthOrErr, height)
+  local shrunk = (scale or 1) > 1
+    and string.format(" (image was %dx size, shrunk)", scale) or ""
+  if tileSource.blocks then
+    S.status = require("Gen3MapBlocks").describe(tileSource.plan, widthOrErr, height) .. shrunk
+      .. ". Paint collision as needed."
+  else
+    S.status = string.format(
+      "Map is the PNG — %dx%d cells%s, kept as a picture (%s). Paint collision as needed.",
+      widthOrErr, height, shrunk, tostring(blockErr or "not FireRed"))
+  end
+  -- Gen 3 keeps the pixels in the project: the PNG copy in the mod goes now.
+  -- (The picked original elsewhere on disk is never touched.)
+  if Generation.isGen3(S) then
+    local cleanup = LayeredMap.describeImageCleanup(
+      pcall(LayeredMap.removeUnusedMapImages, S))
+    if cleanup then S.status = S.status .. " " .. cleanup:gsub("^%l", string.upper) .. "." end
+  end
+end
+
+-- A map made from a PNG before maps became blocks: turn its picture cells
+-- into FireRed blocks in place (other cells and layers stay).
+local function sheetToBlocks(S, source, App)
+  local MapBlocks = require("Gen3MapBlocks")
+  local mapId = source.id or S.builderMapId
+  local img, cols, rows, sheetId, mask = MapBlocks.pictureOf(S, mapId)
+  if not img then S.status = tostring(cols) return end
+  App.beginEditBatch()
+  local rec, plan = MapBlocks.convert(S, mapId, img, cols, rows, sheetId, mask)
+  if not rec then
+    App.endEditBatch()
+    S.status = "Could not make blocks: " .. tostring(plan)
+    return
+  end
+  LayeredMap.dropUnusedSource(S, sheetId)
+  S.builderSourceId = LayeredMap.runtimeSourceId(plan.pair)
+  S.builderTile = rec.base
+  App.markDirty()
+  App.endEditBatch()
+  S.status = MapBlocks.describe(plan, cols, rows)
 end
 
 local function usePngAsMap(S, source, App)
@@ -1071,6 +1175,13 @@ local function drawCanvas(S, source, x, y, w, h, App)
     math.max(0, viewX1 - viewX0 + 1) * CELL,
     math.max(0, viewY1 - viewY0 + 1) * CELL)
 
+  -- GFX > Day & night preview: tiles as they look at that time (outdoor
+  -- map types only; not while passage colours are shown).
+  local dayNightPreview = Generation.isGen3(S)
+    and (S.builderTool or "pencil") ~= "collision" and (S.builderTool or "") ~= "exits"
+    and not S.mapShowCollision
+    and require("Gen3DayNight").beginMapPreview(S, source.id)
+
   -- One 32x32 block of Gen 2 border around this map — not the whole camera.
   local BORDER = 2
   local mapRec = S.project.maps and S.project.maps[source.id]
@@ -1150,6 +1261,10 @@ local function drawCanvas(S, source, x, y, w, h, App)
       end
     end
   end
+  if dayNightPreview then
+    require("Gen3DayNight").endPreview()
+    require("Gen3DayNight").drawMapNight(S, source, x0, y0, x1, y1, CELL)
+  end
   drawMapStencil(S, source)
   require("MapElevations").draw(S, source.id, camX, camY, viewW, viewH)
   if S.mapShowGrid ~= false then
@@ -1220,8 +1335,13 @@ local function drawCanvas(S, source, x, y, w, h, App)
   end
   love.graphics.pop()
   love.graphics.setScissor()
+  -- GFX > Day & night: preview the map at any time of day.
+  S._g3DayNightBarRect = nil
+  if Generation.isGen3(S) then
+    require("Gen3DayNightPanel").mapTimeBar(S, App, vx, vy, vw, vh, source.id)
+  end
 
-  local over = Kit.hit(vx, vy, vw, vh)
+  local over = Kit.hit(vx, vy, vw, vh) and not require("Gen3DayNightPanel").mapBarHit(S)
   S._builderViewHit = over
   local function mouseCell()
     local worldX = (Kit.mouseX - vx) / zoom + (S.builderCamX or 0)
@@ -1741,6 +1861,7 @@ local function replaceTileSource(S, App, source)
           return
         end
         source.image = imported
+        source.pixels, source.imageFile = nil, nil
         source.columns = width / 16
         source.count = (width / 16) * (height / 16)
         for tile in pairs(source.animations or {}) do
@@ -2647,11 +2768,39 @@ local function drawStencilSection(S, source, x, y, w, App)
     usePngAsMap(S, source, App)
   end
   y = y + 30 * Kit.scale
+  if Generation.isGen3(S) and require("Gen3MapBlocks").hasSheet(S, source) then
+    if Kit.button(x, y, w, 25 * Kit.scale, "Make FireRed blocks", {
+        kind = "accent",
+        tooltip = "Turn this map's PNG picture into blocks you can edit in GFX > Blocks" }) then
+      sheetToBlocks(S, source, App)
+    end
+    y = y + 30 * Kit.scale
+  end
   local stencilName = source.stencilImage
   if type(stencilName) == "string" and stencilName ~= "" then
     stencilName = stencilName:match("[^/\\]+$") or stencilName
     Kit.text("micro", Kit.ellipsize("micro", stencilName, w), x, y, PAL.faint)
     y = y + 16 * Kit.scale
+    local m = stencilMeasure(S, source)
+    if m then
+      local fits = m.cellWidth == source.cellWidth and m.cellHeight == source.cellHeight
+      Kit.text("micro", string.format("%dx%d cells%s", m.cellWidth, m.cellHeight,
+          m.scale > 1 and string.format(" · %dx image", m.scale) or ""),
+        x, y + 3 * Kit.scale, fits and PAL.muted or PAL.heading)
+      if Kit.chip(x + w - 40 * Kit.scale, y, 40 * Kit.scale, 20 * Kit.scale,
+          "Size", false, PAL.green, PAL.steel,
+          "Resize the map to the stencil and line the stencil up 1:1") then
+        if fits or sizeMapToStencil(S, source, App, m) then
+          source.stencilScale = 1 / m.scale
+          source.stencilX = -m.phaseX / m.scale
+          source.stencilY = -m.phaseY / m.scale
+          App.markDirty()
+          S.status = string.format("Map is %dx%d cells, stencil 1:1",
+            m.cellWidth, m.cellHeight)
+        end
+      end
+      y = y + 24 * Kit.scale
+    end
     Kit.text("micro", "Opacity", x, y + 5 * Kit.scale, PAL.caption)
     Kit.offerTooltip(x, y, 70 * Kit.scale, 24 * Kit.scale,
       "How strongly the stencil shows over the tiles")

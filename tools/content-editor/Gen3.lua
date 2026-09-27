@@ -213,6 +213,7 @@ function Gen3.emit(project, encode)
       end
     end
     out[#out+1]="    return data end)()"
+    out[#out+1]="  local tilePixels=(function()\n"..assert(love.filesystem.read("tools/content-editor/TilePixels.lua")).."\nend)()"
     out[#out+1]=require("Gen3LayeredRuntime")
   end
   -- Whirlpools (map editor collision): crossed with WHIRLPOOL while surfing.
@@ -222,6 +223,13 @@ function Gen3.emit(project, encode)
   local whirlpool = require("Gen3Whirlpool").compile(project)
   if whirlpool then
     out[#out+1]=require("Gen3WhirlpoolRuntime")(whirlpool,encode)
+  end
+  -- Day and night (GFX > Day & night): outdoor maps follow the device clock.
+  local dayNight = require("Gen3DayNight")
+  dayNight.validate(project)
+  local dayNightData = dayNight.compile(project)
+  if dayNightData then
+    out[#out+1]=require("Gen3DayNightRuntime")(dayNightData,encode)
   end
   out[#out + 1] = "end\n"
   return table.concat(out, "\n")
