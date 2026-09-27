@@ -10,6 +10,7 @@
   "gen2compat": false,
   "category": "GAMEPLAY",
   "priority": 100,
+  "permissions": ["engine_internals"],
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],

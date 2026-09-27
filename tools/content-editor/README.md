@@ -257,6 +257,13 @@ Buildings, caves and battles look the same all day.
   **Remove all night looks** (click twice) every block's; Undo brings them
   back. The Day & night tab lists the blocks with a night look, each with
   **Remove**.
+- **Wild encounters by time of day.** In Encounters, pick a map and a kind
+  (Grass, Surf, Rock Smash, Fishing), then **Morning**, **Day** or **Night**
+  and **Give morning, day and night their own lists**: each starts as a
+  copy of the all-day list, and the all-day list is off from then on (like
+  Crystal's grass). **Back to one all-day list** removes them. The Day &
+  night tab lists them. They follow the same clock and test hour and only
+  apply while day and night is on; with it off the all-day list is used.
 - **Default night looks.** The editor ships night looks for FireRed's own
   outdoor blocks (455 blocks: windows, lamps, signs), in
   `Gen3DayNightDefaults.lua`. Turning day and night on in a project with no

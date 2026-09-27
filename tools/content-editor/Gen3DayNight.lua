@@ -6,10 +6,15 @@
 --   { enabled = true, morning = hour, day = hour, night = hour, blend = minutes,
 --     morningTint = "rrggbb", nightTint = "rrggbb", testHour = hour or nil,
 --     lit = { [pair] = { ["<palette>/<colour>"] = true } },
---     paint = { [pair] = { ["<block>"] = { px = 256 chars, cols = { "rrggbb", ... } } } } }
+--     paint = { [pair] = { ["<block>"] = { px = 256 chars, cols = { "rrggbb", ... } } } },
+--     encounters = { [table id] = { [period] = { [kind] = { rate =, slots = } } } } }
 -- `paint` is the night look drawn pixel by pixel: in `px`, "." keeps the
 -- pixel (it just darkens with the night tint) and "1"-"9", "a"-"z" pick a
 -- colour from `cols` that the pixel shows at night instead, untinted.
+-- `encounters` are wild tables by part of the day (Crystal's morning / day /
+-- night grass): a kind (land, water, rocks, fishing) given lists of its own
+-- gets one for each part and its all-day list is off; kinds without keep
+-- their all-day list.
 -- Only what differs from Gen3DayNightCore.DEFAULTS is stored. The rules
 -- themselves are in Gen3DayNightCore; the game side is Gen3DayNightRuntime.
 local Core = require("Gen3DayNightCore")
@@ -33,6 +38,13 @@ local function tidy(project)
   if d and d.paint then
     for pair, set in pairs(d.paint) do if not next(set) then d.paint[pair] = nil end end
     if not next(d.paint) then d.paint = nil end
+  end
+  if d and d.encounters then
+    for id, periods in pairs(d.encounters) do
+      for period, kinds in pairs(periods) do if not next(kinds) then periods[period] = nil end end
+      if not next(periods) then d.encounters[id] = nil end
+    end
+    if not next(d.encounters) then d.encounters = nil end
   end
   if d and not next(d) then project.gen3DayNight = nil end
 end
@@ -95,7 +107,7 @@ function M.settings(project)
   local out = {}
   for k, v in pairs(Core.DEFAULTS) do out[k] = v end
   for k, v in pairs((project or {}).gen3DayNight or {}) do
-    if k ~= "lit" and k ~= "enabled" and k ~= "paint" then out[k] = v end
+    if k ~= "lit" and k ~= "enabled" and k ~= "paint" and k ~= "encounters" then out[k] = v end
   end
   return out
 end
@@ -579,6 +591,100 @@ function M.previewIsNight(S)
   return period == "night"
 end
 
+-- Wild encounters by time of day ------------------------------------------------
+
+M.ENCOUNTER_KINDS = { land = true, water = true, rocks = true, fishing = true }
+
+local function copyArea(area)
+  if type(area) ~= "table" then return nil end
+  local out = { rate = tonumber(area.rate) or 0, slots = {} }
+  for i, slot in ipairs(area.slots or area.mons or {}) do
+    out.slots[i] = { species = slot.species or slot[1], minLevel = tonumber(slot.minLevel or slot[2]) or 1,
+      maxLevel = tonumber(slot.maxLevel or slot.minLevel or slot[2]) or 1 }
+  end
+  return out
+end
+M.copyArea = copyArea
+
+--- An encounter table's own list for one part of the day, or nil (the
+-- table's usual list is used then).
+function M.timeArea(project, id, period, kind)
+  local t = ((((project or {}).gen3DayNight or {}).encounters or {})[id] or {})[period]
+  return t and t[kind] or nil
+end
+
+--- Give a table its own list for a part of the day (a copy of `area`), or
+-- nil to go back to the usual list. Returns true when something changed.
+function M.setTimeArea(project, id, period, kind, area)
+  if not M.ENCOUNTER_KINDS[kind] or not (period == "morning" or period == "day" or period == "night") then return false end
+  if area == nil and M.timeArea(project, id, period, kind) == nil then return false end
+  local d = own(project)
+  d.encounters = d.encounters or {}
+  d.encounters[id] = d.encounters[id] or {}
+  d.encounters[id][period] = d.encounters[id][period] or {}
+  d.encounters[id][period][kind] = copyArea(area)
+  tidy(project)
+  return true
+end
+
+--- Does this table's kind have lists of its own for the parts of the day?
+-- Then its all-day list is off (while day and night is on).
+function M.hasTimeLists(project, id, kind)
+  for _, period in ipairs(Core.PERIODS) do
+    if M.timeArea(project, id, period, kind) then return true end
+  end
+  return false
+end
+
+--- Give morning, day and night each their own list (copies of `area`, the
+-- all-day list), keeping any they already have. The all-day list is off
+-- from then on. Returns how many were added.
+function M.startTimeLists(project, id, kind, area)
+  local n = 0
+  for _, period in ipairs(Core.PERIODS) do
+    if not M.timeArea(project, id, period, kind) and M.setTimeArea(project, id, period, kind, area) then n = n + 1 end
+  end
+  return n
+end
+
+--- Back to one all-day list: drop the morning, day and night lists.
+function M.clearTimeLists(project, id, kind)
+  local changed = false
+  for _, period in ipairs(Core.PERIODS) do
+    changed = M.setTimeArea(project, id, period, kind, nil) or changed
+  end
+  return changed
+end
+
+--- Tables with lists of their own for some part of the day, sorted:
+-- { {id=, period=, kind=}, ... }.
+function M.timeTables(project)
+  local out = {}
+  for id, periods in pairs((((project or {}).gen3DayNight or {}).encounters) or {}) do
+    for period, kinds in pairs(periods) do
+      for kind in pairs(kinds) do out[#out + 1] = { id = id, period = period, kind = kind } end
+    end
+  end
+  local order = { morning = 1, day = 2, night = 3 }
+  table.sort(out, function(a, b)
+    if a.id ~= b.id then return a.id < b.id end
+    if a.period ~= b.period then return order[a.period] < order[b.period] end
+    return a.kind < b.kind
+  end)
+  return out
+end
+
+--- For the game: { [id] = { [period] = { [kind] = { rate, slots } } } }.
+function M.compileEncounters(project)
+  local out = {}
+  for _, e in ipairs(M.timeTables(project)) do
+    out[e.id] = out[e.id] or {}
+    out[e.id][e.period] = out[e.id][e.period] or {}
+    out[e.id][e.period][e.kind] = copyArea(M.timeArea(project, e.id, e.period, e.kind))
+  end
+  return out
+end
+
 -- In the game ------------------------------------------------------------------
 
 --- What the game needs, or nil when day and night is off.
@@ -591,6 +697,7 @@ function M.compile(project)
     morning = tonumber(s.morning), day = tonumber(s.day), night = tonumber(s.night),
     blend = tonumber(s.blend), morningTint = tostring(s.morningTint), nightTint = tostring(s.nightTint),
     testHour = tonumber(s.testHour), lit = lit, paint = M.compilePaint(project),
+    encounters = M.compileEncounters(project),
   }
 end
 
@@ -626,6 +733,20 @@ function M.validate(project)
         and not rec.px:find("[^%.1-9a-z]") and type(rec.cols) == "table",
         ("Day and night: bad night paint on %s block %s"):format(pair, tostring(mid)))
       for _, c in ipairs(rec.cols) do assert(Core.hex(c), "Day and night: bad night colour " .. tostring(c)) end
+    end
+  end
+  for id, periods in pairs(d.encounters or {}) do
+    for period, kinds in pairs(periods) do
+      assert(period == "morning" or period == "day" or period == "night",
+        ("Day and night: %s has encounters for an unknown time %s"):format(tostring(id), tostring(period)))
+      for kind, area in pairs(kinds) do
+        assert(M.ENCOUNTER_KINDS[kind] and type(area) == "table" and type(area.slots) == "table",
+          ("Day and night: bad %s %s encounters on %s"):format(period, tostring(kind), tostring(id)))
+        for i, slot in ipairs(area.slots) do
+          assert(type(slot) == "table" and slot.species ~= nil and tonumber(slot.minLevel) and tonumber(slot.maxLevel),
+            ("Day and night: bad slot %d in %s %s encounters on %s"):format(i, period, kind, tostring(id)))
+        end
+      end
     end
   end
 end

@@ -277,12 +277,49 @@ run("turning day and night on starts from the default night looks", function()
   assert(DN.missingDefaultLooks(S.project) == 1)
   -- a block drawn differently keeps its own look
   DN.setNightPixels(S.project, pair, mid, { 1 }, "123456")
-  DN.clearNightLook(S.project, "pallet_outdoor", next(looks.pallet_outdoor))
+  local otherPair, otherMid = "pallet_outdoor", next(looks.pallet_outdoor)
+  if otherPair == pair and otherMid == mid then otherMid = next(looks.pallet_outdoor, otherMid) end
+  DN.clearNightLook(S.project, otherPair, otherMid)
   assert(DN.addDefaultLooks(S.project) == 1)
   assert(DN.nightPixels(S.project, pair, mid)[1] == "123456")
   -- the game gets them
   local data = assert(DN.compile(S.project))
   assert(#data.paint == total)
+end)
+
+run("wild encounters by time of day: stored, compiled, removed", function()
+  local p = {}
+  local area = { rate = 25, slots = { { species = "HOOTHOOT", minLevel = 2, maxLevel = 4 } } }
+  assert(DN.setTimeArea(p, "FR_ROUTE_1", "night", "land", area))
+  area.slots[1].species = "PIDGEY"
+  assert(DN.timeArea(p, "FR_ROUTE_1", "night", "land").slots[1].species == "HOOTHOOT", "stored as a copy")
+  assert(DN.timeArea(p, "FR_ROUTE_1", "day", "land") == nil)
+  assert(not DN.setTimeArea(p, "FR_ROUTE_1", "evening", "land", area), "only morning, day, night")
+  assert(not DN.setTimeArea(p, "FR_ROUTE_1", "night", "grass2", area), "only known kinds")
+  DN.setTimeArea(p, "FR_ROUTE_1", "morning", "water", area)
+  assert(#DN.timeTables(p) == 2 and DN.timeTables(p)[1].period == "morning")
+  assert(DN.settings(p).encounters == nil, "not a setting")
+  DN.validate(p)
+  assert(DN.compile(p) == nil, "nothing for the game while day and night is off")
+  DN.setEnabled(p, true)
+  local data = assert(DN.compile(p))
+  assert(data.encounters.FR_ROUTE_1.night.land.slots[1].species == "HOOTHOOT")
+  assert(data.encounters.FR_ROUTE_1.morning.water.rate == 25)
+  assert(DN.setTimeArea(p, "FR_ROUTE_1", "night", "land", nil))
+  assert(DN.setTimeArea(p, "FR_ROUTE_1", "morning", "water", nil))
+  assert(p.gen3DayNight.encounters == nil, "tidied away")
+  -- lists come as a set: morning, day and night, and the all-day list is off
+  local allDay = { rate = 21, slots = { { species = "PIDGEY", minLevel = 2, maxLevel = 5 } } }
+  assert(not DN.hasTimeLists(p, "FR_ROUTE_2", "land"))
+  assert(DN.startTimeLists(p, "FR_ROUTE_2", "land", allDay) == 3)
+  assert(DN.hasTimeLists(p, "FR_ROUTE_2", "land") and not DN.hasTimeLists(p, "FR_ROUTE_2", "water"))
+  DN.timeArea(p, "FR_ROUTE_2", "night", "land").slots[1].species = "HOOTHOOT"
+  assert(DN.startTimeLists(p, "FR_ROUTE_2", "land", allDay) == 0, "keeps lists it has")
+  assert(DN.timeArea(p, "FR_ROUTE_2", "night", "land").slots[1].species == "HOOTHOOT")
+  assert(DN.timeArea(p, "FR_ROUTE_2", "morning", "land").slots[1].species == "PIDGEY")
+  assert(DN.clearTimeLists(p, "FR_ROUTE_2", "land") and not DN.hasTimeLists(p, "FR_ROUTE_2", "land"))
+  p.gen3DayNight.encounters = { X = { night = { land = { slots = { { species = "A" } } } } } }
+  assert(not pcall(DN.validate, p), "slots need levels")
 end)
 
 print(("\n%d passed, %d failed"):format(pass, fail))

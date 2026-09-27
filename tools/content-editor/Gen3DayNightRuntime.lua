@@ -16,6 +16,12 @@
 -- pictures in their night colours and put back at dawn or indoors. Each night
 -- colour is nudged one 5-bit step if a loaded palette already has it, then
 -- joins the lit colours, so exactly those pixels skip the night tint.
+--
+-- Wild encounters by time of day: a table with its own morning / day / night
+-- list uses it at that time, on any map. Just before the game rolls (a step,
+-- Rock Smash, a rod), that table's lists are swapped for the current part of
+-- the day, and swapped back when the part has none of its own. The same
+-- clock and test hour as the looks.
 return function(data, encode)
   return "  local daynight=" .. encode(data) .. "\n"
     .. "  local dnCore=(function()\n"
@@ -162,6 +168,78 @@ return function(data, encode)
       local kind=tonumber(def.mapType)
       if kind then return dnCore.OUTDOOR[kind]==true end
       return def.outdoor==true
+    end
+
+    -- Wild encounters by time of day.
+    local okE,E=pcall(require,"src.core.game3.encounters")
+    if okE and type(E)=="table" and next(daynight.encounters or {}) then
+      local okP,Pokemon=pcall(require,"src.core.game3.pokemon")
+      local originals=setmetatable({},{__mode="k"})
+      local converted={}
+      -- Species ids to the game's species numbers (custom species too).
+      local function speciesNum(id)
+        if type(id)=="number" then return id end
+        local ok,rec=pcall(function() return mod.content.pokemon:get(id) end)
+        if ok and type(rec)=="table" and tonumber(rec.index) then return tonumber(rec.index) end
+        local n=okP and Pokemon and Pokemon.speciesFromName and Pokemon.speciesFromName(id)
+        return n or tonumber(id)
+      end
+      local function areaFor(id,period,kind)
+        local key=id.."|"..period.."|"..kind
+        if converted[key]==nil then
+          local src=daynight.encounters[id][period][kind]
+          local area={rate=src.rate,slots={}}
+          for i,slot in ipairs(src.slots or {}) do
+            area.slots[i]={species=speciesNum(slot.species) or 0,minLevel=slot.minLevel,maxLevel=slot.maxLevel}
+          end
+          converted[key]=area
+        end
+        return converted[key]
+      end
+      local function currentPeriod()
+        local h,m=clock()
+        return dnCore.period(daynight,h,m)
+      end
+      local function apply(mapId)
+        if mapId==nil or not E.tableFor then return end
+        local ok,t=pcall(E.tableFor,mapId)
+        if not ok or type(t)~="table" then return end
+        local period=currentPeriod()
+        for id,periods in pairs(daynight.encounters) do
+          local ok2,other=pcall(E.tableFor,id)
+          if ok2 and other==t then
+            local orig=originals[t]
+            if not orig then
+              orig={}
+              for kind in pairs({land=1,grass=1,water=1,rocks=1,fishing=1}) do orig[kind]=t[kind] or false end
+              originals[t]=orig
+            end
+            local mine=periods[period] or {}
+            for _,kind in ipairs({"land","water","rocks","fishing"}) do
+              if mine[kind] then
+                t[kind]=areaFor(id,period,kind)
+                if kind=="land" then t.grass=nil end
+              else
+                t[kind]=orig[kind] or nil
+                if kind=="land" then t.grass=orig.grass or nil end
+              end
+            end
+            return
+          end
+        end
+      end
+      for _,name in ipairs({"onStep","rollLand","rollWater","rollRocks","rollFishing","hasFishingMons"}) do
+        local key="editor.gen3.daynight.encounters."..name
+        if type(E[name])=="function" and not E[key] then
+          E[key]=true
+          local original=E[name]
+          E[name]=function(...) return Runtime.call(key,original,...) end
+        end
+        mod.hooks:wrap(key,function(proceed,mapId,...)
+          apply(mapId)
+          return proceed(mapId,...)
+        end)
+      end
     end
 
     local paintOn=false

@@ -828,6 +828,41 @@ function M.draw(S, x, y, w, h, App)
     or "Empty: the game uses the device's clock.", vx + 166 * s, fy + 8 * s, cfg.testHour and PAL.yellow or PAL.faint)
   fy = fy + 40 * s
 
+  -- Wild encounters with lists of their own for a part of the day.
+  -- one row per map and kind: "morning / day / night"
+  local timed, seen = {}, {}
+  for _, e in ipairs(DN.timeTables(S.project)) do
+    local key = e.id .. "|" .. e.kind
+    if not seen[key] then seen[key] = { id = e.id, kind = e.kind, periods = {} }; timed[#timed + 1] = seen[key] end
+    table.insert(seen[key].periods, e.period)
+  end
+  Kit.text("micro", ("WILD ENCOUNTERS BY TIME OF DAY  (%d table%s)"):format(#timed, #timed == 1 and "" or "s"), vx, fy, PAL.caption)
+  fy = fy + 16 * s
+  Kit.text("small", Kit.ellipsize("small",
+    "In Encounters, pick a map, then Morning, Day or Night: morning, day and night get lists of their own and the all-day list is off.",
+    vw), vx, fy, PAL.muted)
+  fy = fy + 24 * s
+  if #timed == 0 then
+    Kit.text("small", "None yet.", vx, fy, PAL.faint)
+    fy = fy + 24 * s
+  end
+  local kindNames = { land = "Grass", water = "Surf", rocks = "Rock Smash", fishing = "Fishing" }
+  for _, e in ipairs(timed) do
+    Kit.text("small", Kit.ellipsize("small", ("%s  -  %s  -  %s"):format(
+      require("Gen3Labels").map(e.id), kindNames[e.kind] or e.kind, table.concat(e.periods, " / ")), vw - 220 * s),
+      vx, fy + 5 * s, PAL.text)
+    if Kit.button(vx + vw - 210 * s, fy, 100 * s, 24 * s, "Open", { kind = "ghost", font = "micro",
+        tooltip = "Show these lists in Encounters" }) then
+      S.tab, S.g3EncounterSection, S.g3EncounterId = "encounters", "wild", e.id
+      S.g3EncounterKind, S.g3EncounterTime = e.kind, e.periods[1]
+    end
+    if Kit.button(vx + vw - 100 * s, fy, 100 * s, 24 * s, "Remove", { kind = "ghost", font = "micro",
+        tooltip = "Back to one all-day list for this map" }) then
+      if DN.clearTimeLists(S.project, e.id, e.kind) then App.markDirty() end
+    end
+    fy = fy + 28 * s
+  end
+  fy = fy + 8 * s
   -- Night look: blocks with pixels of their own night colour.
   local painted = DN.paintedBlocks(S.project)
   Kit.text("micro", ("NIGHT LOOK  (%d blocks)"):format(#painted), vx, fy + 6 * s, PAL.caption)
