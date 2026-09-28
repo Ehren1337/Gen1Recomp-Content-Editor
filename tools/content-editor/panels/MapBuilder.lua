@@ -2175,7 +2175,8 @@ end
 
 local function drawToolbar(S, source, x, y, w, App)
   local s = Kit.scale
-  local stackedHeader = w < 460 * s
+  local elevationViewW = Generation.isGen3(S) and 92 * s or 0
+  local stackedHeader = w < 460 * s + elevationViewW
   local tx, toolY = x, y + (stackedHeader and 64 or 32) * s
   local workspace = S.mapWorkspace
   if workspace then
@@ -2198,7 +2199,7 @@ local function drawToolbar(S, source, x, y, w, App)
     end
   end
   local viewY = stackedHeader and y + 32 * s or y
-  local zx = stackedHeader and x or x + w - 276 * s
+  local zx = stackedHeader and x or x + w - 276 * s - elevationViewW
   if Kit.chip(zx, viewY, 88 * s, 26 * s, "Neighbors",
       neighborsEnabled(S), PAL.blue, PAL.steel,
       "Show directly connected maps around this one") then
@@ -2217,6 +2218,15 @@ local function drawToolbar(S, source, x, y, w, App)
     end
   end
   local zc = zx + 92 * s
+  if Generation.isGen3(S) then
+    if Kit.chip(zc, viewY, 88 * s, 26 * s, "Elevations",
+        S.mapShowElevations == true, PAL.blue, PAL.steel,
+        "Show elevation numbers on this map and connected neighbors. Compare values across map edges; 0 is a wildcard height.") then
+      S.mapShowElevations = not S.mapShowElevations
+      if S.mapShowElevations then S.mapShowNeighbors = true end
+    end
+    zc = zc + elevationViewW
+  end
   if Kit.stepper(zc, viewY, 26 * s, 26 * s, "-",
       { tooltip = "Zoom out" }) then
     S.builderZoom = clamp((S.builderZoom or 1) - 0.25, 0.25, 8)
@@ -2284,20 +2294,6 @@ local function drawToolbar(S, source, x, y, w, App)
       S.builderAdvancedTools == true, PAL.yellow, PAL.steel,
       "Show selection, collision, warp, trainer, and other advanced tools") then
     S.builderAdvancedTools = not S.builderAdvancedTools
-  end
-
-  if Generation.isGen3(S) then
-    tx = tx + moreW + 3 * s
-    if tx + 88 * s > x + w then
-      toolY = toolY + 29 * s
-      tx = x + 50 * s
-    end
-    if Kit.chip(tx, toolY, 88 * s, 26 * s, "Elevations",
-        S.mapShowElevations == true, PAL.blue, PAL.steel,
-        "Show elevation numbers on this map and connected neighbors. Compare values across map edges; 0 is a wildcard height.") then
-      S.mapShowElevations = not S.mapShowElevations
-      if S.mapShowElevations then S.mapShowNeighbors = true end
-    end
   end
 
   local barY = toolY + 31 * s
