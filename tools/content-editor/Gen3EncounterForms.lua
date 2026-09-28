@@ -10,16 +10,15 @@ local times={{id="all",label="All day"},{id="morning",label="Morning",tip="Its o
 function M.draw(S,x,y,w,h,App)
   require("Gen3ContentAdapter").prepare(S)
   local s=Kit.scale
+  -- GAME PATCHES > Encounter tables: keep Crystal's lists filled in (or
+  -- taken back out) even if the switch was flipped somewhere else.
+  if require("Gen3DayNight").syncCrystalPopulation(S) then App.markDirty() end
   local nextY=List.modeChips(S,"g3EncounterSection",{{id="wild",label="Wild encounters"},{id="roamers",label="Roaming Pokemon"}},x,y,s)+8*s
   h=h-(nextY-y);y=nextY
   if S.g3EncounterSection=="roamers" then return require("Gen3Roamers").draw(S,x,y,w,h,App) end
   local ids=List.mergeIds(S.project.encounters,S.data.encounters)
   local labels=require("Gen3Labels")
-  local preferred={}
-  for _,id in ipairs(ids) do
-    local name=labels.map(id);local old=preferred[name]
-    if not old or S.project.encounters[id] or (not S.project.encounters[old] and not id:match("^%d+:")) then preferred[name]=id end
-  end
+  local preferred=labels.preferredEncounterIds(S.project.encounters,S.data.encounters)
   local unique={}
   for _,id in ipairs(ids) do if preferred[labels.map(id)]==id or S.project.encounters[id] then unique[#unique+1]=id end end
   if S.g3EncounterId and not S.project.encounters[S.g3EncounterId] then S.g3EncounterId=preferred[labels.map(S.g3EncounterId)] end
@@ -39,7 +38,9 @@ function M.draw(S,x,y,w,h,App)
   local kind=S.g3EncounterKind or "land"
   local def=kinds[1];for _,v in ipairs(kinds) do if v.id==kind then def=v end end
   -- Time of day (GFX > Day & night): a list of its own for morning, day or
-  -- night replaces the usual one then, like Crystal's grass.
+  -- night replaces the usual one then. GAME PATCHES > Encounter tables
+  -- fills these in from Pokemon Crystal on FireRed's own tables -- from
+  -- there they're just this table's own lists, edited the same as any other.
   local DN=require("Gen3DayNight")
   top=List.modeChips(S,"g3EncounterTime",times,fx,top,s)
   local period=S.g3EncounterTime or "all"
@@ -49,14 +50,35 @@ function M.draw(S,x,y,w,h,App)
   end
   local area,write
   local timed=DN.hasTimeLists(S.project,id,kind)
+  local clockOn=DN.enabled(S.project)
+  local timeOn=clockOn and DN.encountersEnabled(S.project)
+  local pinned=DN.isAllDay(S.project,id,kind)
+  local changes=timed -- does this table change with the time?
   local function hint(text,colour)
     Kit.text("small",text,fx,top,colour or PAL.detail);top=top+24*s
   end
-  if not DN.enabled(S.project) and (timed or period~="all") then
-    hint("Turn on day and night (GFX > Day & night) for morning / day / night lists to apply",PAL.yellow)
+  -- Morning / day / night lists only while the real time clock and its
+  -- Encounter tables are on (GAME PATCHES); otherwise the all-day list is
+  -- the only one, and the only one you can set.
+  if period~="all" and not timeOn then
+    hint("Enable Real Time Clock mechanics to set Morning, Day and Night encounter tables",PAL.yellow)
+    return
+  end
+  if timeOn and pinned and (period~="all" or changes) then
+    hint("This table keeps its all-day list at every time; the others still change with the time",PAL.yellow)
+  end
+  -- Keep this one table on its all-day list, whatever the time lists say.
+  local function keepAllDayChip()
+    if not changes or not timeOn then return end
+    local label="Keep the all-day list at every time"
+    if Kit.chip(fx,top,Kit.textWidth("micro",label)+24*s,26*s,label,pinned,PAL.yellow,nil,
+        "This table ignores its morning / day / night lists; other tables still change with the time")
+        then DN.setAllDay(S.project,id,kind,not pinned);pinned=not pinned;App.markDirty() end
+    top=top+32*s
   end
   if period=="all" then
-    if timed then
+    keepAllDayChip()
+    if timeOn and timed and not pinned then
       -- Off while morning, day and night have lists of their own.
       Kit.caption(fx,top,"All-day "..def.label.." list is off: morning, day and night have their own lists")
       if Kit.button(fx,top+36*s,260*s,28*s,"Back to one all-day list",{kind="ghost",

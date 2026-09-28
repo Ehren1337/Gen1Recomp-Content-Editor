@@ -161,6 +161,13 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     throw "Could not build runtime archive."
   }
 
+  # Update editor: the release this pack belongs to (set by the package
+  # workflow), so the editor can tell when a newer one is out.
+  if ($env:CONTENT_EDITOR_VERSION) {
+    Set-Content -LiteralPath (Join-Path $Stage "content-editor-version.txt") `
+      -Value $env:CONTENT_EDITOR_VERSION -Encoding ascii
+  }
+
   foreach ($f in @("README.md", "README.txt", ".gitattributes")) {
     $src = Join-Path $Root $f
     if (Test-Path $src) {

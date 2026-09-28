@@ -191,6 +191,8 @@ end
 -- and other loaded mods stay out of the list.
 function Generation.listedMapIds(S)
   local seen, ids = {}, {}
+  -- GAME PATCHES > Clean Project: only the project's own maps are listed.
+  local clean = S and S.project and type(S.project.gen3Clean) == "table"
   local function add(id)
     if id and not seen[id] then
       seen[id] = true
@@ -201,8 +203,10 @@ function Generation.listedMapIds(S)
     for id in pairs(S.project.maps or {}) do add(id) end
     for id in pairs(S.project.layeredMaps or {}) do add(id) end
   end
-  for id, rec in pairs(Generation.dataMaps(S)) do
-    if Generation.isRomMap(S, id, rec) then add(id) end
+  if not clean then
+    for id, rec in pairs(Generation.dataMaps(S)) do
+      if Generation.isRomMap(S, id, rec) then add(id) end
+    end
   end
   table.sort(ids)
   return ids

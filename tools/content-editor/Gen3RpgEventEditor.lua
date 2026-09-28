@@ -52,7 +52,7 @@ end
 local function editDialogue(S,row,catalog,x,y,w,App)
   local source=((S.project.gen3 or {}).map_scripts or {})[row.script] or catalog[row.script]
   local step=source and source[row.index];if not step then return end
-  local text=require("Gen3EventActions").text(S,step) or row.text or ""
+  local text=require("Gen3Dialog").toField(require("Gen3EventActions").text(S,step) or row.text or "")
   local key=row.script.."/"..row.index
   if not S._g3RpgText or S._g3RpgText.key~=key or S._g3RpgText.source~=text then
     S._g3RpgText={key=key,source=text,value=text}
@@ -65,7 +65,8 @@ local function editDialogue(S,row,catalog,x,y,w,App)
     local rows=copy(source);require("Gen3EventActions").setText(S,rows[row.index],draft.value)
     saveScript(S,row.script,rows,App);S._g3RpgText=nil
   end
-  K.text("small","Use \\n for a new line.",x+124*K.scale,y+6*K.scale,PAL.faint)
+  local _,hint=K.fonts.small:getWrap(require("Gen3Dialog").FIELD_HINT,w)
+  for n,line in ipairs(hint) do K.text("small",line,x,y+(28+n*22)*K.scale,PAL.faint) end
 end
 local function editWildBattle(S,row,catalog,x,y,w,App)
   K.caption(x,y,"Wild Pokémon");y=y+23*K.scale
@@ -121,7 +122,7 @@ function M.drawQuick(S,event,x,y,w,App)
   elseif row.text then
     -- The full event window has room for an inline hint; keep the narrow sidebar clear.
     local source=((S.project.gen3 or {}).map_scripts or {})[row.script] or catalog[row.script]
-    local step=source[row.index];local text=require("Gen3EventActions").text(S,step) or ""
+    local step=source[row.index];local text=require("Gen3Dialog").toField(require("Gen3EventActions").text(S,step) or "")
     local draftKey=row.script.."/"..row.index
     if not S._mapQuickText or S._mapQuickText.key~=draftKey or S._mapQuickText.source~=text then
       S._mapQuickText={key=draftKey,source=text,value=text}
@@ -201,7 +202,7 @@ function M.draw(S,x,y,w,h,App)
   local inside=box(x,gy,half,160*s,"Appearance")
   if target.kind=="objects" then
     require("Gen3MapSprites").draw(S,event,x+half/2-8*s,inside+42*s)
-    local ids,labels={},{};for path in pairs(require("Gen3Resources").assets(S.data,S.project)) do local id=path:match("/ow/(%d+)%.rgba$");if id then ids[#ids+1]=id;labels[id]="Sprite "..id end end;table.sort(ids,require("Gen3Labels").natural)
+    local ids,labels={},{};for path in pairs(require("Gen3Resources").assets(S.data,S.project)) do local id=path:match("/ow/(%d+)%.rgba$");if id then ids[#ids+1]=id;labels[id]=require("Gen3SpriteNames").label(id) end end;table.sort(ids,require("Gen3Labels").natural)
     choice(S,x+10*s,gy+120*s,half-20*s,event.graphicsId or event.graphics,ids,labels,"CHOOSE GRAPHIC",function(id) mutateEvent(S,target,App,"graphicsId",tonumber(id)) end,
       {rowHeight=48,drawRow=function(state,id,px,py,pw,ph,label,on)
         require("Gen3MapSprites").draw(state,{graphicsId=tonumber(id)},px+8*s,py+8*s,{scale=2})
@@ -275,6 +276,10 @@ function M.draw(S,x,y,w,h,App)
       local top,view=P.begin(S,pk,rx+12*s,dy,rw-24*s,math.max(35*s,y+h-40*s-dy))
       local bottom=require("Gen3ActionInputs").draw(S,pk,row.inputs,catalog,rx+12*s,top,view.contentW,function() App.markDirty() end)
       P.finish(S,pk,top,bottom,view)
+    elseif row.kind=="clock_check" then require("Gen3EventStory").drawClockCheck(S,row,rx+12*s,dy,math.min(rw-24*s,460*s),App)
+    elseif row.kind=="clock_read" then
+      local _,lines=K.fonts.small:getWrap(require("Gen3ClockEvents").HINT,rw-24*s)
+      for n,line in ipairs(lines) do K.text("small",line,rx+12*s,dy+(n-1)*22*s,PAL.text) end
     elseif row.kind=="item" then editItem(S,row,eventScriptKey,catalog,rx+12*s,dy,rw-24*s,App)
     elseif row.kind=="wild_battle" then editWildBattle(S,row,catalog,rx+12*s,dy,rw-24*s,App)
     elseif row.text then editDialogue(S,row,catalog,rx+12*s,dy,rw-24*s,App)

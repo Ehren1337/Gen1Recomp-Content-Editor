@@ -67,8 +67,14 @@ function M.rows(S,id,catalog)
         elseif op=="compare_var_to_value" and relations[cond] then
           condition="saved value "..tostring(row.var or row[1]).." "..relations[cond].." "..tostring(row.value or row[2])
         else condition="an unnamed game condition is met" end
-        add("If "..condition,depth,key,i)
+        local clock=op=="compare_var_to_value" and nextRow.op=="goto_if"
+          and require("Gen3ClockEvents").describe(row.var or row[1],cond,row.value or row[2])
+        add("If "..(clock or condition),depth,key,i)
         out[#out].conditionIndex=i+1
+        if clock then
+          out[#out].kind="clock_check"
+          out[#out].clockCheck=require("Gen3ClockEvents").checkId(tonumber(row.var or row[1]),tonumber(cond),tonumber(row.value or row[2]))
+        end
         walk(nextRow.target or nextRow[2],depth+1,Inputs.clone(state))
         if nextRow.op=="call_if" then state.vars={};state.pending=nil end
         add(nextRow.op=="goto_if" and "Otherwise, continue below" or "Then continue below",depth)
@@ -78,6 +84,8 @@ function M.rows(S,id,catalog)
         -- text() also returns its pointer. Keep that second result out of inputs.
         add((nextRow.std or nextRow[1])==5 and "Ask the player: Yes / No" or "Show dialogue",depth,key,i,(A.text(S,row)))
         i=i+2;if nextRow.op=="gotostd" then break end
+      elseif require("Gen3ClockEvents").isRead(row) then
+        out[#out+1]={label="Read the clock (day, date and time)",depth=depth,script=key,index=i,kind="clock_read"};i=i+1
       elseif op=="message" and A.text(S,row) then
         add("Show dialogue",depth,key,i,(A.text(S,row)));i=i+1
       elseif op=="setwildbattle" then
@@ -143,11 +151,24 @@ function M.rows(S,id,catalog)
   walk(id,0,Inputs.new());return out
 end
 function M.openAddMenu(S,id,catalog,App)
-  local choices={"text","face","move","wait","give_item","trainer_battle","wild_battle","switch_on","switch_off","end"}
+  local choices={"text","face","move","wait","give_item","trainer_battle","wild_battle","switch_on","switch_off","clock_read","clock_check","end"}
   local names={text="Show dialogue",face="Face the player",move="Move a character",wait="Wait",
     give_item="Give the player an item",trainer_battle="Battle a trainer",wild_battle="Battle a wild Pokémon",
-    switch_on="Turn a switch ON",switch_off="Turn a switch OFF",["end"]="End the event"}
+    switch_on="Turn a switch ON",switch_off="Turn a switch OFF",clock_read="Read the clock (day, date and time)",
+    clock_check="Check the time or day...",["end"]="End the event"}
   require("ChoicePicker").open(S,{ids=choices,labels=names,title="EVENT COMMAND",onPick=function(action)
+    local CE=require("Gen3ClockEvents")
+    if action=="clock_read" then
+      CE.addReadTo(S,id);S._g3ScriptSource=nil;App.markDirty()
+      S.status="Read the clock is at the top of the event. "..CE.HINT
+      return
+    elseif action=="clock_check" then
+      require("ChoicePicker").open(S,{ids=CE.IDS,labels=CE.LABELS,title="CHECK THE CLOCK",onPick=function(check)
+        CE.addCheck(S,id,check);S._g3ScriptSource=nil;App.markDirty()
+        S.status="Added: If "..CE.LABELS[check]:gsub("^It","it")..". Edit the line under it to change what's said."
+      end})
+      return
+    end
     local source=((S.project.gen3 or {}).map_scripts or {})[id] or catalog[id]
     local result=require("src.mods.Merge").deepCopy(source or {{op="end"}});local sequence
     if action=="give_item" then
@@ -171,10 +192,28 @@ function M.openAddMenu(S,id,catalog,App)
       if not flag then S.status="No unused event switch is available";return end
       sequence={{op=action=="switch_on" and "setflag" or "clearflag",flag=flag}}
     else sequence=require("Gen3EventActions").create(S,action) end
-    local at=#result+1;if result[#result] and (result[#result].op=="end" or result[#result].op=="return") then at=#result end
+    local at=require("Gen3ClockEvents").insertIndex(result)
     for n=#sequence,1,-1 do table.insert(result,at,sequence[n]) end
     S.project.gen3.map_scripts[id]=result;S._g3ScriptSource=nil;App.markDirty()
   end})
+end
+--- The check's picker and Remove button (story view and event window).
+function M.drawClockCheck(S,row,x,y,w,App)
+  local K=require("Kit");local s=K.scale;local CE=require("Gen3ClockEvents")
+  K.caption(x,y,"CHECK");y=y+24*s
+  require("ChoicePicker").field(S,{x=x,y=y,w=w,h=28*s,ids=CE.IDS,labels=CE.LABELS,current=row.clockCheck or "",
+    emptyLabel=row.label,title="CHECK THE CLOCK",onPick=function(check)
+      if CE.change(S,row.script,row.index,check) then S._g3ScriptSource=nil;App.markDirty() end
+    end})
+  y=y+36*s
+  local font=K.fonts.small
+  local _,lines=font:getWrap(CE.CHECK_HINT,math.max(80,w))
+  for _,line in ipairs(lines) do K.text("small",line,x,y,require("Theme").PAL.faint);y=y+22*s end
+  y=y+6*s
+  if K.button(x,y,150*s,27*s,"Remove this check",{}) then
+    if CE.remove(S,row.script,row.index) then S._g3ScriptSource=nil;S._g3StoryEdit=nil;App.markDirty();S.status="Check removed" end
+  end
+  return y+37*s
 end
 function M.draw(S,id,catalog,x,y,w,h,App)
   local K=require("Kit");local P=require("FormPane");local s=K.scale;local color=require("Theme").PAL.text
@@ -218,6 +257,13 @@ function M.draw(S,id,catalog,x,y,w,h,App)
         S.project.gen3.map_scripts[row.script]=copy;S._g3ScriptSource=nil;App.markDirty()
       end
       yy=yy+42*s
+    elseif row.kind=="clock_read" then
+      local font=K.fonts.small
+      local _,lines=font:getWrap(require("Gen3ClockEvents").HINT,math.max(80,width-12*s))
+      for _,line in ipairs(lines) do K.text("small",line,xx+8*s,yy,color);yy=yy+23*s end
+      yy=yy+8*s
+    elseif row.kind=="clock_check" then
+      yy=M.drawClockCheck(S,row,xx,yy,math.min(width,420*s),App)
     elseif row.text then
       local text=row.text:gsub("\n","  ")
       local font=K.fonts.small

@@ -12,6 +12,7 @@ function M.display(ir)
     elseif t.t=="para" then out[#out+1]="\n\n"
     elseif t.t=="player" then out[#out+1]="{PLAYER}"
     elseif t.t=="rival" then out[#out+1]="{RIVAL}"
+    elseif t.t=="strvar" and tonumber(t.n) then out[#out+1]="{STR_VAR_"..t.n.."}"
     elseif t.t~="eos" then
       local key=require("ModWriter").encodeLua(t)
       local id=controlIds[key]
@@ -21,6 +22,12 @@ function M.display(ir)
   end
   return table.concat(out)
 end
+--- Dialogue for a one-line text field: new lines as \n, new boxes as \p
+-- (encode reads them back).
+function M.toField(text)
+  return (tostring(text or ""):gsub("\r",""):gsub("\n\n","\\p"):gsub("\n","\\n"))
+end
+M.FIELD_HINT="\\n new line, \\p new box. {PLAYER} player name. After Read the clock: {STR_VAR_1} day, {STR_VAR_2} date, {STR_VAR_3} time."
 function M.encode(text,old)
   local out={};local at=1
   local function prose(s)

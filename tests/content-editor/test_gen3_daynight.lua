@@ -322,5 +322,77 @@ run("wild encounters by time of day: stored, compiled, removed", function()
   assert(not pcall(DN.validate, p), "slots need levels")
 end)
 
+run("Crystal's encounters: slots, targets, compile, your own lists first", function()
+  local C = require("Gen3CrystalEncounters")
+  -- the twelve FireRed slots keep Crystal's chances
+  local fr = { 20, 20, 10, 10, 10, 10, 5, 5, 4, 4, 1, 1 }
+  local sum = {}
+  for i, k in ipairs(DN.CRYSTAL_SLOTS) do sum[k] = (sum[k] or 0) + fr[i] end
+  local crystal = { 30, 30, 20, 10, 5, 4, 1 }
+  for k = 1, 7 do assert(sum[k] == crystal[k], "slot " .. k) end
+  local area = DN.crystalArea(C.maps.ROUTE_2.night, 10)
+  assert(#area.slots == 12 and area.rate == 10 and area.slots[1].minLevel == area.slots[1].maxLevel)
+  -- targets: FireRed's Kanto tables, and maps added in the editor
+  local p = { maps = { FR_JOHTO_ROUTE_29 = {}, FR_TOHJO_FALLS = {}, FR_MY_TOWN = {} } }
+  local ids = {}
+  for _, e in ipairs(DN.crystalTargets(p)) do ids[e.id] = e end
+  assert(ids.FR_ROUTE_1 and ids.FR_ROUTE_1.crystal == "ROUTE_1")
+  assert(ids.FR_MT_MOON_B2F and ids.FR_ROUTE_21_SOUTH)
+  assert(not ids.FR_JOHTO_ROUTE_29 and not ids.FR_TOHJO_FALLS and not ids.FR_MY_TOWN, "maps added in a mod aren't touched")
+  -- Encounter tables: on unless turned off; off, nothing time-based is compiled
+  DN.setEnabled(p, true)
+  assert(DN.encountersEnabled(p) and DN.compile(p).crystal ~= nil, "on with the clock")
+  local data = DN.compile(p)
+  assert(data.crystal.FR_ROUTE_1.night.land.rate == nil, "FireRed tables keep their rate")
+  assert(data.crystal.FR_JOHTO_ROUTE_29 == nil and data.crystal.FR_TOHJO_FALLS == nil)
+  assert(data.crystal.FR_ROUTE_1.morning.land.slots[1].species == C.maps.ROUTE_1.morning[1][2])
+  DN.startTimeLists(p, "FR_ROUTE_2", "land", { rate = 20, slots = { { species = "PIDGEY", minLevel = 2, maxLevel = 2 } } })
+  assert(next(DN.compile(p).encounters))
+  assert(DN.setEncounters(p, false) and DN.settings(p).encountersOff == nil)
+  data = DN.compile(p)
+  assert(data.crystal == nil and next(data.encounters) == nil and data.allDay == nil, "off: all-day lists everywhere")
+  assert(DN.hasTimeLists(p, "FR_ROUTE_2", "land"), "your lists are kept while off")
+  assert(DN.setEncounters(p, true) and next(DN.compile(p).encounters))
+  -- one table kept on its all-day list, the rest still change
+  assert(DN.setAllDay(p, "FR_ROUTE_2", "land", true) and DN.isAllDay(p, "FR_ROUTE_2", "land"))
+  data = DN.compile(p)
+  assert(data.allDay.FR_ROUTE_2.land and data.crystal.FR_ROUTE_1 and data.encounters.FR_ROUTE_2)
+  assert(#DN.allDayList(p) == 1)
+  assert(DN.setAllDay(p, "FR_ROUTE_2", "land", false) and p.gen3DayNight.allDay == nil)
+end)
+
+run("Encounter tables follow the clock; Crystal's lists filled in as your own, taken out when off", function()
+  local p = {}
+  local S = { project = p, data = {} }
+  assert(not DN.encountersEnabled(p), "off while the clock is off")
+  assert(not DN.setEncounters(p, true), "the clock comes first")
+  assert(DN.setEnabled(p, true) and DN.encountersEnabled(p), "on with the clock")
+  assert(DN.syncCrystalPopulation(S))
+  local route1 = DN.timeArea(p, "FR_ROUTE_1", "night", "land")
+  assert(route1 and #route1.slots == 12 and route1.rate == 21, "filled in as a real list")
+  assert(DN.isCrystalFilled(p, "FR_ROUTE_1") and not DN.syncCrystalPopulation(S), "in sync")
+  assert(DN.compile(p).crystal.FR_ROUTE_1 == nil, "filled-in tables use their own lists")
+  -- edit one, clear one, make one of your own
+  DN.timeArea(p, "FR_ROUTE_2", "day", "land").slots[1].species = "PIKACHU"
+  assert(DN.clearTimeLists(p, "FR_ROUTE_3", "land"))
+  assert(not DN.syncCrystalPopulation(S) and not DN.hasTimeLists(p, "FR_ROUTE_3", "land"), "cleared stays cleared")
+  assert(DN.compile(p).crystal.FR_ROUTE_3 == nil, "cleared: all-day list in game")
+  DN.startTimeLists(p, "FR_ROUTE_1", "water", { rate = 5, slots = { { species = "TENTACOOL", minLevel = 5, maxLevel = 5 } } })
+  -- off: Crystal's come back out; edited and your own stay
+  assert(DN.setEncounters(p, false) and DN.syncCrystalPopulation(S))
+  assert(not DN.hasTimeLists(p, "FR_ROUTE_1", "land"), "Crystal's list gone")
+  assert(DN.timeArea(p, "FR_ROUTE_2", "day", "land").slots[1].species == "PIKACHU", "edited table kept")
+  assert(DN.hasTimeLists(p, "FR_ROUTE_1", "water"), "your own list kept")
+  assert(p.gen3DayNight.crystalFilled == nil)
+  -- clock off turns them off; clock on brings them back
+  assert(DN.setEncounters(p, true) and DN.syncCrystalPopulation(S) and DN.hasTimeLists(p, "FR_ROUTE_3", "land"))
+  assert(DN.setEnabled(p, false) and not DN.encountersEnabled(p) and DN.syncCrystalPopulation(S))
+  assert(not DN.hasTimeLists(p, "FR_ROUTE_1", "land"))
+  assert(DN.setEncounters(p, false) == false, "already off with the clock")
+  assert(DN.setEnabled(p, true) and DN.encountersEnabled(p) and DN.syncCrystalPopulation(S))
+  assert(DN.hasTimeLists(p, "FR_ROUTE_1", "land"))
+  DN.validate(p)
+end)
+
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

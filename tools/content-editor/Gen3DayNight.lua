@@ -29,6 +29,13 @@ local function own(project)
   return project.gen3DayNight
 end
 
+-- Encounter tables' mark on one of Crystal's FireRed tables:
+-- { id = the table id the Encounters list shows (ROUTE_1 for FR_ROUTE_1),
+--   cleared = true once you've put it back on its all-day list }, or nil.
+local function crystalMark(project, targetId)
+  return ((((project or {}).gen3DayNight or {}).crystalFilled) or {})[targetId]
+end
+
 local function tidy(project)
   local d = project.gen3DayNight
   if d and d.lit then
@@ -39,6 +46,11 @@ local function tidy(project)
     for pair, set in pairs(d.paint) do if not next(set) then d.paint[pair] = nil end end
     if not next(d.paint) then d.paint = nil end
   end
+  if d and d.allDay then
+    for id, kinds in pairs(d.allDay) do if not next(kinds) then d.allDay[id] = nil end end
+    if not next(d.allDay) then d.allDay = nil end
+  end
+  if d and d.crystalFilled and not next(d.crystalFilled) then d.crystalFilled = nil end
   if d and d.encounters then
     for id, periods in pairs(d.encounters) do
       for period, kinds in pairs(periods) do if not next(kinds) then periods[period] = nil end end
@@ -58,6 +70,7 @@ end
 function M.setEnabled(project, on)
   if M.enabled(project) == (on == true) then return false end
   own(project).enabled = on == true or nil
+  if on then project.gen3DayNight.encountersOff = nil end -- Encounter tables come on with the clock
   if on and not (project.gen3DayNight.paint and next(project.gen3DayNight.paint)) then
     M.addDefaultLooks(project)
   end
@@ -107,7 +120,8 @@ function M.settings(project)
   local out = {}
   for k, v in pairs(Core.DEFAULTS) do out[k] = v end
   for k, v in pairs((project or {}).gen3DayNight or {}) do
-    if k ~= "lit" and k ~= "enabled" and k ~= "paint" and k ~= "encounters" then out[k] = v end
+    if k ~= "lit" and k ~= "enabled" and k ~= "paint" and k ~= "encounters" and k ~= "crystal"
+        and k ~= "encountersOff" and k ~= "allDay" and k ~= "crystalFilled" then out[k] = v end
   end
   return out
 end
@@ -653,6 +667,13 @@ function M.clearTimeLists(project, id, kind)
   for _, period in ipairs(Core.PERIODS) do
     changed = M.setTimeArea(project, id, period, kind, nil) or changed
   end
+  -- a table Encounter tables filled in, now back on its all-day list: it
+  -- isn't filled in again while Encounter tables stays on
+  if changed and kind == "land" then
+    for _, mark in pairs(((project.gen3DayNight or {}).crystalFilled) or {}) do
+      if mark.id == id then mark.cleared = true end
+    end
+  end
   return changed
 end
 
@@ -685,6 +706,214 @@ function M.compileEncounters(project)
   return out
 end
 
+-- Pokemon Crystal's encounters (GAME PATCHES > Encounter tables) -----------------
+
+--- Crystal's seven grass slots (30, 30, 20, 10, 5, 4, 1 %) spread over
+-- FireRed's twelve (20, 20, 10, 10, 10, 10, 5, 5, 4, 4, 1, 1 %) with the
+-- same chances: FireRed slot i shows Crystal slot CRYSTAL_SLOTS[i].
+M.CRYSTAL_SLOTS = { 1, 2, 1, 2, 3, 3, 4, 4, 5, 6, 5, 7 }
+
+--- Encounter tables (GAME PATCHES > Real time clock): a setting of the
+-- clock, so off while the clock is off, and turning the clock on turns
+-- them on too (M.setEnabled). While on, FireRed's own tables get Pokemon
+-- Crystal's morning / day / night lists as their own (M.populateCrystal);
+-- off, those come back out (M.unpopulateCrystal) and every table uses its
+-- all-day list. Lists you made yourself are kept either way.
+function M.encountersEnabled(project)
+  return M.enabled(project) and project.gen3DayNight.encountersOff ~= true
+end
+
+function M.setEncounters(project, on)
+  if on and not M.enabled(project) then return false end -- the clock comes first
+  if M.encountersEnabled(project) == (on == true) then return false end
+  local d = own(project)
+  d.encountersOff = (not on) or nil
+  d.crystal = nil -- an earlier switch, folded into this one
+  tidy(project)
+  return true
+end
+
+--- A table that keeps its all-day list at every time, whatever the time
+-- lists (yours or Crystal's) say.
+function M.isAllDay(project, id, kind)
+  local t = ((((project or {}).gen3DayNight or {}).allDay) or {})[id]
+  return t ~= nil and t[kind] == true
+end
+
+function M.setAllDay(project, id, kind, on)
+  if M.isAllDay(project, id, kind) == (on == true) then return false end
+  local d = own(project)
+  d.allDay = d.allDay or {}
+  d.allDay[id] = d.allDay[id] or {}
+  d.allDay[id][kind] = on == true or nil
+  tidy(project)
+  return true
+end
+
+--- Tables kept on their all-day list: { {id=, kind=}, ... }, sorted.
+function M.allDayList(project)
+  local out = {}
+  for id, kinds in pairs((((project or {}).gen3DayNight or {}).allDay) or {}) do
+    for kind in pairs(kinds) do out[#out + 1] = { id = id, kind = kind } end
+  end
+  table.sort(out, function(a, b) return a.id == b.id and a.kind < b.kind or a.id < b.id end)
+  return out
+end
+
+-- kept for older callers
+M.crystalEnabled = M.encountersEnabled
+M.setCrystal = M.setEncounters
+
+--- A FireRed land list from Crystal's seven { level, species } slots.
+function M.crystalArea(slots, rate)
+  local area = { rate = rate, slots = {} }
+  for i, k in ipairs(M.CRYSTAL_SLOTS) do
+    local c = slots[k]
+    area.slots[i] = { species = c[2], minLevel = c[1], maxLevel = c[1] }
+  end
+  return area
+end
+
+--- Where Crystal's lists go: FireRed's own tables, { {crystal=, id=}, ... },
+-- sorted. Maps added in a mod are never touched.
+function M.crystalTargets(project)
+  local C = require("Gen3CrystalEncounters")
+  local out = {}
+  for name, ids in pairs(C.kanto) do
+    for _, id in ipairs(ids) do out[#out + 1] = { crystal = name, id = id } end
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
+
+--- For the game: { [table id] = { [period] = { land = { slots } } } }. The
+-- tables keep their own encounter rate.
+function M.compileCrystal(project)
+  local C = require("Gen3CrystalEncounters")
+  local out = {}
+  for _, e in ipairs(M.crystalTargets(project)) do
+    local m = C.maps[e.crystal]
+    -- only tables the editor hasn't filled in yet (older projects); filled
+    -- ones have them as their own lists, cleared ones use the all-day list
+    if crystalMark(project, e.id) == nil then
+      out[e.id] = {}
+      for _, period in ipairs(Core.PERIODS) do
+        out[e.id][period] = { land = M.crystalArea(m[period], nil) }
+      end
+    end
+  end
+  return out
+end
+
+--- Crystal's lists for an encounter table the editor shows (matched by map
+-- group and number, like the game does), or nil: name, { [period] = area }.
+function M.crystalFor(S, id)
+  local C = require("Gen3CrystalEncounters")
+  local catalog = (S.data or {}).encounters or {}
+  local rec = catalog[id] or ((S.project or {}).encounters or {})[id]
+  for _, e in ipairs(M.crystalTargets(S.project)) do
+    local other = catalog[e.id]
+    if e.id == id or (rec and other and rec.mapGroup ~= nil and other.mapGroup == rec.mapGroup
+        and other.mapNum == rec.mapNum) then
+      local m = C.maps[e.crystal]
+      local lists = {}
+      for i, period in ipairs(Core.PERIODS) do
+        local base = rec and (rec.land or rec.grass)
+        lists[period] = M.crystalArea(m[period], (base and base.rate) or 21)
+      end
+      return e.crystal, lists
+    end
+  end
+end
+
+--- Is this table filled in with Crystal's lists by Encounter tables (and
+-- not put back on its all-day list since)?
+function M.isCrystalFilled(project, id)
+  for _, mark in pairs((((project or {}).gen3DayNight or {}).crystalFilled) or {}) do
+    if mark.id == id and not mark.cleared then return true end
+  end
+  return false
+end
+
+--- The id the Encounters list shows for one of Crystal's FireRed tables.
+function M.shownTableId(S, targetId)
+  local labels = require("Gen3Labels")
+  local ok, name = pcall(labels.map, targetId)
+  local shown = ok and labels.preferredEncounterIds((S.project or {}).encounters, (S.data or {}).encounters)[name]
+  return shown or targetId
+end
+
+--- Give Crystal's morning / day / night lists to FireRed's own tables that
+-- don't have lists of their own yet -- as that table's own lists, the same
+-- as if you'd made them yourself; no separate step to make them "yours".
+-- They go on the id the Encounters list shows. Needs S (each table's rate
+-- comes from the game's data). Returns how many tables were filled in.
+function M.populateCrystal(S)
+  local n = 0
+  for _, e in ipairs(M.crystalTargets(S.project)) do
+    if crystalMark(S.project, e.id) == nil then
+      local id = M.shownTableId(S, e.id)
+      if not M.hasTimeLists(S.project, id, "land") then
+        local _, lists = M.crystalFor(S, id)
+        if lists then
+          for _, period in ipairs(Core.PERIODS) do M.setTimeArea(S.project, id, period, "land", lists[period]) end
+          local d = own(S.project)
+          d.crystalFilled = d.crystalFilled or {}
+          d.crystalFilled[e.id] = { id = id }
+          n = n + 1
+        end
+      end
+    end
+  end
+  tidy(S.project)
+  return n
+end
+
+local function sameArea(a, b)
+  if not a or not b or #a.slots ~= #b.slots then return false end
+  for i, x in ipairs(a.slots) do
+    local y = b.slots[i]
+    if x.species ~= y.species or x.minLevel ~= y.minLevel or x.maxLevel ~= y.maxLevel then return false end
+  end
+  return true
+end
+
+--- Take Crystal's lists back out of the tables M.populateCrystal filled in,
+-- where they're still Crystal's. A filled-in table you've since edited is
+-- yours from then on and stays. Needs S. Returns how many were cleared.
+function M.unpopulateCrystal(S)
+  local project = S.project
+  local d = project.gen3DayNight
+  if not (d and d.crystalFilled) then return 0 end
+  local n = 0
+  local marks = d.crystalFilled
+  d.crystalFilled = nil
+  for _, mark in pairs(marks) do
+    if not mark.cleared then
+      local _, lists = M.crystalFor(S, mark.id)
+      local untouched = lists ~= nil
+      for _, period in ipairs(Core.PERIODS) do
+        if untouched and not sameArea(M.timeArea(project, mark.id, period, "land"), lists[period]) then untouched = false end
+      end
+      if untouched and M.clearTimeLists(project, mark.id, "land") then n = n + 1 end
+    end
+  end
+  tidy(project)
+  return n
+end
+
+--- Keep the stored tables matching the Encounter tables switch: Crystal's
+-- lists filled in while it's on, taken back out while it's off. Safe to
+-- call often -- does nothing once it's already in sync. Returns true when
+-- it changed something (worth a save).
+function M.syncCrystalPopulation(S)
+  if not S or not S.project then return false end
+  if M.encountersEnabled(S.project) then return M.populateCrystal(S) > 0 end
+  local had = ((S.project.gen3DayNight or {}).crystalFilled) ~= nil
+  M.unpopulateCrystal(S)
+  return had
+end
+
 -- In the game ------------------------------------------------------------------
 
 --- What the game needs, or nil when day and night is off.
@@ -697,7 +926,9 @@ function M.compile(project)
     morning = tonumber(s.morning), day = tonumber(s.day), night = tonumber(s.night),
     blend = tonumber(s.blend), morningTint = tostring(s.morningTint), nightTint = tostring(s.nightTint),
     testHour = tonumber(s.testHour), lit = lit, paint = M.compilePaint(project),
-    encounters = M.compileEncounters(project),
+    encounters = M.encountersEnabled(project) and M.compileEncounters(project) or {},
+    crystal = M.encountersEnabled(project) and M.compileCrystal(project) or nil,
+    allDay = M.encountersEnabled(project) and (((project.gen3DayNight or {}).allDay)) or nil,
   }
 end
 

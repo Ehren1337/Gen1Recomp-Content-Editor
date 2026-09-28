@@ -15,6 +15,29 @@ contains maps and tile sources, the center switches between **Terrain** and
 **Warps**. Existing maps are prepared for the 16×16 grid when selected; use
 **+ New Map** for a new layered map and **World View** for connected neighbors.
 
+## GUIDES tab
+
+The first tab. Step-by-step guides by topic -- Getting started, Gen 3
+features, Maps and events, Pokemon and data -- each a few numbered steps,
+most with **Take me there** (switches to the right tab and mode). Guides for
+FireRed / LeafGreen features say so, and only link there in a Gen 3 mod.
+Content is plain data in `Guides.lua`: add a guide as a table of steps.
+
+## Update editor
+
+**Updates** (top right) checks the editor's GitHub releases when the editor
+opens and on demand (`Updater.lua`, `panels/UpdatePopup.lua`). When a newer
+release is out the button says **Update to v0.1.x**: **Download update**
+fetches the portable pack for this system in the background; **Restart to
+update** saves, closes the editor, and a helper copies the new files in and
+opens it again. It never touches `mods/`, the ROM cache, saves or settings.
+A source checkout (a `.git` folder) is never overwritten -- it only says a
+new release is out. Downloads use the system's curl (Windows 10+, Linux,
+macOS) or PowerShell; files go in the save folder's `update/`. Each pack
+records its release in `content-editor-version.txt` (set by the package
+workflow). `POKEPORT_NO_UPDATE_CHECK=1` skips the check when the editor
+opens.
+
 ## Cutscene maker and viewer (Gen 3)
 
 **Playtest event** launches the linked Gen1Recomp game on the selected event's
@@ -261,11 +284,34 @@ Limits: tiles that no saved block uses aren't available; a behaviour change
 doesn't alter collision already baked into vanilla maps; palettes can't be
 edited yet. Tests: `tests/content-editor/run-block-checks.ps1 -Runtime <runtime>`.
 
+## GAME PATCHES (FireRed / LeafGreen)
+
+The **GAME PATCHES** tab (between CODE and MAPS) lists features a mod adds
+on top of the game; each patch has its own box, its sub settings share it
+with smaller switches, and **Description** explains it. Patches only change
+the base game; maps you add are set up with the editor's own tools.
+
+- **Clean Project** -- **Apply** (asks first, with a warning: only at the
+  start of a project; every change made so far is gone) wipes the open
+  project, saves it and reopens it with one blank starter map
+  (`FR_STARTER_MAP`, set as the start map in PLAYER). A new game starts
+  there with no story flags or variables; the intro only asks boy or girl
+  and the player's name (no professor, no rival -- `Gen3CleanIntro.lua`);
+  the title screen and menu are unchanged. FireRed's own maps and scripts
+  are hidden in the editor and can't be reached in game. **MAPS → Import
+  template map** copies a FireRed map's layout (tiles, collision, heights,
+  border) into a new map, never its events or story. Pokemon, moves, items,
+  types, tilesets, graphics and trainers stay.
+- **Real Time Clock** with **Encounter tables** -- see below.
+
 ## Gen 3 day and night (FireRed)
 
-**GFX → Day & night** turns on a Crystal-style clock: outdoor maps (map
-types Town, City, Route and Ocean route) follow the device's own time.
-Buildings, caves and battles look the same all day.
+The **GAME PATCHES** tab (between CODE and MAPS) switches the real time
+clock on or off; **GFX → Day & night** holds its settings. With it on, a
+Crystal-style clock runs: outdoor maps (map types Town, City, Route and
+Ocean route) follow the device's own time. Buildings, caves and battles
+look the same all day. Turning it off keeps every setting, night look and
+time-of-day encounter list for when it's turned on again.
 
 - **Parts of the day.** Morning, day and night start at the hours you set
   (Crystal's 4, 10 and 18 by default). A new part fades in over the fade
@@ -302,6 +348,35 @@ Buildings, caves and battles look the same all day.
   Crystal's grass). **Back to one all-day list** removes them. The Day &
   night tab lists them. They follow the same clock and test hour and only
   apply while day and night is on; with it off the all-day list is used.
+- **Encounter tables.** GAME PATCHES → Real time clock → **Encounter
+  tables**, a setting of the clock: Off while the clock is off, and turned
+  On when the clock is turned on. On: FireRed's own Kanto routes and caves
+  (31 tables, keeping their encounter rate) get Pokemon Crystal's morning /
+  day / night lists (`Gen3CrystalEncounters.lua`, from pret/pokecrystal, a
+  placeholder mix) straight away, as their own lists -- edit them in
+  Encounters like any other. Crystal's seven slots are spread over
+  FireRed's twelve with the same chances. Maps added in a mod are never
+  touched. Off: Crystal's lists come back out and every table uses its
+  all-day list; tables you've edited, and lists you made yourself, are
+  kept. **Back to one all-day list** or **Keep the all-day list at every
+  time** (Encounters → All day) takes one table out while the rest still
+  change.
+- **Telling the time in events.** The game action (special) **Read the
+  clock** (`0xE100`, `Gen3Clock.lua`) puts the day, date and time into
+  `{STR_VAR_1}` (Tuesday), `{STR_VAR_2}` (29 September) and `{STR_VAR_3}`
+  (10:42 PM) for dialogue after it, and numbers into the script's own
+  variables: `0x8004` day (0 Sunday - 6 Saturday), `0x8005` hour, `0x8006`
+  minute, `0x8007` part of the day (0 morning, 1 day, 2 night) for checks.
+  Same clock as the looks (device time; the test hour while the clock is on).
+  In the event window (and EVENTS > Map events), **Add action...** has
+  **Read the clock** (put at the top of the event) and **Check the time or
+  day...** (`Gen3ClockEvents.lua`): It's morning / day / night, a day of the
+  week, before or from an hour. A check is `compare_var_to_value` +
+  `goto_if` to its own `EditorBranch_*` event, which says its line and ends;
+  when it doesn't match the event carries on below, so several checks read
+  as "if ... else if ... otherwise". Pick an **If** line to change the check
+  or **Remove this check**. GUIDES > An NPC who tells the time walks through
+  it.
 - **Default night looks.** The editor ships night looks for FireRed's own
   outdoor blocks (455 blocks: windows, lamps, signs), in
   `Gen3DayNightDefaults.lua`. Turning day and night on in a project with no
@@ -545,6 +620,11 @@ The FireRed workspaces include:
   Existing partial Gen 3 edits migrate when these workspaces open. New records,
   edits, empty lists, and reverting edits are tested through the native loader.
   **Remove edit** restores the original record; it does not delete a ROM species/item.
+  New species are numbered from 440 up. They can be evolved into from the
+  start: FireRed's rule that evolutions into species above #151 wait for the
+  National Pokédex still applies to the game's own species, not to the mod's
+  new ones, and evolutions into a new species keep their target however the
+  game loads the records (`Gen3NewPokemon.lua`, run from main.lua).
 - **Trainers / AI:** the existing trainer browser, native portraits, six-member parties,
   held items and move pickers, battle items, double battles, and AI script flags.
 - **Encounters:** native grass, surf, Rock Smash, and fishing tables, with species

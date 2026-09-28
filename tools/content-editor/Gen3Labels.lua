@@ -8,6 +8,26 @@ function M.map(id)
   if g then id=require("src.import.gba.map_catalog").mapIdFor(g,n) or id end
   return tostring(id):gsub("^FR_",""):gsub("^SEVII_",""):gsub("_"," ")
 end
+--- Encounter tables: the game has several ids for one map (FR_ROUTE_1,
+-- ROUTE_1, "3:19"); the Encounters list shows one per map name. Returns
+-- { [name] = id }: a table the project has edited wins, then the last
+-- named (not "group:num") id.
+function M.preferredEncounterIds(projectTbl, dataTbl)
+  local seen, ids = {}, {}
+  for id in pairs(projectTbl or {}) do seen[id] = true; ids[#ids + 1] = id end
+  for id in pairs(dataTbl or {}) do if not seen[id] then ids[#ids + 1] = id end end
+  table.sort(ids)
+  local preferred = {}
+  for _, id in ipairs(ids) do
+    local ok, name = pcall(M.map, id)
+    name = ok and name or tostring(id)
+    local old = preferred[name]
+    if not old or (projectTbl or {})[id] or (not (projectTbl or {})[old] and not tostring(id):match("^%d+:")) then
+      preferred[name] = id
+    end
+  end
+  return preferred
+end
 function M.scriptMaps(S)
   local result={};local scripts=require("Gen3").catalog(S.data,"map_scripts")
   for map,rec in pairs(S.data.maps or {}) do

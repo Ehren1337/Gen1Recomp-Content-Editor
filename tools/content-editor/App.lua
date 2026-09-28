@@ -68,6 +68,8 @@ function App.session()
 end
 
 local TABS = {
+  { id = "guides",   label = "GUIDES",
+    tip = "Step-by-step guides: getting started, maps, events, Pokemon and Gen 3 features" },
   { id = "project",  label = "PROJECT",
     tip = "Create / open mod, boot & constants, validate / scan / playtest" },
   { id = "manifest", label = "MANIFEST",
@@ -76,6 +78,8 @@ local TABS = {
     tip = "Custom cart: pin local or published mods, preview the cartridge, pack a .g1rcart.\nGitHub/GameBanana are only needed if you turn ONLINE on to check the index." },
   { id = "code",     label = "CODE",
     tip = "Browse and edit Lua files under mods/" },
+  { id = "patches",  label = "GAME PATCHES",
+    tip = "Switch features this mod adds to the game on or off (FireRed: real time clock)" },
   { id = "maps",     label = "MAPS",
     tip = "Unified 16x16 terrain, events, encounters, and map settings" },
   { id = "encounters", label = "ENCOUNTERS",
@@ -118,9 +122,16 @@ local TABS = {
     tip = "Talk scripts, std/phone/scene scripts, flags, save-flag tester" },
 }
 
+--- Every tab {id, label}.
+function App.tabList()
+  local out = {}
+  for _, t in ipairs(TABS) do out[#out + 1] = { id = t.id, label = t.label } end
+  return out
+end
+
 local function activeTabs()
   if not require("Generation").isGen3(S) then return TABS end
-  local extra={trades=true,effects=true,rules=true,ai=true,breeding=true,shops=true,types=true,project=true,manifest=true,cart=true,code=true,player=true,ui=true,anims=true,audio=true,gfx=true}
+  local extra={trades=true,effects=true,rules=true,ai=true,breeding=true,shops=true,types=true,project=true,manifest=true,cart=true,code=true,patches=true,guides=true,player=true,ui=true,anims=true,audio=true,gfx=true}
   local result={}
   for _,tab in ipairs(TABS) do if extra[tab.id] or require("Gen3").tabs[tab.id] then result[#result+1]=tab end end
   return result
@@ -131,6 +142,8 @@ local PANELS = {
   manifest = Manifest,
   cart = Cart,
   code = Code,
+  patches = require("GamePatches"),
+  guides = require("GuidesPanel"),
   pokemon = Pokemon,
   breeding = Breeding,
   items = Items,
@@ -428,7 +441,20 @@ function App.load(modPath, opts)
   elseif not S.status or S.status == "Open or create a mod to begin" then
     say(status or "Create a mod or Open an existing mods/ folder")
   end
+  -- Update editor: say so after an update; one quiet check for a newer
+  -- release when the editor opens.
+  if not opts.eventWindow then
+    pcall(function()
+      local tag = require("Updater").justInstalled()
+      if tag then say("Updated to " .. require("Updater").short(tag) .. " -- your mods weren't touched") end
+    end)
+  end
+  if not opts.eventWindow and os.getenv("POKEPORT_NO_UPDATE_CHECK") ~= "1" then
+    pcall(function() require("Updater").check(true) end)
+  end
 end
+
+function App.hasUnsaved() return anyDirty(S) and true or false end
 
 function App.linkRecompFolder(path)
   if not path or path == "" then return false end
@@ -1445,6 +1471,8 @@ end
 
 function App.update(dt)
   if not S then return end
+  pcall(function() require("Updater").poll() end)
+  pcall(function() require("UpdatePopup").update(S) end)
   if require("Gen3EventWindow").update(S,App) then return end
   if S.g3AnimPreview then require("Gen3AnimPreview").update(S,dt) end
   if S.g3IntroPreview then require("Gen3IntroPreview").update(S,dt) end
@@ -1607,6 +1635,7 @@ function App.draw()
   local titleY = railH + 10 * s
   local btnH = 32 * s
   Kit.text("title", "CONTENT EDITOR", 20 * s, titleY, PAL.heading)
+  require("GuidesPanel").titleTag(20 * s + Kit.textWidth("title", "CONTENT EDITOR") + 12 * s, titleY + 4 * s)
   local chip = S.path and (S.path:match("[/\\]([^/\\]+)$") or S.path)
     or S.browseModId or "(no mod)"
   if anyDirty(S) then chip = chip .. " *" end
@@ -1633,6 +1662,16 @@ function App.draw()
       App.openMod(path)
     end, ModIO.modsRoot())
   end, true, "Open an existing mods/ folder")
+  do
+    local UpdatePopup = require("UpdatePopup")
+    local label, kind = UpdatePopup.label()
+    -- Downloaded: the button restarts straight away (no pop-up in between).
+    local staged = require("Updater").state.step == "staged"
+    rbtn(label, kind, function()
+      if staged then UpdatePopup.restart(S, App) else UpdatePopup.open(S) end
+    end, true, staged and "Close the editor, install the update and open it again (your mods aren't touched)"
+      or "Check for a newer Content Editor and install it (your mods aren't touched)")
+  end
 
   local tabY = railH + 70 * s
   local tabH = 36 * s
@@ -1718,13 +1757,14 @@ function App.draw()
   if ColorWheel.isOpen(S) or PaletteEdit.isOpen(S) or PalettePicker.isOpen(S)
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
       or ChoicePicker.isOpen(S)
-      or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker then
+      or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker
+      or S._updateOpen then
     Kit.blockClicks = true
   end
   RegList.clearNav(S)
   local panel = PANELS[S.tab]
   if require("Generation").isGen3(S) and S.tab ~= "project" and S.tab ~= "manifest"
-      and S.tab ~= "code" and S.tab ~= "cart" then
+      and S.tab ~= "code" and S.tab ~= "cart" and S.tab ~= "patches" and S.tab ~= "guides" then
     panel = (S.tab == "pokemon" or S.tab == "items" or S.tab == "moves" or S.tab == "trainers" or S.tab == "encounters" or S.tab == "dialog" or S.tab == "shops" or S.tab == "types" or S.tab == "breeding" or S.tab == "rules" or S.tab == "ai" or S.tab == "effects" or S.tab == "trades") and PANELS[S.tab]
       or S.tab == "events" and require("Gen3Events")
       or S.tab == "maps" and MapsWorkspace
@@ -1796,6 +1836,10 @@ function App.draw()
     Kit.blockClicks = false
     PaletteEdit.draw(S, 0, 0, W, H)
   end
+  if S._updateOpen then
+    Kit.blockClicks = false
+    require("UpdatePopup").draw(S, App, W, H)
+  end
 
   Kit.endFrame()
   wheelY = 0
@@ -1803,6 +1847,8 @@ end
 
 function App.keypressed(key)
   if not S then return end
+  local guideNote = require("GuidesPanel").keypressed(key)
+  if guideNote then say(guideNote) end
   if require("Gen3EventWindow").busy(S) then
     if S._eventWindow then S._eventWindow.process.focus() end
     return
@@ -1956,6 +2002,9 @@ function App.quit()
     S._quitArmed = true
     say("Unsaved changes — quit again to discard")
     return true
+  end
+  if require("Updater").state.step == "installing" then
+    pcall(function() require("Updater").log("editor closed") end)
   end
   return false
 end
