@@ -2,27 +2,37 @@
 local M={directions={"north","south","east","west"}}
 M.opposite={north="south",south="north",east="west",west="east"}
 M.alias={up="north",down="south",left="west",right="east"}
-function M.list(connections,dir)
-  local value=(connections or {})[dir]
-  if not value then
-    local rows={}
-    for _,c in ipairs(connections or {}) do
-      if (M.alias[c.dir] or c.dir)==dir then rows[#rows+1]=c end
-    end
-    return rows
-  end
-  if type(value)~="table" then return {{map=value,offset=0}} end
-  if value.map or value.mapId then return {value} end
-  return value
-end
-function M.each(connections)
-  local rows={}
+local cache=setmetatable({},{__mode="k"})
+local empty={}
+local function cached(connections)
+  if not connections then connections=empty end
+  local result=cache[connections]
+  if result then return result end
+  result={rows={}};cache[connections]=result
   for _,dir in ipairs(M.directions) do
-    for i,c in ipairs(M.list(connections,dir)) do rows[#rows+1]={dir,c,i} end
+    local value=connections[dir];local rows={}
+    if value then
+      if type(value)~="table" then rows[1]={map=value,offset=0}
+      elseif value.map or value.mapId then rows[1]=value
+      else rows=value end
+    else
+      for _,c in ipairs(connections) do
+        if (M.alias[c.dir] or c.dir)==dir then rows[#rows+1]=c end
+      end
+    end
+    result[dir]=rows
+    for i,c in ipairs(rows) do
+      local row={dir,c,i};result.rows[#result.rows+1]=row
+    end
   end
-  local i=0;return function() i=i+1;if rows[i] then return unpack(rows[i]) end end
+  return result
 end
+-- Cached arrays can be traversed with ipairs, including nested/early-exit loops.
+function M.list(connections,dir) return cached(connections)[dir] or empty end
+function M.each(connections) return cached(connections).rows end
+function M.invalidate(connections) if connections then cache[connections]=nil end end
 function M.put(connections,dir,rows)
+  M.invalidate(connections)
   connections[dir]=#rows==0 and nil or #rows==1 and rows[1] or rows
 end
 function M.copy(value)
@@ -63,7 +73,7 @@ function M.recover(maps,skip)
     for _,back in ipairs(M.list(dest and dest.connections,"east")) do if back.map==id and back.offset==-c.offset then found=true end end
     if not found then return end
   end
-  map.connections.west=rows
+  M.put(map.connections,"west",rows)
 end
 function M.landing(def,conn,dir,x,y)
   dir=M.alias[dir] or dir

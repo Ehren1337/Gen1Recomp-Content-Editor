@@ -741,6 +741,7 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
     backMap.connections = backMap.connections or {}
     local back = backMap.connections[opp]
     if back and connMapId(back, S) == fromId then
+      require("Gen3Connections").invalidate(backMap.connections)
       backMap.connections[opp] = nil
       if S.data and S.data.maps then S.data.maps[destId] = backMap end
       MapLoader.invalidate(destId)
@@ -750,13 +751,16 @@ local function applyConnectionEdit(S, fromId, dir, wantMap, wantOff, App, opts)
   wantOff = math.floor(tonumber(wantOff) or 0)
   if not wantMap or wantMap == "" then
     if prevMap then clearBack(prevMap) end
+    require("Gen3Connections").invalidate(from.connections)
     from.connections[dir] = nil
   else
     if prevMap and prevMap ~= wantMap then clearBack(prevMap) end
+    require("Gen3Connections").invalidate(from.connections)
     from.connections[dir] = makeConnection(wantMap, wantOff, prev)
     local dest = ensureOwned(S, wantMap)
     if dest and opp then
       dest.connections = dest.connections or {}
+      require("Gen3Connections").invalidate(dest.connections)
       dest.connections[opp] = makeConnection(fromId, -wantOff, dest.connections[opp])
       if S.data and S.data.maps then S.data.maps[wantMap] = dest end
       MapLoader.invalidate(wantMap)
@@ -3168,7 +3172,8 @@ end
 local function editorNeighbors(S, rootDef)
   local out = {}
   if not rootDef then return out end
-  for dir, conn in require("Gen3Connections").each(rootDef.connections) do
+  for _, row in ipairs(require("Gen3Connections").each(rootDef.connections)) do
+    local dir, conn = row[1], row[2]
     -- Gold stores the dest name in mapId; numeric map is the group index.
     local dest = connMapId(conn, S)
     local destDef = dest and resolveMapDef(S, dest)

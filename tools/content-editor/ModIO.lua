@@ -225,7 +225,7 @@ function ModIO.isValidId(id)
 end
 
 function ModIO.projectPath(modDir)
-  return join(modDir, "editor_project.lua")
+  return modDir:gsub("[/\\]+$", "") .. ".editor_project.lua"
 end
 
 function ModIO.exists(path)
@@ -351,6 +351,7 @@ end
 
 function ModIO.load(modDir)
   local path = ModIO.projectPath(modDir)
+  if not ModIO.exists(path) then path=join(modDir,"editor_project.lua") end
   if not ModIO.exists(path) then
     local id = modDir:match("[/\\]([^/\\]+)$") or "mod"
     local mf=Json.decode(ModIO.readText(join(modDir,"manifest.json")) or "{}")
@@ -361,7 +362,7 @@ function ModIO.load(modDir)
     if mainLooksHandWritten(modDir) then
       project._protectMain = true
       return project,
-        "hand-written main.lua detected — Save writes editor_project.lua + editor_apply.lua and leaves main.lua alone"
+        "hand-written main.lua detected — Save writes a sibling <mod>.editor_project.lua + editor_apply.lua and leaves main.lua alone"
     end
     return project, "no editor_project.lua; started empty project (Save regenerates main.lua)"
   end
@@ -511,6 +512,8 @@ function ModIO.save(modDir, project, version)
   os.remove(path)
   local ok, rerr = os.rename(tmp, path)
   if not ok then return false, tostring(rerr) end
+  -- Remove the legacy runtime copy only after the editable source is saved.
+  os.remove(join(modDir,"editor_project.lua"))
 
   -- Generated runtime payload. Hand-written main.lua stays untouched; it should
   -- load editor_apply.lua so editor edits still reach playtest.

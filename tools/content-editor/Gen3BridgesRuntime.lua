@@ -2,8 +2,18 @@ local M={}
 function M.install(mod)
   local Runtime=require("src.mods.Runtime");local Collision=require("src.core.game3.collision");local Player=require("src.core.game3.player")
   local function bridge(name,fn)
-    local key="editor.gen3.bridges."..name
-    if not Collision[key] then Collision[key]=true;local old=Collision[name];Collision[name]=function(...) return Runtime.call(key,old,...) end end
+    local key=name=="canEnter" and "editor.gen3.enter" or "editor.gen3.bridges."..name
+    if not Collision[key] then
+      Collision[key]=true
+      local old=Collision[name]
+      Collision[name]=function(...)
+        local def=Collision._mapDef
+        local bridges=def and def._editorBridges and next(def._editorBridges)
+        local falls=name=="canEnter" and Collision._editorHasFalls and Collision._editorHasFalls()
+        if not bridges and not falls then return old(...) end
+        return Runtime.call(key,old,...)
+      end
+    end
     mod.hooks:wrap(key,fn)
   end
   local function cell(x,y,def)
@@ -13,6 +23,8 @@ function M.install(mod)
   end
   local function upper(x,y,def) return Player.elevation==4 and cell(x,y,def)~=nil end
   bridge("canEnter",function(proceed,game,x,y,opts)
+    local def=Collision._mapDef
+    if not def or not def._editorBridges or not next(def._editorBridges) then return proceed(game,x,y,opts) end
     opts=opts or {};local fx,fy=opts.fromX or Player.cellX,opts.fromY or Player.cellY
     local from,to=cell(fx,fy),cell(x,y);local high=Player.elevation==4
     local dx,dy=x-fx,y-fy

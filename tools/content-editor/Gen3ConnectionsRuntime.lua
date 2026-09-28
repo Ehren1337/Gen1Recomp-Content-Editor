@@ -16,16 +16,19 @@ function M.install(mod,C,authored)
     elseif dir=="west" then return -dw,offset else return w,offset end
   end
   bridge(Map,"loadNeighborsDepth1",function(_,game,def)
-    local result={};local maps=game and game.data and game.data.maps or {}
-    for dir,c,i in C.each(def and def.connections) do
+    local result,list={},{};local maps=game and game.data and game.data.maps or {}
+    for _,row in ipairs(C.each(def and def.connections)) do
+      local dir,c,i=row[1],row[2],row[3]
       local id=c.map or c.mapId;local dest=maps[id]
       if dest then
         Map.ensureMidLayout(game,id,dest)
-        result[i==1 and dir or dir..":"..i]={dir=dir,map=id,mapId=id,def=dest,offset=c.offset or 0}
+        local ox,oy=delta(dir,c.offset or 0,def,dest)
+        local n={dir=dir,map=id,mapId=id,def=dest,offset=c.offset or 0,ox=ox,oy=oy}
+        result[i==1 and dir or dir..":"..i]=n;list[#list+1]=n
         Map._loadedLayouts[id]=true
       end
     end
-    Map.neighbors=result;return result
+    Map.neighbors=result;Map.neighborList=list;return result
   end)
   bridge(Map,"overscanSlices",function()
     local rows={};for key,n in pairs(Map.neighbors or {}) do rows[#rows+1]={dir=n.dir or key,mapId=n.map,offset=n.offset} end;return rows
@@ -36,7 +39,8 @@ function M.install(mod,C,authored)
     local rw,rh=size(root);local out,seen,queue={},{[rootId]=true},{{def=root,ox=0,oy=0,hops=0}};local index=1
     while queue[index] do
       local current=queue[index];index=index+1
-      for dir,c in C.each(current.def.connections) do
+      for _,row in ipairs(C.each(current.def.connections)) do
+        local dir,c=row[1],row[2]
         local id=c.map or c.mapId;local dest=maps[id]
         if dest and not seen[id] then
           ensure(id,dest);local dx,dy=delta(dir,c.offset or 0,current.def,dest)
@@ -51,21 +55,27 @@ function M.install(mod,C,authored)
     end
     return out
   end)
-  bridge(Map,"worldMidAt",function(proceed,x,y,def)
-    if not def or not def.midLayout then return proceed(x,y,def) end
-    local w,h=size(def)
-    if x>=0 and y>=0 and x<w and y<h then return proceed(x,y,def) end
-    -- Walk connections in authored order; gaps remain the primary border.
-    for dir,c in C.each(def.connections) do
-      for _,n in pairs(Map.neighbors or {}) do
-        if (n.dir==dir or not n.dir) and n.map==(c.map or c.mapId) and n.offset==(c.offset or 0) and n.def.midLayout then
-          local ox,oy=delta(dir,c.offset or 0,def,n.def);local l=n.def.midLayout;local nx,ny=x-ox,y-oy
-          if nx>=0 and ny>=0 and nx<l.width and ny<l.height then return l:midAt(nx,ny),l.pair or n.def.pair end
-        end
+  -- Cell sampling must not enter Runtime.call or allocate iterator closures.
+  Map.worldMidAt=function(x,y,def)
+    local l=def and def.midLayout
+    if not l then return 0,nil end
+    local pair=l.pair or def.pair
+    if x>=0 and y>=0 and x<l.width and y<l.height then return l:midAt(x,y),pair end
+    for _,n in ipairs(Map.neighborList or {}) do
+      local nl=n.def.midLayout;local nx,ny=x-n.ox,y-n.oy
+      if nl and nx>=0 and ny>=0 and nx<nl.width and ny<nl.height then
+        return nl:midAt(nx,ny),nl.pair or n.def.pair or pair
       end
     end
-    return proceed(x,y,def)
-  end)
+    for _,n in ipairs(Map.world or {}) do
+      local nl=n.def~=def and n.def and n.def.midLayout
+      local nx,ny=x-n.ox,y-n.oy
+      if nl and nx>=0 and ny>=0 and nx<nl.width and ny<nl.height then
+        return nl:midAt(nx,ny),nl.pair or n.def.pair or pair
+      end
+    end
+    return l:midAt(x,y),pair,true
+  end
   bridge(Collision,"connectionLanding",function(_,def,c,dir,x,y) return C.landing(def,c,dir,x,y) end)
   bridge(require("src.core.game3.itemfinder"),"scan",function(proceed,opts)
     if not opts.neighbors or not opts.eventsFor or not opts.width or not opts.height then return proceed(opts) end

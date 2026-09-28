@@ -9,7 +9,8 @@ function M.build(ids,resolve,destination,delta,root,mode)
   end
   for _,id in ipairs(ids) do
     local def=maps[id]
-    if def then for dir,c in C.each(def.connections) do
+    if def then for _,row in ipairs(C.each(def.connections)) do
+      local dir,c=row[1],row[2]
       local dest=destination(c)
       if dest then
         local e={from=id,to=dest,dir=dir,offset=c.offset or 0,ok=maps[dest]~=nil}

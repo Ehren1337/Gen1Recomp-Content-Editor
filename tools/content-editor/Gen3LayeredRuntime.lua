@@ -7,7 +7,6 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
     local T=require("src.core.game3.tileset_native")
     local Layout=require("src.core.game3.layout_native")
     local Interactions=require("src.core.game3.scripting.interaction_scripts")
-    local View=require("src.core.game3.field_view")
     local Runtime=require("src.mods.Runtime")
     local Collision=require("src.core.game3.collision")
     local okDoors,Doors=pcall(require,"src.core.game3.doors")
@@ -25,11 +24,10 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
         -- Compiled atlas IDs are unrelated to the ROM door manifest. Resolve
         -- the actual painted native tile, including moved and mixed-pair doors.
         local index=y*source.cellWidth+x+1
+        local refs=source.slotRefs and source.slotRefs[source.cellSlots[index]]
         local nativeRef,nativePair
-        for _,layer in ipairs(source.layers or {}) do
-          local ref=(layer.cells or {})[index]
-          local pair=ref and ref.source:match("^@runtime:(.+)$")
-          if layer.export~=false and pair then nativeRef,nativePair=ref,pair end
+        for _,ref in ipairs(refs or {}) do
+          if ref.pair and not ref.bridge then nativeRef,nativePair=ref,ref.pair end
         end
         if not nativeRef then return end
         local key="editor_door_"..mod.id.."_"..nativePair.."_"..nativeRef.tile
@@ -65,42 +63,35 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       end
     end)
     local built,images,sourceQuads={},{},{}
+    local Map=require("src.core.game3.map")
     local okAnim,NativeAnim=pcall(require,"src.core.game3.tileset_anim")
-    -- Palette writes mutate an existing texture, so identity alone is not a
-    -- sufficient cache key. ResetSlotPalette delegates to this same setter.
-    if T.setSlotPalette and not T._editorLayerPaletteWatch then
-      local setPalette=T.setSlotPalette
-      T.setSlotPalette=function(pairOrTs,...)
-        local result=setPalette(pairOrTs,...)
-        local ts=type(pairOrTs)=="table" and pairOrTs or T._pairs[pairOrTs]
-        if result and ts then ts._editorLayerRevision=(ts._editorLayerRevision or 0)+1 end
-        return result
-      end
-      T._editorLayerPaletteWatch=true
-    end
     local renderNative
     local frameClock=0
     local function frameFor(ref)
-      local pair=ref.source:match("^@runtime:(.+)$")
-      local source=layered.sources[ref.source]
-      local frames=pair and (layered.animations[pair] or {})[ref.tile] or source and (source.animations or {})[ref.tile]
-      if not frames or #frames==0 then return ref.tile end
-      local total=0;for _,f in ipairs(frames) do total=total+math.max(16,f.duration or 200) end
-      local clock=frameClock*1000%total
-      for _,f in ipairs(frames) do clock=clock-math.max(16,f.duration or 200);if clock<0 then return f.tile end end
+      if not ref.schedule then return ref.tile end
+      local clock=frameClock*1000%ref.duration
+      for _,f in ipairs(ref.schedule) do if clock<f.untilTime then return f.tile end end
       return ref.tile
+    end
+    local batches,order
+    local function queueDraw(image,quad,x,y,opacity)
+      local batch=batches[image]
+      if not batch then
+        batch=love.graphics.newSpriteBatch(image,64,"stream")
+        batches[image]=batch;order[#order+1]=batch
+      end
+      batch:setColor(1,1,1,opacity or 1);batch:add(quad,x,y)
     end
     local function drawRef(ref,x,y,over)
       if ref.bridge and not over then return end
-      local pair=ref.source:match("^@runtime:(.+)$")
-      local tile=frameFor(ref)
-      love.graphics.setColor(1,1,1,ref.opacity or 1)
+      local pair=ref.pair
+      local tile=ref.frame or ref.tile
       if pair then
         local ts=assert(renderNative[pair],"Missing native tileset "..pair)
         local image=ts.image
         if over and not ref.bridge then image=ts.overImage end
-        if image then love.graphics.draw(image,over and not ref.bridge and T.overQuad(ts,T.slotFor(ts,tile)) or T.quad(ts,T.slotFor(ts,tile)),x,y) end
-        if ref.bridge and ts.overImage then love.graphics.draw(ts.overImage,T.overQuad(ts,T.slotFor(ts,tile)),x,y) end
+        if image then queueDraw(image,over and not ref.bridge and T.overQuad(ts,T.slotFor(ts,tile)) or T.quad(ts,T.slotFor(ts,tile)),x,y,ref.opacity) end
+
       elseif not over or ref.bridge then
         local source=assert(layered.sources[ref.source],"Missing tile source "..ref.source)
         local image=images[ref.source]
@@ -129,68 +120,112 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
           quad=love.graphics.newQuad(tile%columns*16,math.floor(tile/columns)*16,16,16,image:getDimensions())
           quads[tile]=quad
         end
-        love.graphics.draw(image,quad,x,y)
+        queueDraw(image,quad,x,y,ref.opacity)
       end
     end
-    local function render(entry)
-      if not entry.dependencies then
-        entry.dependencies,entry.frameRefs,entry.resolved={},{},{}
-        for _,refs in ipairs(entry.slots) do
-          for _,ref in ipairs(refs) do
-            local pair=ref.source:match("^@runtime:(.+)$")
-            if pair then entry.dependencies[pair]=entry.dependencies[pair] or {} end
-            local source=layered.sources[ref.source]
-            local frames=pair and (layered.animations[pair] or {})[ref.tile]
-              or source and (source.animations or {})[ref.tile]
-            if frames and #frames>0 then entry.frameRefs[#entry.frameRefs+1]={ref=ref} end
+    local function prepare(entry)
+      entry.frameRefs,entry.resolved={},{}
+      entry.depth=0
+      for i,refs in ipairs(entry.slots) do
+        entry.depth=math.max(entry.depth,#refs)
+        for _,ref in ipairs(refs) do
+          ref.pair=ref.source:match("^@runtime:(.+)$")
+          local pair=ref.pair
+          if pair and not entry.resolved[pair] then
+            entry.resolved[pair]=assert(T.get(pair),"Missing native tileset "..pair)
+          end
+          local source=layered.sources[ref.source]
+          local frames=pair and (layered.animations[pair] or {})[ref.tile]
+            or source and (source.animations or {})[ref.tile]
+          if frames and #frames>0 then
+            ref.schedule={};ref.duration=0
+            for _,f in ipairs(frames) do
+              ref.duration=ref.duration+math.max(16,f.duration or 200)
+              ref.schedule[#ref.schedule+1]={tile=f.tile,untilTime=ref.duration}
+            end
+          end
+          local anim=pair and okAnim and NativeAnim._pairs and NativeAnim._pairs[pair]
+          if anim then
+            for kind,bank in pairs(anim.banks or {}) do
+              for _,mid in ipairs(bank.mids or {}) do
+                if mid==ref.tile then ref.kind=kind;ref.nativeFrame=anim.frames[kind];break end
+              end
+            end
+          end
+          ref.frame=frameFor(ref)
+          if ref.schedule or ref.kind then
+            entry.frameRefs[#entry.frameRefs+1]={ref=ref,slot=i}
           end
         end
       end
-      local changed=not entry.rendered
-      for pair,previous in pairs(entry.dependencies) do
-        -- Resolve/bind once per source, rather than once per tile and layer.
-        local ts=assert(T.get(pair),"Missing native tileset "..pair)
-        entry.resolved[pair]=ts
-        local anim=okAnim and NativeAnim._pairs and NativeAnim._pairs[pair]
-        local frames=anim and anim.frames or {}
-        if previous.ts~=ts or previous.image~=ts.image or previous.over~=ts.overImage
-          or previous.revision~=ts._editorLayerRevision
-          or previous.water~=frames.water or previous.sand~=frames.sand
-          or previous.flower~=frames.flower or not okAnim then changed=true end
-        previous.ts,previous.image,previous.over=ts,ts.image,ts.overImage
-        previous.revision=ts._editorLayerRevision
-        previous.water,previous.sand,previous.flower=frames.water,frames.sand,frames.flower
-      end
-      for _,state in ipairs(entry.frameRefs) do
-        local frame=frameFor(state.ref)
-        if state.frame~=frame then changed=true;state.frame=frame end
-      end
-      if not changed then return false end
-      entry.rendered=false
+    end
+    local function render(entry,dirty)
       renderNative=entry.resolved
       love.graphics.push("all")
       local ok,err=pcall(function()
-      for _,over in ipairs({false,true}) do
-        love.graphics.setCanvas(over and entry.ts.overImage or entry.ts.image)
-        love.graphics.clear(0,0,0,0);love.graphics.origin()
-        for i,refs in ipairs(entry.slots) do
-          local x,y=(i-1)%entry.ts.cols*16,math.floor((i-1)/entry.ts.cols)*16
-          for _,ref in ipairs(refs) do drawRef(ref,x,y,over) end
+        love.graphics.origin();love.graphics.setScissor();love.graphics.setColor(1,1,1,1)
+        for pass=1,2 do
+          local over=pass==2
+          love.graphics.setCanvas(over and entry.ts.overImage or entry.ts.image)
+          if not dirty then love.graphics.clear(0,0,0,0)
+          else
+            for i in pairs(dirty) do
+              love.graphics.setScissor((i-1)%entry.ts.cols*16,math.floor((i-1)/entry.ts.cols)*16,16,16)
+              love.graphics.clear(0,0,0,0)
+            end
+            love.graphics.setScissor()
+          end
+          -- Different slots never overlap. Group each layer by texture, retaining
+          -- layer order and the separate bridge overlay pass for alpha blending.
+          for depth=1,entry.depth do
+            batches,order={},{}
+            for i,refs in ipairs(entry.slots) do
+              if not dirty or dirty[i] then
+                local ref=refs[depth]
+                if ref then drawRef(ref,(i-1)%entry.ts.cols*16,math.floor((i-1)/entry.ts.cols)*16,over) end
+              end
+            end
+            for _,batch in ipairs(order) do love.graphics.draw(batch);batch:release() end
+            if over then
+              batches,order={},{}
+              for i,refs in ipairs(entry.slots) do
+                local ref=refs[depth]
+                if (not dirty or dirty[i]) and ref and ref.bridge and ref.pair then
+                  local ts=renderNative[ref.pair]
+                  if ts.overImage then queueDraw(ts.overImage,T.overQuad(ts,T.slotFor(ts,ref.frame)),
+                    (i-1)%entry.ts.cols*16,math.floor((i-1)/entry.ts.cols)*16,ref.opacity) end
+                end
+              end
+              for _,batch in ipairs(order) do love.graphics.draw(batch);batch:release() end
+            end
+          end
+        end
+      end)
+      love.graphics.pop();renderNative=nil;batches,order=nil,nil
+      if not ok then error(err) end
+    end
+    local function animate(entry)
+      if #entry.frameRefs==0 then return end
+      local dirty
+      for _,state in ipairs(entry.frameRefs) do
+        local ref=state.ref;local frame=frameFor(ref)
+        local anim=ref.pair and NativeAnim._pairs and NativeAnim._pairs[ref.pair]
+        local nativeFrame=ref.kind and anim and anim.frames[ref.kind]
+        if frame~=ref.frame or nativeFrame~=ref.nativeFrame then
+          dirty=dirty or {};dirty[state.slot]=true
+          ref.frame,ref.nativeFrame=frame,nativeFrame
+          if ref.pair then entry.resolved[ref.pair]=T._pairs[ref.pair] or entry.resolved[ref.pair] end
         end
       end
-      end)
-      love.graphics.pop()
-      renderNative=nil
-      if not ok then error(err) end
-      entry.rendered=true
-      return true
+      if dirty then render(entry,dirty) end
     end
     -- One map that can't be built must not leave the rest unbuilt (which
     -- ones come after it depends on table order, so it differs between
     -- devices).
     local function build(id,source)
       local map=assert(ctx.game.data.maps[id],"Missing map "..id)
-      local slots,seen,cells,behaviors={},{},{},{}
+      local slots,seen,cells,behaviors,cellSlots={},{},{},{},{}
+      local hasFalls=false
       local width,height=source.cellWidth,source.cellHeight
       for index=1,width*height do
         local refs,key={},{}
@@ -228,11 +263,13 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
         if not preserve and not (original==nil and mode=="walk" and nativeWarp) then
           behavior=value[2]
         end
+        if behavior==0x13 then hasFalls=true end
         key[#key+1]=tostring(behavior);local signature=table.concat(key,"|")
         local mid=seen[signature]
         if mid==nil then mid=#slots;seen[signature]=mid;slots[#slots+1]=refs;behaviors[mid]=behavior end
         -- New surf tiles must connect to native water at elevation 0/1.
         -- Preserve explicit elevations (bridges included); only default new water.
+        cellSlots[index]=mid+1
         cells[index]={mid=mid,coll=coll,elev=(source.gen3Elevation or {})[index] or (mode=="water" and 0 or 3)}
       end
       local border=source.gen3Border or {width=1,height=1,mids={0}}
@@ -248,9 +285,11 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       ts.image:setFilter("nearest","nearest");ts.overImage:setFilter("nearest","nearest")
       for i=0,#slots-1 do ts.midToSlot[i]=i end
       local pair="editor_"..mod.id.."_"..id
-      local entry={ts=ts,slots=slots};render(entry);built[id]=entry
+      local entry={ts=ts,slots=slots};prepare(entry);render(entry);built[id]=entry
+      layered.maps[id]={cellWidth=width,cellHeight=height,slotRefs=slots,cellSlots=cellSlots}
       T._pairs[pair]=ts;Interactions.behaviors[pair]=behaviors
       map.pair=pair;map.width=width;map.height=height
+      map._editorHasWaterfalls=hasFalls
       map._editorBridges=source.gen3Bridges
       map.midLayout=Layout.fromDecoded({width=width,height=height,cells=cells,
         borderWidth=border.width,borderHeight=border.height,borderMids=borderMids},id,pair)
@@ -259,30 +298,41 @@ return "  local collisionModes="..encode(C.modes).."\n  local paintedCollision="
       local ok,err=pcall(build,id,source)
       if not ok then print("[editor layers] map "..tostring(id).." not built: "..tostring(err)) end
     end
-    if not View._editorLayerDispatch then
-      View._editorLayerDispatch=true
-      local draw=View.draw
-      View.draw=function(...) return Runtime.call("editor.gen3.layers.draw",draw,...) end
-    end
-    local last=0
-    mod.hooks:wrap("editor.gen3.layers.draw",function(proceed,game,...)
-      local now=love.timer.getTime()
-      if now-last>=1/30 then
-        last=now
-        frameClock=now
-        local Map=require("src.core.game3.map")
-        local visible={}
-        if Map.current then visible[Map.current]=true end
-        for _,neighbor in pairs(Map.neighbors or {}) do visible[neighbor.map or neighbor.mapId]=true end
-        for _,neighbor in ipairs(Map.world or {}) do visible[neighbor.id]=true end
-        for id in pairs(visible) do
-          local entry=built[id]
-          -- Batch geometry and texture identity have not changed. Updating
-          -- atlas pixels must not force the visible map tiles to be rebuilt.
-          if entry then render(entry) end
+    -- The native animation step owns the clock. No draw hook, wall-clock poll,
+    -- visible-set allocation or pair rebinding is needed.
+    if okAnim and NativeAnim.step then
+      local step=NativeAnim.step
+      local function activate(entry)
+        if not entry then return end
+        for _,state in ipairs(entry.frameRefs) do
+          local ref=state.ref
+          if ref.kind then NativeAnim._visible[ref.pair]=true end
         end
       end
-      return proceed(game,...)
-    end)
+      NativeAnim.step=function(...)
+        activate(built[Map.current])
+        for _,n in ipairs(Map.neighborList or {}) do activate(built[n.map or n.mapId]) end
+        for _,n in ipairs(Map.world or {}) do activate(built[n.id]) end
+        local before=NativeAnim.counter
+        local result=step(...)
+        if NativeAnim.counter==before then return result end
+        frameClock=frameClock+1/60
+        local current=built[Map.current]
+        if current then animate(current) end
+        for _,n in ipairs(Map.neighborList or {}) do
+          local entry=built[n.map or n.mapId]
+          if entry and entry~=current and entry.lastStep~=frameClock then
+            entry.lastStep=frameClock;animate(entry)
+          end
+        end
+        for _,n in ipairs(Map.world or {}) do
+          local entry=built[n.id]
+          if entry and entry~=current and entry.lastStep~=frameClock then
+            entry.lastStep=frameClock;animate(entry)
+          end
+        end
+        return result
+      end
+    end
   end,-100)
 ]=]

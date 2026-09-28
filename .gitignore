@@ -84,3 +84,5 @@ tests/content-editor/leafgreen-smoke/*.png
 /tests/content-editor/blocks-smoke/*.png
 /tests/content-editor/blocks-smoke/result.txt
 /tests/content-editor/blocks-smoke/project/
+/tests/content-editor/*-smoke/*.editor_project.lua
+/tests/content-editor/layer-performance-smoke/result.txt

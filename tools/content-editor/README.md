@@ -5,7 +5,7 @@ Pokémon, and simple quest scripts.
 
 The contextual **Maps** workspace provides standalone 16×16 layered map authoring,
 custom PNG tilesets, collision, animations, safe resizing, and guided warps.
-Editable layers stay in `editor_project.lua`; Save generates the normal map
+Editable layers stay in `<mod>.editor_project.lua` beside the runtime mod folder; Save generates the normal map
 and tileset records plus a legal asset-transform recipe inside the same
 shareable mod.
 
@@ -689,7 +689,9 @@ The FireRed workspaces include:
 
 Most forms commit edits immediately; use **Apply animation** and **Apply rules**
 for animation/starter drafts before switching selections, then **Save**.
-Applied edits participate in undo/redo and persist in `editor_project.lua`.
+Applied edits participate in undo/redo and persist in `<mod>.editor_project.lua` beside the mod folder.
+Existing in-folder projects remain readable and migrate on Save. Keep the sibling
+source file when backing up editable projects; distribute only the runtime mod folder.
 Structured fields are the default; record forms also offer a Lua-value view.
 Empty event lists are exported as empty lists instead of silently preserving
 the original events.

@@ -139,7 +139,7 @@ function Project.draw(S, x, y, w, h, App)
   end
   cy = cy + btnH + 10 * s
 
-  Kit.text("micro", "Creates mods/<id>/ with manifest, editor_project.lua, main.lua",
+  Kit.text("micro", "Creates mods/<id>/ with manifest and main.lua; editable source beside the mod folder",
     innerX, cy, PAL.muted)
   cy = cy + 14 * s + 16 * s
 
@@ -364,7 +364,7 @@ function Project.draw(S, x, y, w, h, App)
     count(p.pokemon), count(p.items), count(p.maps), count(p.tilesets)),
     x + 20 * s, row + 52 * s, PAL.text)
   Kit.text("micro",
-    "Save writes editor_project.lua + main.lua (or editor_apply.lua if main.lua is hand-written).",
+    "Save writes <mod>.editor_project.lua beside the mod folder + main.lua (or editor_apply.lua if main.lua is hand-written).",
     x + 20 * s, row + 78 * s, PAL.muted)
   local actionGap = 10 * s
   local actionW = math.floor((w - 40 * s - 2 * actionGap) / 3)

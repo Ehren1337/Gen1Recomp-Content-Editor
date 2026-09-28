@@ -60,6 +60,8 @@ return function(data,root,mount,game)
   local IO=require("ModIO");S.path=root.."/tests/content-editor/connections-smoke/project";IO.ensureDirectory(S.path)
   assert(IO.writeText(S.path.."/manifest.json",'{"id":"connections_test","name":"Connections test","version":"1.0.0","entry":"main.lua","games":["'..game..'"]}'))
   assert(require("LayeredMap").compileProject(S));assert(IO.save(S.path,S.project))
+  assert(IO.exists(IO.projectPath(S.path)),"Editable source was not saved beside mod")
+  assert(not IO.exists(S.path.."/editor_project.lua"),"Runtime mod still contains editable source")
   local reopened=assert(IO.load(S.path));assert(#C.list(reopened.maps[id].connections,"west")==3)
   assert(mount(S.path,"mods/connections_test",1)~=0)
   local fresh={};require("Gen3").load(fresh,data._gen3Read)
@@ -70,6 +72,12 @@ return function(data,root,mount,game)
   assert(#C.list(fresh.maps[id].connections,"west")==3,"Export lost connections")
   local Map=require("src.core.game3.map");local Collision=require("src.core.game3.collision")
   Map.loadNeighborsDepth1({data=fresh},fresh.maps[id]);assert(#Map.overscanSlices()==3)
+  assert(#Map.neighborList==3 and Map.neighborList[2].ox,"Native neighbor list/offsets missing")
+  local runtime=require("src.mods.Runtime");local nativeCall=runtime.call
+  runtime.call=function() error("worldMidAt entered hook bus") end
+  Map.worldMidAt(0,0,fresh.maps[id]);Map.worldMidAt(-1,40,fresh.maps[id])
+  runtime.call=nativeCall
+  assert(C.each(fresh.maps[id].connections)==C.each(fresh.maps[id].connections),"Connection rows not cached")
   local world=Map.computeWorld(fresh.maps,id,1,nil,nil,function(key,def) Map.ensureMidLayout({data=fresh},key,def) end)
   assert(#world==3,"Runtime world dropped a west neighbor")
   for _,row in ipairs(C.list(fresh.maps[id].connections,"west")) do
@@ -116,6 +124,8 @@ return function(data,root,mount,game)
     assert(not Collision.tryConnection(g,horizontal and (dir=="west" and 0 or 9) or 4,horizontal and 4 or (dir=="north" and 0 or 9),move,false),"Blocked destination was entered")
   end
   Map.load=nativeLoad
+  Map.loadNeighborsDepth1({data={maps={}}},def("EMPTY",2,2,0))
+  assert(#Map.neighborList==0 and next(Map.neighbors)==nil,"Previous map neighbors survived load")
   -- Reopening must not recreate a deliberately removed connection.
   E.edit(S,id,"west",3,nil,40);G.prepare(S)
   assert(#C.list(S.project.maps[id].connections,"west")==2)

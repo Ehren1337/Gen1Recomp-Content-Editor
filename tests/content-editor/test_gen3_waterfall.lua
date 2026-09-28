@@ -121,5 +121,13 @@ love={filesystem={read=function(path) local f=assert(io.open(path,"rb"));local s
 local exported=require("Gen3").emit({gen3Layered={TEST={collision={"waterfall"}}}},encode)
 assert(exported:find("editor.gen3.waterfall.tick",1,true),"Waterfall runtime missing from export")
 assert(loadstring(exported),"Invalid exported mod Lua")
+-- Maps known to have no falls bypass both the hook bus and behavior probing.
+map._editorHasWaterfalls=false;Field._waterfall=nil
+local runtime=package.loaded["src.mods.Runtime"];local call=runtime.call
+local behavior=Collision.behavior
+runtime.call=function(key,fn,...) assert(not key:find("editor.gen3.waterfall",1,true),"Empty map used waterfall hook bus");return call(key,fn,...) end
+Collision.behavior=function() error("Empty-map waterfall tick probed behavior") end
+Field.updateWaterfall(nil)
+Collision.behavior=behavior;runtime.call=call
 print("PASS: real player stays surfing; uphill blocked; automatic descent without move; slow ride and repeating sound")
 

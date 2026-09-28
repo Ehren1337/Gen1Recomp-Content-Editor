@@ -787,9 +787,9 @@ function App.save()
     end
     if err == "kept-main" then
       say("Saved " .. S.path
-        .. " (editor_project.lua + editor_apply.lua; left hand-written main.lua)")
+        .. " (<mod>.editor_project.lua beside the mod folder + editor_apply.lua; left hand-written main.lua)")
     else
-      say("Saved " .. S.path .. " (editor_project.lua + main.lua)")
+      say("Saved " .. S.path .. " (<mod>.editor_project.lua beside the mod folder + main.lua)")
     end
     return true
   else
@@ -1652,7 +1652,7 @@ function App.draw()
   rbtn("Close", "ghost", function() App.close() end, true,
     "Quit the content editor (Esc)")
   rbtn("Save", "primary", function() App.save() end, true,
-    "Write editor_project.lua + main.lua (or editor_apply.lua) (Ctrl+S)")
+    "Write <mod>.editor_project.lua beside the mod folder + main.lua (or editor_apply.lua) (Ctrl+S)")
   rbtn("Redo", "ghost", function() App.redo() end, History.canRedo(S),
     "Redo (Ctrl+Y)")
   rbtn("Undo", "ghost", function() App.undo() end, History.canUndo(S),

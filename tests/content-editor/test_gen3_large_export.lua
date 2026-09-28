@@ -12,7 +12,7 @@ end
 local entry=assert(loadstring(G.emit(large,Writer.encodeLua)))()
 entry({generation=2})
 local layered
-entry({generation=3,events={on=function(_,name,callback)
+entry({generation=3,hooks={wrap=function() end},events={on=function(_,name,callback)
   if name=="game.ready" then
     for i=1,100 do
       local key,value=debug.getupvalue(callback,i)

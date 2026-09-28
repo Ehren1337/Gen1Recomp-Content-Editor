@@ -47,7 +47,7 @@ Then on **Project** → **GAME DATA**:
 **Project** → Open `mods/New_PokemonTest`, or **Create** a new mod. Use
 **Maps** to select an existing map or create a custom map, then **Save**.
 
-Save writes editable layers to `mods/<id>/editor_project.lua`, the runtime
+Save writes editable layers to `mods/<id>.editor_project.lua`, the runtime
 records to `main.lua`, and a transform recipe that derives flattened map art
 from each player's own imported cache on first load.
 
