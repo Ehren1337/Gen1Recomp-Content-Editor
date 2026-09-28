@@ -620,6 +620,11 @@ The FireRed workspaces include:
   Existing partial Gen 3 edits migrate when these workspaces open. New records,
   edits, empty lists, and reverting edits are tested through the native loader.
   **Remove edit** restores the original record; it does not delete a ROM species/item.
+  New species are numbered from 440 up. They can be evolved into from the
+  start: FireRed's rule that evolutions into species above #151 wait for the
+  National Pokédex still applies to the game's own species, not to the mod's
+  new ones, and evolutions into a new species keep their target however the
+  game loads the records (`Gen3NewPokemon.lua`, run from main.lua).
 - **Trainers / AI:** the existing trainer browser, native portraits, six-member parties,
   held items and move pickers, battle items, double battles, and AI script flags.
 - **Encounters:** native grass, surf, Rock Smash, and fishing tables, with species
