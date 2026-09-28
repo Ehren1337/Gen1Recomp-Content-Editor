@@ -71,7 +71,10 @@ local common={[0]="Give an item with a message",[1]="Pick up an item",[2]="Show 
 -- FireRed data/specials.inc: zero-based entry 32 is EnterColosseumPlayerSpot.
 -- src/cable_club.c uses 0x8004 for format and 0x8005 for the player's spot.
 M.specials[32]="Start a multiplayer battle at the Colosseum"
+-- Gen3Clock: added to the game by the mod, not the ROM.
+M.specials[0xE100]="Read the clock (day, date and time)"
 M.specialHelp={
+  [0xE100]="Reads the real time clock. Dialogue after it can say {STR_VAR_1} (the day, e.g. Tuesday), {STR_VAR_2} (the date, e.g. 29 September) and {STR_VAR_3} (the time, e.g. 10:42 PM). It also saves numbers to check: 0x8004 the day (0 Sunday to 6 Saturday), 0x8005 the hour (0-23), 0x8006 the minute, 0x8007 the part of the day (0 morning, 1 day, 2 night).",
   [32]="Wait for the other players, then start a Colosseum battle. The current game skips this action; settings are saved but multiplayer battles are not supported yet.",
 }
 M.options={special=M.specials,common=common,

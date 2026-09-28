@@ -76,7 +76,9 @@ function M.drawText(S,key,step,x,y,w,changed)
   y=y+38*s
   local value=table.concat(draft.lines,"\n")
   K.text("small","{PLAYER} = player name",x,y,require("Theme").PAL.text);y=y+23*s
-  K.text("small","{RIVAL} = rival name",x,y,require("Theme").PAL.text);y=y+28*s
+  K.text("small","{RIVAL} = rival name",x,y,require("Theme").PAL.text);y=y+23*s
+  K.text("small","After Read the clock: {STR_VAR_1} = day, {STR_VAR_2} = date, {STR_VAR_3} = time",x,y,require("Theme").PAL.text);y=y+23*s
+  K.text("small","An empty line starts a new text box",x,y,require("Theme").PAL.text);y=y+28*s
   if K.button(x,y,130*s,28*s,"Apply text",{kind="good",enabled=value~=text}) and value~=text then
     A.setText(S,step,value);S._g3MessageDraft=nil;changed()
   end

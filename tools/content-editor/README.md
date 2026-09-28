@@ -15,6 +15,29 @@ contains maps and tile sources, the center switches between **Terrain** and
 **Warps**. Existing maps are prepared for the 16×16 grid when selected; use
 **+ New Map** for a new layered map and **World View** for connected neighbors.
 
+## GUIDES tab
+
+The first tab. Step-by-step guides by topic -- Getting started, Gen 3
+features, Maps and events, Pokemon and data -- each a few numbered steps,
+most with **Take me there** (switches to the right tab and mode). Guides for
+FireRed / LeafGreen features say so, and only link there in a Gen 3 mod.
+Content is plain data in `Guides.lua`: add a guide as a table of steps.
+
+## Update editor
+
+**Updates** (top right) checks the editor's GitHub releases when the editor
+opens and on demand (`Updater.lua`, `panels/UpdatePopup.lua`). When a newer
+release is out the button says **Update to v0.1.x**: **Download update**
+fetches the portable pack for this system in the background; **Restart to
+update** saves, closes the editor, and a helper copies the new files in and
+opens it again. It never touches `mods/`, the ROM cache, saves or settings.
+A source checkout (a `.git` folder) is never overwritten -- it only says a
+new release is out. Downloads use the system's curl (Windows 10+, Linux,
+macOS) or PowerShell; files go in the save folder's `update/`. Each pack
+records its release in `content-editor-version.txt` (set by the package
+workflow). `POKEPORT_NO_UPDATE_CHECK=1` skips the check when the editor
+opens.
+
 ## Cutscene maker and viewer (Gen 3)
 
 **Playtest event** launches the linked Gen1Recomp game on the selected event's
@@ -326,17 +349,34 @@ time-of-day encounter list for when it's turned on again.
   night tab lists them. They follow the same clock and test hour and only
   apply while day and night is on; with it off the all-day list is used.
 - **Encounter tables.** GAME PATCHES → Real time clock → **Encounter
-  tables** (its own On / Off; on unless turned off, so it comes on with the
-  clock). On: each table changes with the time of day -- your own
-  morning / day / night lists first, else Pokemon Crystal's lists
-  (`Gen3CrystalEncounters.lua`, Kanto, from pret/pokecrystal) as a placeholder mix.
-  Crystal's seven slots are spread over FireRed's twelve with the same
-  chances. Only FireRed's own tables are used: Kanto's routes and caves
-  (31 tables, keeping their encounter rate); maps added in a mod are never
-  touched. Off: every table uses its all-day list; your lists are
-  kept. In Encounters → All day, **Keep the all-day list at every time**
-  keeps one table on its all-day list while the rest still change; Morning
-  / Day / Night shows Crystal's list with **Edit a copy of Crystal's lists**.
+  tables**, a setting of the clock: Off while the clock is off, and turned
+  On when the clock is turned on. On: FireRed's own Kanto routes and caves
+  (31 tables, keeping their encounter rate) get Pokemon Crystal's morning /
+  day / night lists (`Gen3CrystalEncounters.lua`, from pret/pokecrystal, a
+  placeholder mix) straight away, as their own lists -- edit them in
+  Encounters like any other. Crystal's seven slots are spread over
+  FireRed's twelve with the same chances. Maps added in a mod are never
+  touched. Off: Crystal's lists come back out and every table uses its
+  all-day list; tables you've edited, and lists you made yourself, are
+  kept. **Back to one all-day list** or **Keep the all-day list at every
+  time** (Encounters → All day) takes one table out while the rest still
+  change.
+- **Telling the time in events.** The game action (special) **Read the
+  clock** (`0xE100`, `Gen3Clock.lua`) puts the day, date and time into
+  `{STR_VAR_1}` (Tuesday), `{STR_VAR_2}` (29 September) and `{STR_VAR_3}`
+  (10:42 PM) for dialogue after it, and numbers into the script's own
+  variables: `0x8004` day (0 Sunday - 6 Saturday), `0x8005` hour, `0x8006`
+  minute, `0x8007` part of the day (0 morning, 1 day, 2 night) for checks.
+  Same clock as the looks (device time; the test hour while the clock is on).
+  In the event window (and EVENTS > Map events), **Add action...** has
+  **Read the clock** (put at the top of the event) and **Check the time or
+  day...** (`Gen3ClockEvents.lua`): It's morning / day / night, a day of the
+  week, before or from an hour. A check is `compare_var_to_value` +
+  `goto_if` to its own `EditorBranch_*` event, which says its line and ends;
+  when it doesn't match the event carries on below, so several checks read
+  as "if ... else if ... otherwise". Pick an **If** line to change the check
+  or **Remove this check**. GUIDES > An NPC who tells the time walks through
+  it.
 - **Default night looks.** The editor ships night looks for FireRed's own
   outdoor blocks (455 blocks: windows, lamps, signs), in
   `Gen3DayNightDefaults.lua`. Turning day and night on in a project with no

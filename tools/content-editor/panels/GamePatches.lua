@@ -34,7 +34,7 @@ local function clockText(S)
     ("%d blocks have a night look: lit windows, lamps and signs."):format(#DN.paintedBlocks(S.project)),
     DN.encountersEnabled(S.project) and "Wild encounters change with the time of day (Encounter tables)."
       or "Wild encounters use the all-day lists (Encounter tables is off).",
-    "Turning it off keeps every setting, night look and encounter list for when it's turned on again.",
+    "Turning it off keeps every setting and night look for when it's turned on again. Encounter tables go off with it, and on again with it.",
     on and "It is on." or "It is off: the game has no clock.",
   }
   if cfg.testHour then
@@ -45,19 +45,11 @@ end
 
 local function encounterText(S)
   local DN = require("Gen3DayNight")
-  local base = #DN.crystalTargets(S.project)
-  local own = {}
-  for _, e in ipairs(DN.timeTables(S.project)) do own[e.id .. "|" .. e.kind] = true end
-  local nOwn = 0
-  for _ in pairs(own) do nOwn = nOwn + 1 end
   local lines = {
-    "On: wild encounters change with the time of day. For each table, in order:",
-    ("1. Your own morning / day / night lists (%d table%s)."):format(nOwn, nOwn == 1 and "" or "s"),
-    ("2. Else Pokemon Crystal's grass and cave lists, a pre-configured mix, on %d of FireRed's own tables (Kanto routes and caves). Maps added in a mod aren't touched."):format(base),
-    ("3. Tables set to Keep the all-day list at every time stay as they are (%d)."):format(#DN.allDayList(S.project)),
-    "Edit them in Encounters: pick a map, then Morning, Day or Night. Edit a copy of Crystal's lists makes them yours.",
-    "Off: every table uses its all-day list, at every time; your lists are kept.",
-    "Only used while the real time clock is on.",
+    ("On: FireRed's own routes and caves (%d Kanto tables) get Pokemon Crystal's morning, day and night lists straight away, as their own lists. Maps added in a mod aren't touched."):format(#DN.crystalTargets(S.project)),
+    "Edit them in Encounters (pick a map, then Morning, Day or Night) like any other list. Back to one all-day list or Keep the all-day list at every time takes one table out.",
+    "Off: Crystal's lists come back out and every table uses its all-day list. Tables you've edited are kept, and so are lists you made yourself.",
+    "It's a setting of the real time clock: off while the clock is off, and on again when the clock is turned on.",
   }
   return "Encounter tables", lines
 end
@@ -176,7 +168,11 @@ M.PATCHES = {
   {
     id = "clock", title = "Real Time Clock", subtitle = "Day and night cycles (Fire Red, Leaf Green)",
     isOn = function(S) return dayNight().enabled(S.project) end,
-    setOn = function(S, on) return dayNight().setEnabled(S.project, on) end,
+    setOn = function(S, on)
+      local changed = dayNight().setEnabled(S.project, on)
+      if changed then dayNight().syncCrystalPopulation(S) end -- Encounter tables follow the clock
+      return changed
+    end,
     status = { on = "Real time clock on", off = "Real time clock off (settings kept)" },
     note = function(S)
       local h = dayNight().settings(S.project).testHour
@@ -188,9 +184,17 @@ M.PATCHES = {
       {
         id = "encounters", title = "Encounter tables", subtitle = "Pre-configured Day/ night encounters that can be edited",
         isOn = function(S) return dayNight().encountersEnabled(S.project) end,
-        setOn = function(S, on) return dayNight().setEncounters(S.project, on) end,
-        status = { on = "Encounter tables on: wild encounters change with the time of day",
-          off = "Encounter tables off: every table uses its all-day list" },
+        setOn = function(S, on)
+          if on and not dayNight().enabled(S.project) then
+            S.status = "Turn the Real Time Clock on first: Encounter tables come on with it"
+            return false
+          end
+          local changed = dayNight().setEncounters(S.project, on)
+          if changed then dayNight().syncCrystalPopulation(S) end
+          return changed
+        end,
+        status = { on = "Encounter tables on: Crystal's lists filled in, ready to edit",
+          off = "Encounter tables off: Crystal's lists taken back out, all-day lists used" },
       },
     },
   },
@@ -274,6 +278,8 @@ function M.draw(S, x, y, w, h, App)
     Kit.emptyBox(x, y, cw, 120 * s, "No game patches for this game yet (FireRed and LeafGreen have the real time clock).")
     return
   end
+  -- Encounter tables: Crystal's lists filled in / taken out to match the switch
+  if dayNight().syncCrystalPopulation(S) then App.markDirty() end
   -- While a pop-up is open, the cards underneath don't take clicks.
   local open = S._gamePatchPopup ~= nil or S._gamePatchConfirm ~= nil
   local blocked = Kit.blockClicks

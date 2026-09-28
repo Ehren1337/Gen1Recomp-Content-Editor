@@ -361,5 +361,38 @@ run("Crystal's encounters: slots, targets, compile, your own lists first", funct
   assert(DN.setAllDay(p, "FR_ROUTE_2", "land", false) and p.gen3DayNight.allDay == nil)
 end)
 
+run("Encounter tables follow the clock; Crystal's lists filled in as your own, taken out when off", function()
+  local p = {}
+  local S = { project = p, data = {} }
+  assert(not DN.encountersEnabled(p), "off while the clock is off")
+  assert(not DN.setEncounters(p, true), "the clock comes first")
+  assert(DN.setEnabled(p, true) and DN.encountersEnabled(p), "on with the clock")
+  assert(DN.syncCrystalPopulation(S))
+  local route1 = DN.timeArea(p, "FR_ROUTE_1", "night", "land")
+  assert(route1 and #route1.slots == 12 and route1.rate == 21, "filled in as a real list")
+  assert(DN.isCrystalFilled(p, "FR_ROUTE_1") and not DN.syncCrystalPopulation(S), "in sync")
+  assert(DN.compile(p).crystal.FR_ROUTE_1 == nil, "filled-in tables use their own lists")
+  -- edit one, clear one, make one of your own
+  DN.timeArea(p, "FR_ROUTE_2", "day", "land").slots[1].species = "PIKACHU"
+  assert(DN.clearTimeLists(p, "FR_ROUTE_3", "land"))
+  assert(not DN.syncCrystalPopulation(S) and not DN.hasTimeLists(p, "FR_ROUTE_3", "land"), "cleared stays cleared")
+  assert(DN.compile(p).crystal.FR_ROUTE_3 == nil, "cleared: all-day list in game")
+  DN.startTimeLists(p, "FR_ROUTE_1", "water", { rate = 5, slots = { { species = "TENTACOOL", minLevel = 5, maxLevel = 5 } } })
+  -- off: Crystal's come back out; edited and your own stay
+  assert(DN.setEncounters(p, false) and DN.syncCrystalPopulation(S))
+  assert(not DN.hasTimeLists(p, "FR_ROUTE_1", "land"), "Crystal's list gone")
+  assert(DN.timeArea(p, "FR_ROUTE_2", "day", "land").slots[1].species == "PIKACHU", "edited table kept")
+  assert(DN.hasTimeLists(p, "FR_ROUTE_1", "water"), "your own list kept")
+  assert(p.gen3DayNight.crystalFilled == nil)
+  -- clock off turns them off; clock on brings them back
+  assert(DN.setEncounters(p, true) and DN.syncCrystalPopulation(S) and DN.hasTimeLists(p, "FR_ROUTE_3", "land"))
+  assert(DN.setEnabled(p, false) and not DN.encountersEnabled(p) and DN.syncCrystalPopulation(S))
+  assert(not DN.hasTimeLists(p, "FR_ROUTE_1", "land"))
+  assert(DN.setEncounters(p, false) == false, "already off with the clock")
+  assert(DN.setEnabled(p, true) and DN.encountersEnabled(p) and DN.syncCrystalPopulation(S))
+  assert(DN.hasTimeLists(p, "FR_ROUTE_1", "land"))
+  DN.validate(p)
+end)
+
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)
