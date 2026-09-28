@@ -2003,6 +2003,10 @@ function App.quit()
     say("Unsaved changes — quit again to discard")
     return true
   end
+  if require("Updater").state.step == "staged" then
+    local ok, err = require("Updater").install(false)
+    if not ok then require("Updater").log("automatic install failed: " .. tostring(err)) end
+  end
   if require("Updater").state.step == "installing" then
     pcall(function() require("Updater").log("editor closed") end)
   end

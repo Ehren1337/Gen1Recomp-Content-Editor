@@ -1,25 +1,14 @@
--- Update editor: checks the editor's GitHub releases for a newer build,
--- downloads it, and installs it with a small helper script that runs after
--- the editor closes (then opens it again).
---
--- Every push to the editor's main branch publishes a release
--- (content-editor-v0.1.N) with a portable pack per platform. LÖVE 11 can't
--- download on its own, so the work is done by the system's own tools, in
--- the background: curl (Windows 10+, Linux, macOS) or PowerShell, then
--- tar / Expand-Archive, then robocopy / cp.
---
--- What an update never touches: mods/ (your projects), the ROM cache
--- (data/generated, assets/generated), saves and settings. A source
--- checkout (a .git folder) is never overwritten: it's told to update with
--- git or GitHub Desktop instead.
---
--- Files live in the editor's save folder under update/: latest.json, the
--- downloaded pack, the unpacked copy, the helper script and its log.
+-- Automatically follow Content Editor main source commits. Stage in the save
+-- folder, then replace only application-owned paths after the editor closes.
+-- Git checkouts and user mods, caches, saves, settings are never overwritten.
 
 local M = {}
+local Source = require("SourceUpdate")
 
 M.REPO = "zeak6464/Gen1Recomp-Content-Editor"
 M.VERSION_FILE = "content-editor-version.txt"
+M.COMMIT_FILE = "content-editor-commit.txt"
+M.CHECK_INTERVAL = 15 * 60
 M.ASSETS = {
   Windows = "gen1recomp-content-editor-win64.zip",
   Linux = "gen1recomp-content-editor-linux64.tar.gz",
@@ -30,11 +19,23 @@ M.LAUNCHERS = { Windows = "ContentEditor.bat", Linux = "ContentEditor.sh", ["OS 
 function M.apiUrl()
   local o = os.getenv("POKEPORT_UPDATE_API")
   if o and o ~= "" then return o end
-  return "https://api.github.com/repos/" .. M.REPO .. "/releases/latest"
+  return "https://api.github.com/repos/" .. M.REPO .. "/commits/main"
 end
 
 function M.releasesPage()
-  return "https://github.com/" .. M.REPO .. "/releases/latest"
+  return "https://github.com/" .. M.REPO .. "/tree/main"
+end
+
+function M.parseCommit(text)
+  local data, err = M.decodeJson(text or "")
+  if type(data) ~= "table" then return nil, "couldn't read GitHub commit: " .. tostring(err) end
+  if not Source.validSha(data.sha) then return nil, tostring(data.message or "invalid source commit") end
+  local sha = data.sha:lower()
+  return { tag = sha, name = "Source " .. sha:sub(1, 12),
+    page = "https://github.com/" .. M.REPO .. "/commit/" .. sha,
+    notes = M.cleanNotes(type(data.commit) == "table" and data.commit.message or ""),
+    url = "https://api.github.com/repos/" .. M.REPO .. "/tarball/" .. sha,
+    asset = "source-" .. sha .. ".tar.gz" }
 end
 
 -- A small JSON reader (the release API's answer) ------------------------------
@@ -149,6 +150,7 @@ end
 
 --- "content-editor-v0.1.104" -> "v0.1.104".
 function M.short(tag)
+  if Source.validSha(tag) then return tag:sub(1, 12) end
   return tag and (tostring(tag):match("(v[%d%.]+)%s*$") or tostring(tag)) or "unknown"
 end
 
@@ -234,6 +236,9 @@ function M.isCheckout(root)
 end
 
 function M.currentVersion(root)
+  local commit = readText(join(root or M.root(), M.COMMIT_FILE))
+  commit = commit and commit:match("%S+")
+  if Source.validSha(commit) then return commit:lower() end
   local text = readText(join(root or M.root(), M.VERSION_FILE))
   local tag = text and text:match("%S+")
   return tag
@@ -363,21 +368,22 @@ end
 
 local function fetchLines(url, out, api)
   local accept = api and "-H \"Accept: application/vnd.github+json\" " or ""
+  local timeout = api and "45" or "600"
   if M.platform() == "Windows" then
     local o = q(out):sub(2, -2)
     return {
       "where curl.exe >nul 2>nul",
       "if %errorlevel%==0 (",
-      "  curl.exe -fsSL --retry 2 --connect-timeout 15 " .. accept .. "-o " .. q(out) .. " " .. q(url),
+      "  curl.exe -fsSL --max-time " .. timeout .. " --connect-timeout 15 " .. accept .. "-o " .. q(out) .. " " .. q(url),
       ") else (",
-      "  powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri '"
-        .. url .. "' -OutFile '" .. o .. "'\"",
+      "  powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -TimeoutSec " .. timeout .. " -UseBasicParsing -Uri '"
+        .. url:gsub("'", "''") .. "' -OutFile '" .. o:gsub("'", "''") .. "'\"",
       ")",
     }
   end
   return {
-    "if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 --connect-timeout 15 " .. accept:gsub('"', "'") .. "-o "
-      .. q(out) .. " " .. q(url) .. "; else wget -q -O " .. q(out) .. " " .. q(url) .. "; fi",
+    "if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time " .. timeout .. " --connect-timeout 15 " .. accept:gsub('"', "'") .. "-o "
+      .. q(out) .. " " .. q(url) .. "; else wget -q -T " .. timeout .. " -t 1 -O " .. q(out) .. " " .. q(url) .. "; fi",
   }
 end
 
@@ -388,7 +394,9 @@ end
 M.state = { step = "idle" }
 
 function M.check(auto)
-  if M.state.step == "checking" or M.state.step == "downloading" or M.state.step == "unpacking" then return end
+  if M.state.step == "checking" or M.state.step == "downloading" or M.state.step == "unpacking"
+      or M.state.step == "staged" or M.state.step == "installing" then return end
+  M.nextCheck = os.time() + M.CHECK_INTERVAL
   local okDir, dir = pcall(M.workDir)
   if not okDir then M.state = { step = "error", error = "no update folder: " .. tostring(dir), auto = auto } return end
   local out = join(dir, "latest.json")
@@ -400,23 +408,21 @@ end
 
 function M.download()
   local rel = M.state.release
-  if not rel or not rel.url then return end
+  if M.state.step ~= "ready" or not rel or not rel.url or M.isCheckout() then return end
   local dir = M.workDir()
   local pkg = join(dir, rel.asset)
-  local staged = join(dir, "staged")
+  M.downloadNumber = (M.downloadNumber or 0) + 1
+  local staged = join(dir, "source-" .. os.time() .. "-" .. M.downloadNumber)
   os.remove(pkg)
   local lines = fetchLines(rel.url, pkg)
   if M.platform() == "Windows" then
     lines[#lines + 1] = "if not %errorlevel%==0 exit /b %errorlevel%"
-    lines[#lines + 1] = "if exist " .. q(staged) .. " rmdir /s /q " .. q(staged)
     lines[#lines + 1] = "mkdir " .. q(staged)
-    lines[#lines + 1] = "tar -xf " .. q(pkg) .. " -C " .. q(staged) .. " 2>nul"
-    lines[#lines + 1] = "if not %errorlevel%==0 powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '"
-      .. q(pkg):sub(2, -2) .. "' -DestinationPath '" .. q(staged):sub(2, -2) .. "' -Force\""
+    lines[#lines + 1] = "tar -xzf " .. q(pkg) .. " -C " .. q(staged) .. " --strip-components=1"
   else
     lines[#lines + 1] = "[ -s " .. q(pkg) .. " ] || exit 1"
-    lines[#lines + 1] = "rm -rf " .. q(staged) .. " && mkdir -p " .. q(staged)
-    lines[#lines + 1] = "tar -xzf " .. q(pkg) .. " -C " .. q(staged)
+    lines[#lines + 1] = "mkdir -p " .. q(staged) .. " || exit 1"
+    lines[#lines + 1] = "tar -xzf " .. q(pkg) .. " -C " .. q(staged) .. " --strip-components=1"
   end
   local j, err = job("download", lines)
   if not j then M.state.step, M.state.error = "error", err return end
@@ -442,6 +448,11 @@ end
 --- Call every frame: moves the steps along.
 function M.poll()
   local st = M.state
+  if os.getenv("POKEPORT_NO_UPDATE_CHECK") ~= "1" and M.nextCheck and os.time() >= M.nextCheck and
+      (st.step == "latest" or st.step == "error" or st.step == "ready") then
+    M.check(true)
+    return
+  end
   if st.step == "checking" then
     local ok = finished(st.job)
     if ok == nil then
@@ -449,77 +460,69 @@ function M.poll()
       return
     end
     if not ok then M.state = { step = "error", error = "couldn't reach GitHub (offline?)", auto = st.auto } return end
-    local rel, err = M.parseRelease(readText(st.file), M.platform())
+    local rel, err = M.parseCommit(readText(st.file))
     if not rel then M.state = { step = "error", error = err, auto = st.auto } return end
     local current = M.currentVersion()
-    local newer = M.newer(rel.tag, current)
+    local newer = rel.tag ~= current
     M.state = { step = newer and "ready" or "latest", release = rel, current = current, auto = st.auto, checked = os.time() }
+    if newer and not M.isCheckout() then M.download() end
   elseif st.step == "downloading" then
     local ok = finished(st.job)
     st.got = fileSize(st.pkg)
     if ok == nil then return end
     if not ok then st.step, st.error = "error", "the download failed" return end
-    local pkg = M.findPackage(st.staged)
-    if not pkg then st.step, st.error = "error", "the download didn't unpack" return end
-    st.step, st.package = "staged", pkg
+    local pin = M.decodeJson(readText(join(st.staged, ".github/runtime-upstream.json")) or "")
+    if type(pin) ~= "table" or pin.repository ~= "bryanthaboi/gen1recomp" or not Source.validSha(pin.integratedCommit) then
+      st.step, st.error = "error", "source has no valid pinned runtime" return
+    end
+    local runtimeArchive = join(M.workDir(), "runtime-" .. pin.integratedCommit .. ".tar.gz")
+    local packageDir = join(st.staged, "package")
+    local win = M.platform() == "Windows"
+    local script = join(st.staged, win and "stage.ps1" or "stage.sh")
+    if not writeText(script, Source.stageScript(st.staged, packageDir, runtimeArchive, win)) then
+      st.step, st.error = "error", "couldn't write source staging script" return
+    end
+    local lines = fetchLines("https://api.github.com/repos/" .. pin.repository .. "/tarball/" .. pin.integratedCommit, runtimeArchive)
+    lines[#lines + 1] = win and "if not %errorlevel%==0 exit /b %errorlevel%" or "[ -s " .. q(runtimeArchive) .. " ] || exit 1"
+    lines[#lines + 1] = (win and "powershell -NoProfile -ExecutionPolicy Bypass -File " or "sh ") .. q(script)
+    local j, err = job("stage", lines)
+    if not j then st.step, st.error = "error", err return end
+    st.step, st.job, st.package = "unpacking", j, packageDir
+  elseif st.step == "unpacking" then
+    local ok = finished(st.job)
+    if ok == nil then return end
+    if not ok or not exists(join(st.package, "runtime/gen1recomp.love")) then
+      st.step, st.error = "error", "source staging failed (tar and, on Linux/macOS, zip are required)" return
+    end
+    st.step = "staged"
   end
 end
 
 --- Write the helper that swaps the files in once the editor has closed,
 -- start it, and return true (the editor should quit straight after).
-function M.install()
+function M.install(relaunch)
   local st = M.state
   if st.step ~= "staged" or not st.package then return nil, "nothing downloaded" end
   local root = M.root()
   if M.isCheckout(root) then return nil, "this editor is a git checkout" end
-  local dir = M.workDir()
-  local win = M.platform() == "Windows"
   local pid = M.pid()
-  local tag = st.release.tag
-  local launcher = M.LAUNCHERS[M.platform()] or "ContentEditor.sh"
-  local log = join(dir, "install.log")
-  local script = join(dir, win and "install.bat" or "install.sh")
-  local body
-  if win then
-    body = table.concat({
-      "@echo off",
-      "title Updating the Content Editor",
-      "echo Updating the Content Editor to " .. tag .. " -- this window closes by itself.",
-      "set \"PID=" .. pid .. "\"",
-      ":wait",
-      "timeout /t 1 /nobreak >nul",
-      "tasklist /FI \"PID eq %PID%\" 2>nul | find \" %PID% \" >nul && goto wait",
-      "echo Copying the new files...",
-      "robocopy " .. q(st.package) .. " " .. q(root) .. " /E /R:10 /W:2 /NP /XD "
-        .. q(join(st.package, "mods")) .. " > " .. q(log),
-      "if %errorlevel% GEQ 8 goto failed",
-      "> " .. q(join(root, M.VERSION_FILE)) .. " echo " .. tag,
-      "> " .. q(join(dir, "installed.txt")) .. " echo " .. tag,
-      "echo Done -- opening the editor again.",
-      "timeout /t 2 /nobreak >nul",
-      "rmdir /s /q " .. q(dir .. sep() .. "staged"),
-      "del /q " .. q(join(dir, st.release.asset)),
-      "start \"\" /D " .. q(root) .. " " .. q(join(root, launcher)),
-      "exit /b 0",
-      ":failed",
-      "echo.",
-      "echo The update couldn't copy every file (is the game or editor still open?).",
-      "echo Your mods weren't touched. Details: " .. log,
-      "pause",
-    }, "\r\n") .. "\r\n"
-  else
-    body = table.concat({
-      "#!/bin/sh",
-      "while kill -0 " .. pid .. " 2>/dev/null; do sleep 1; done",
-      "( cd " .. q(st.package) .. " && tar cf - --exclude=./mods . ) | ( cd " .. q(root) .. " && tar xf - ) > " .. q(log) .. " 2>&1 || exit 1",
-      "echo " .. tag .. " > " .. q(join(root, M.VERSION_FILE)),
-      "echo " .. tag .. " > " .. q(join(dir, "installed.txt")),
-      "rm -rf " .. q(join(dir, "staged")) .. " " .. q(join(dir, st.release.asset)),
-      "cd " .. q(root) .. " && ( [ -n \"$POKEPORT_UPDATE_NO_RELAUNCH\" ] || ./" .. launcher .. " >/dev/null 2>&1 & )",
-    }, "\n") .. "\n"
+  if pid <= 0 then return nil, "couldn't identify the editor process" end
+  if not Source.validSha(st.release.tag) then return nil, "invalid source commit" end
+  if not writeText(join(st.package, M.COMMIT_FILE), st.release.tag .. "\n") then
+    return nil, "couldn't record source commit"
   end
+  local win = M.platform() == "Windows"
+  local script = join(st.staged, win and "install.ps1" or "install.sh")
+  local body = Source.installScript(root, st.package, pid, win,
+    M.LAUNCHERS[M.platform()] or "ContentEditor.sh", relaunch ~= false and os.getenv("POKEPORT_UPDATE_NO_RELAUNCH") ~= "1")
   if not writeText(script, body) then return nil, "couldn't write the helper" end
-  if not M.launch(script, win) then return nil, "couldn't start the helper" end
+  local command = (win and "powershell -NoProfile -ExecutionPolicy Bypass -File " or "sh ") .. q(script)
+  local j, err = job("install", {
+    command .. " > " .. q(join(M.workDir(), "install.log")) .. " 2>&1",
+    win and "if not %errorlevel%==0 exit /b %errorlevel%" or "[ $? -eq 0 ] || exit 1",
+    "echo " .. st.release.tag .. " > " .. q(join(M.workDir(), "installed.txt")),
+  })
+  if not j then return nil, err end
   st.step = "installing"
   return true
 end

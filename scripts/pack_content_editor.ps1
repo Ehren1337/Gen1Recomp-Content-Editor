@@ -161,6 +161,13 @@ function New-ContentEditorStage([string]$Stage, [string]$Kind) {
     throw "Could not build runtime archive."
   }
 
+  # Source updates compare the packaged source commit with GitHub main.
+  $sourceCommit = (& git -C $Root rev-parse HEAD 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $sourceCommit -match '^[a-fA-F0-9]{40}$') {
+    Set-Content -LiteralPath (Join-Path $Stage "content-editor-commit.txt") `
+      -Value $sourceCommit -Encoding ascii
+  }
+
   # Update editor: the release this pack belongs to (set by the package
   # workflow), so the editor can tell when a newer one is out.
   if ($env:CONTENT_EDITOR_VERSION) {

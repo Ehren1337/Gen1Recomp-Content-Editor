@@ -52,5 +52,34 @@ run("a source checkout is recognised", function()
   assert(not U.isCheckout("tools/content-editor"))
 end)
 
+run("source commits use immutable archives without release assets", function()
+  local sha = string.rep("a", 40)
+  local r = assert(U.parseCommit('{"sha":"' .. sha .. '","commit":{"message":"Fix maps"}}'))
+  assert(r.tag == sha and r.url == "https://api.github.com/repos/" .. U.REPO .. "/tarball/" .. sha)
+  assert(r.notes[1] == "Fix maps" and U.short(sha) == string.rep("a", 12))
+  assert(not U.parseCommit('{"sha":"main; echo bad"}'))
+  local bad, err = U.parseCommit('{"message":"API rate limit exceeded"}')
+  assert(not bad and err:find("rate limit"))
+  assert(not U.parseCommit("broken"))
+end)
+
+run("staged and installing updates cannot be replaced by checks", function()
+  for _, step in ipairs({"staged", "installing", "unpacking", "downloading"}) do
+    local st = { step = step }
+    U.state = st
+    U.check(true)
+    assert(U.state == st)
+  end
+  U.state = { step = "idle" }
+end)
+
+run("installer allowlist excludes user data and mods", function()
+  local source = require("SourceUpdate")
+  for _, path in ipairs(source.installUnits()) do
+    assert(not path:match("^mods") and not path:match("^love") and not path:find("generated"))
+    assert(not path:find("%.%.") and path:sub(1, 1) ~= "/")
+  end
+end)
+
 print(("\n%d passed, %d failed"):format(pass, fail))
 os.exit(fail == 0 and 0 or 1)

@@ -25,18 +25,22 @@ Content is plain data in `Guides.lua`: add a guide as a table of steps.
 
 ## Update editor
 
-**Updates** (top right) checks the editor's GitHub releases when the editor
-opens and on demand (`Updater.lua`, `panels/UpdatePopup.lua`). When a newer
-release is out the button says **Update to v0.1.x**: **Download update**
-fetches the portable pack for this system in the background; **Restart to
-update** saves, closes the editor, and a helper copies the new files in and
-opens it again. It never touches `mods/`, the ROM cache, saves or settings.
-A source checkout (a `.git` folder) is never overwritten -- it only says a
-new release is out. Downloads use the system's curl (Windows 10+, Linux,
-macOS) or PowerShell; files go in the save folder's `update/`. Each pack
-records its release in `content-editor-version.txt` (set by the package
-workflow). `POKEPORT_NO_UPDATE_CHECK=1` skips the check when the editor
-opens.
+Portable editors follow the Content Editor repository's `main` source commits.
+The editor checks on startup and every 15 minutes, downloads changes automatically,
+and installs the staged update when you close it normally. **Restart to update**
+can apply it sooner. No GitHub release or manual update check is needed.
+
+Updates replace only an explicit list of application files and folders. `mods/`,
+project files, ROM caches, saves, settings, and the installed LÖVE binaries are
+untouched. Replaced files are backed up, with rollback if copying fails. Source
+Git checkouts are reported but never automatically overwritten; use Git to update
+them. The Gen1Recomp runtime follows the revision pinned by the editor commit,
+not upstream's latest branch.
+
+Downloads and backups live in the save folder's `update/`. Offline failures retry
+after 15 minutes. Source staging requires `tar` plus PowerShell on Windows, or
+`tar` and `zip` on Linux/macOS. Packages record `content-editor-commit.txt`.
+`POKEPORT_NO_UPDATE_CHECK=1` disables startup and periodic automatic checks.
 
 ## Cutscene maker and viewer (Gen 3)
 
