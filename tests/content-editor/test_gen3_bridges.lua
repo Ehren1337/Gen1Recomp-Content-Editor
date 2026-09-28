@@ -56,6 +56,14 @@ return function(data,root,mount,game)
     for tick=1,16 do P.tick(g) end
     assert(P.cellX==xx and P.cellY==3,"Player did not finish bridge step")
     assert(P.elevation==(xx==7 and 3 or 4),"Player height did not follow entrance/deck/exit")
+    assert(P.currentElevation==P.elevation,"Collision height disagrees with player height")
+  end
+  P.facing="left";P.turnTimer=0;P.turnArmed=false
+  for xx=6,0,-1 do
+    P.tryMove("left",g,false);assert(P.moving,"Player could not return across bridge")
+    for tick=1,16 do P.tick(g) end
+    assert(P.cellX==xx and P.elevation==(xx==0 and 3 or 4),"Return bridge height incorrect")
+    assert(P.currentElevation==P.elevation,"Return collision height incorrect")
   end
   -- Same guards for a vertical deck.
   def._editorBridges={};for yy=2,5 do def._editorBridges[yy*8+4]={kind="deck",axis="vertical"} end

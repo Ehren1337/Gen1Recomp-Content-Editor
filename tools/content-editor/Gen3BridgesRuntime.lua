@@ -35,18 +35,25 @@ function M.install(mod)
     end
     if from and from.kind=="entrance" and not along(from) then return false,"bridge_edge" end
     if high and from and to and from.axis~=to.axis then return false,"bridge_edge" end
+    if (to and to.kind=="entrance") or (high and from) then
+      local entry={};for k,v in pairs(opts) do entry[k]=v end
+      entry.elevation=Collision.elevationOn(def,x,y)
+      opts=entry
+    end
     return proceed(game,x,y,opts)
   end)
   bridge("cell",function(proceed,x,y) if upper(x,y) then return 0 end;return proceed(x,y) end)
   bridge("behaviorOn",function(proceed,def,x,y) if def==Collision._mapDef and upper(x,y,def) then return 0 end;return proceed(def,x,y) end)
   bridge("isWaterOn",function(proceed,def,x,y,coll) if def==Collision._mapDef and upper(x,y,def) then return false end;return proceed(def,x,y,coll) end)
-  bridge("elevationAt",function(proceed,x,y)
-    local c=cell(x,y)
+  -- Native player steps use nextElevation -> elevationOn directly, bypassing
+  -- elevationAt. Override the shared lookup so movement and collision agree.
+  bridge("elevationOn",function(proceed,def,x,y)
+    local c=def==Collision._mapDef and cell(x,y,def)
     if c then
       if c.kind=="entrance" then return 4 end
       if Player.elevation==4 then return 4 end
     end
-    return proceed(x,y)
+    return proceed(def,x,y)
   end)
   local function playerHook(name,fn)
     local key="editor.gen3.bridges.player."..name
@@ -58,6 +65,7 @@ function M.install(mod)
     local saved=s and s.meta and s.meta.editorBridgePosition
     if cell(x,y) and saved and saved.map==Collision._mapId and saved.x==x and saved.y==y then
       Player.elevation=saved.upper and 4 or 3
+      Player.currentElevation=Player.elevation
     end
   end
   playerHook("reset",function(proceed,x,y,...)
