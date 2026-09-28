@@ -1079,7 +1079,7 @@ end
 
 local playtestArmed = 0
 
-function App.playtestMod()
+function App.playtestMod(eventRequest)
   if not S or not S.project or not S.project.id then
     return say("No mod open")
   end
@@ -1172,6 +1172,16 @@ function App.playtestMod()
     return say("Playtest needs love.exe or gen1recomp.exe inside the Linked Recomp folder.")
   end
   local cmd
+  local driverPath
+  if eventRequest then
+    local main=ModIO.readText(recomp..sep.."main.lua")
+    if not main or not main:find("POKEPORT_DRIVER",1,true) then
+      return say("Event playtest requires a Linked Recomp source runtime with POKEPORT_DRIVER support.")
+    end
+    local err
+    driverPath,err=require("Gen3EventPlaytest").prepare(eventRequest)
+    if not driverPath then return say("Could not prepare event playtest: "..tostring(err)) end
+  end
   if sep == "\\" then
     if fused then
       cmd = string.format('start "Gen1RecompPlaytest" /D "%s" "%s" --game=%s',
@@ -1179,6 +1189,7 @@ function App.playtestMod()
     else
       cmd = PlaytestPaths.windowsLaunch(loveExe, recomp, version)
     end
+    if driverPath then cmd=require("Gen3EventPlaytest").command(cmd,driverPath,true) end
     cmd = PlaytestPaths.windowsDetach(cmd)
   else
     if fused then
@@ -1189,6 +1200,7 @@ function App.playtestMod()
         loveExe, recomp, version)
     end
   end
+  if driverPath and sep~="\\" then cmd=require("Gen3EventPlaytest").command(cmd,driverPath,false) end
   local ok, err = pcall(os.execute, cmd)
   if not ok then
     return say("Playtest launch failed: " .. tostring(err))

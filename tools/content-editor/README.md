@@ -15,6 +15,44 @@ contains maps and tile sources, the center switches between **Terrain** and
 **Warps**. Existing maps are prepared for the 16×16 grid when selected; use
 **+ New Map** for a new layered map and **World View** for connected neighbors.
 
+## Cutscene maker and viewer (Gen 3)
+
+**Playtest event** launches the linked Gen1Recomp game on the selected event's
+map and runs the script through the real game interpreter. It saves/syncs editor
+changes using the normal playtest workflow, then uses an in-memory copy of the
+current game save (or a new session if none exists). Saving is disabled in this
+test process. Map-entry scripts are suppressed during setup so the selected
+event can start directly. Normal game controls handle dialogue, movement and
+battles; the save's party, flags and inventory still determine event behavior.
+This requires a linked source runtime with `POKEPORT_DRIVER` support.
+
+Open **Events → Cutscenes**, or select a map event and choose **Cutscene maker /
+viewer**. **New cutscene** creates a normal event script with dialogue and
+character locking. Use the maker to add, edit, copy, reorder or delete dialogue,
+waits and movement routes. Save uses the existing mod script export. Assign the
+script using **Map events → Edit appearance / conditions → Event / cutscene
+script** to trigger it in game.
+
+**Open viewer** provides Play/Pause, Step and Restart. Attached events load their
+map automatically, including project terrain edits and NPC sprites. The camera
+starts at 3x zoom centered on the event and follows the moving actor. Use **- / +**
+to adjust zoom and **Full map / Focus event** to switch views. The location
+picker shows only maps whose events reference the script, including linked calls.
+Scripts without map-event references show an empty location list. Player placement is approximate; movement
+is shown at route endpoints.
+
+Flag checks ask for ON/OFF; unknown variable comparisons ask for a preview value.
+Branches and linked calls/returns follow those choices using isolated state.
+Restart clears the choices. Sound and text-color commands continue with a note;
+audio and text-color changes are not reproduced. Built-in game routines are
+noted as omitted; unsupported effects and unavailable actors continue automatically
+with a visible note. This keeps playback usable without claiming those effects
+were simulated. Dialogue and story-state choices still wait for input; loop
+protection remains in place for repeating scripts.
+Use game playtest for accurate game effects, menus, collision and animation.
+Scripts may be shared by multiple events; use **Make unique copy** before
+changing only one event.
+
 ## Teachy TV
 
 In the Gen 3 UI workspace, select **Teachy TV**. The **Artwork** tab shows the

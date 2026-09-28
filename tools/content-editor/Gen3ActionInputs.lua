@@ -135,6 +135,8 @@ function M.edit(S,catalog,field,value)
   return true
 end
 function M.draw(S,key,fields,catalog,x,y,w,changed)
+  -- Dialogue pointers are not input lists (text() also returns its pointer).
+  if type(fields)~="table" then return y end
   local K=require("Kit");local s=K.scale;local color=require("Theme").PAL.text
   local draft
   if fields.newBattle then

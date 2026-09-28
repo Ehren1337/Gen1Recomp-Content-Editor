@@ -270,7 +270,7 @@ function M.draw(S,x,y,w,h,App)
   if row then
     K.caption(rx+12*s,dy,"Selected action");dy=dy+25*s
     K.text("small",K.ellipsize("small",row.label,rw-28*s),rx+12*s,dy,PAL.heading);dy=dy+27*s
-    if row.inputs then
+    if type(row.inputs)=="table" then
       local P=require("FormPane");local pk="rpgActionInputs/"..row.script.."/"..row.index
       local top,view=P.begin(S,pk,rx+12*s,dy,rw-24*s,math.max(35*s,y+h-40*s-dy))
       local bottom=require("Gen3ActionInputs").draw(S,pk,row.inputs,catalog,rx+12*s,top,view.contentW,function() App.markDirty() end)
