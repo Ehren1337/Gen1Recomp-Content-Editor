@@ -9,6 +9,7 @@ import shutil
 import uuid
 import tarfile
 import zipfile
+import stat
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -164,6 +165,94 @@ assert(U.state.step == "staged", "do not discard staged updates")
         env = dict(os.environ, TEST_WORK=str(self.base), TEST_ROOT=str(self.install))
         env.pop("POKEPORT_NO_UPDATE_CHECK", None)
         subprocess.run([LUA, "-e", program], cwd=ROOT, env=env, check=True)
+
+
+class CheckoutUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.base = ROOT / "tests/content-editor" / ("git update test " + uuid.uuid4().hex)
+        self.repo = self.base / "checkout"
+        self.repo.mkdir(parents=True)
+        assert self.base.resolve().parent == (ROOT / "tests/content-editor").resolve()
+        self.addCleanup(self.cleanup)
+        self.git("init", "-b", "main")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("config", "user.name", "Updater test")
+        (self.repo / "main.lua").write_text("old editor")
+        (self.repo / "mods/project").mkdir(parents=True)
+        (self.repo / "mods/project/main.lua").write_text("original mod")
+        self.git("add", ".")
+        self.git("commit", "-m", "initial")
+        self.old = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-b", "incoming")
+        (self.repo / "main.lua").write_text("new editor")
+        self.git("commit", "-am", "editor update")
+        self.target = self.git("rev-parse", "HEAD")
+        self.git("checkout", "main")
+        (self.repo / "mods/project/main.lua").write_bytes(b"unfinished mod\x00\xff")
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def cleanup(self):
+        def retry(function, path, exc):
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+        shutil.rmtree(self.base, onerror=retry)
+
+    def update(self):
+        script = self.base / ("update.ps1" if os.name == "nt" else "update.sh")
+        env = dict(os.environ, TEST_ROOT=str(self.repo), TEST_SHA=self.target, TEST_SCRIPT=str(script))
+        program = r'''
+package.path = "tools/content-editor/?.lua;" .. package.path
+local U = require("Updater")
+assert(U.currentVersion(os.getenv("TEST_ROOT")), "checkout commit must be detected")
+local f = assert(io.open(os.getenv("TEST_SCRIPT"), "wb"))
+f:write(require("GitUpdate").script(os.getenv("TEST_ROOT"), os.getenv("TEST_SHA"),
+  package.config:sub(1,1) == "\\", 2147483647))
+f:close()
+'''
+        subprocess.run([LUA, "-e", program], cwd=ROOT, env=env, check=True)
+        command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] if os.name == "nt" else ["sh"]
+        return subprocess.run(command + [str(script)], capture_output=True, text=True)
+
+    def assert_mod_preserved(self):
+        self.assertEqual((self.repo / "mods/project/main.lua").read_bytes(), b"unfinished mod\x00\xff")
+
+    def test_fast_forward_preserves_unfinished_mod(self):
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.target)
+        self.assert_mod_preserved()
+
+    def test_local_editor_changes_pause_update(self):
+        (self.repo / "main.lua").write_text("local changes")
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.old)
+        self.assertEqual((self.repo / "main.lua").read_text(), "local changes")
+        self.assert_mod_preserved()
+
+    def test_divergent_commits_pause_update(self):
+        (self.repo / "local.lua").write_text("local feature")
+        self.git("add", "local.lua")
+        self.git("commit", "-m", "local feature")
+        local_head = self.git("rev-parse", "HEAD")
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertEqual(self.git("rev-parse", "HEAD"), local_head)
+        self.assert_mod_preserved()
+
+    def test_incoming_mod_changes_are_rejected(self):
+        # Commit a separate incoming mod without changing the user's dirty file.
+        self.git("checkout", "incoming")
+        (self.repo / "mods/another.lua").write_text("incoming mod")
+        self.git("add", "mods/another.lua")
+        self.git("commit", "-m", "upstream mod change")
+        self.target = self.git("rev-parse", "HEAD")
+        self.git("checkout", "main")
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.old)
+        self.assertFalse((self.repo / "mods/another.lua").exists())
+        self.assert_mod_preserved()
 
 
 if __name__ == "__main__":

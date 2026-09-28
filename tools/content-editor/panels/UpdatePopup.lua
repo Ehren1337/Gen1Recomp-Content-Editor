@@ -12,6 +12,7 @@ local function mb(n) return n and ("%.1f MB"):format(n / 1048576) or "?" end
 --- The top-bar button's label and kind for the current state.
 function M.label()
   local st = U.state
+  if st.step == "blocked" then return "Update paused", "ghost" end
   if st.step == "ready" then return "Update to " .. U.short(st.release.tag), "good" end
   if st.step == "unpacking" then return "Preparing update...", "accent" end
   if st.step == "downloading" then
@@ -39,27 +40,28 @@ local function lines(S)
   local out, buttons = {}, {}
   local function add(text, colour) out[#out + 1] = { text, colour } end
   local installed = U.currentVersion()
-  add("This editor: " .. (installed and U.short(installed) or "version unknown (older pack or source checkout)"), PAL.muted)
+  add("Installed source: " .. (installed and U.short(installed) or "could not determine the current commit"), PAL.muted)
   if st.step == "idle" or st.step == "checking" then
     add("Checking GitHub for a newer editor...")
   elseif st.step == "latest" then
-    add(("You have the newest editor (%s)."):format(U.short(rel and rel.tag)), PAL.green)
+    add("Up to date with GitHub main. Updates are automatic.", PAL.green)
     buttons[#buttons + 1] = { "Check again", "ghost", function() U.check(false) end }
+  elseif st.step == "blocked" then
+    add("Automatic update paused", PAL.yellow)
+    add(tostring(st.error), PAL.text)
+    buttons[#buttons + 1] = { "Try again", "ghost", function() U.check(false) end }
   elseif st.step == "error" then
     add("Couldn't check for updates: " .. tostring(st.error), PAL.red)
     buttons[#buttons + 1] = { "Try again", "ghost", function() U.check(false) end }
     buttons[#buttons + 1] = { "Open source page", "ghost", function() love.system.openURL(U.releasesPage()) end }
   elseif rel then
-    add(("%s is out."):format(rel.name or U.short(rel.tag)), PAL.green)
+    add("GitHub main: " .. U.short(rel.tag), PAL.green)
     for i, line in ipairs(rel.notes or {}) do
       if i > 8 then add("...", PAL.faint) break end
       add(line, PAL.text)
     end
     local page = { "Source page", "ghost", function() love.system.openURL(rel.page or U.releasesPage()) end }
-    if U.isCheckout() then
-      add("This editor is a source checkout (it has a .git folder), so it isn't updated here -- pull the new version in GitHub Desktop or with git instead.", PAL.yellow)
-      buttons[#buttons + 1] = page
-    elseif not rel.url then
+    if not rel.url then
       add("This source update has no download URL.", PAL.yellow)
       buttons[#buttons + 1] = page
     elseif st.step == "ready" then
@@ -69,7 +71,8 @@ local function lines(S)
     elseif st.step == "unpacking" then
       add("Preparing the source update in the background...", PAL.text)
     elseif st.step == "downloading" then
-      add(("Downloading... %s of %s"):format(mb(st.got or 0), mb(rel.size)), PAL.text)
+      add(st.checkout and "Fetching source changes and checking that your local work can be preserved..."
+        or ("Downloading... %s of %s"):format(mb(st.got or 0), mb(rel.size)), PAL.text)
       out.progress = rel.size and st.got and math.min(1, st.got / rel.size) or 0
     elseif st.step == "staged" then
       add("Ready. The update installs automatically when you close the editor, or you can restart now. Your mods stay untouched.", PAL.text)

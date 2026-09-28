@@ -25,16 +25,20 @@ Content is plain data in `Guides.lua`: add a guide as a table of steps.
 
 ## Update editor
 
-Portable editors follow the Content Editor repository's `main` source commits.
+Portable editors and source checkouts follow the Content Editor repository's `main` source commits.
 The editor checks on startup and every 15 minutes, downloads changes automatically,
 and installs the staged update when you close it normally. **Restart to update**
 can apply it sooner. No GitHub release or manual update check is needed.
 
-Updates replace only an explicit list of application files and folders. `mods/`,
+Portable updates replace only an explicit list of application files and folders. `mods/`,
 project files, ROM caches, saves, settings, and the installed LÖVE binaries are
-untouched. Replaced files are backed up, with rollback if copying fails. Source
-Git checkouts are reported but never automatically overwritten; use Git to update
-them. The Gen1Recomp runtime follows the revision pinned by the editor commit,
+untouched. Replaced files are backed up, with rollback if copying fails.
+
+Git checkouts read their installed commit from Git and update by fast-forward
+on `main`. Local editor changes, divergent history, or incoming changes to mods
+and generated data pause the update. Git never resets, cleans, stashes, or forces
+your checkout. Unfinished mods remain in place. The Gen1Recomp runtime follows
+the revision pinned by the editor commit,
 not upstream's latest branch.
 
 Downloads and backups live in the save folder's `update/`. Offline failures retry

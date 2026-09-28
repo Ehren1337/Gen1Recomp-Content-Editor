@@ -1,9 +1,10 @@
 -- Automatically follow Content Editor main source commits. Stage in the save
 -- folder, then replace only application-owned paths after the editor closes.
--- Git checkouts and user mods, caches, saves, settings are never overwritten.
+-- Git checkouts fast-forward safely; user mods, caches, saves and settings are preserved.
 
 local M = {}
 local Source = require("SourceUpdate")
+local q
 
 M.REPO = "zeak6464/Gen1Recomp-Content-Editor"
 M.VERSION_FILE = "content-editor-version.txt"
@@ -229,13 +230,24 @@ function M.root()
   return love and love.filesystem and love.filesystem.getSource() or "."
 end
 
---- A source checkout (git) -- updated with git, never by the helper.
+--- A source checkout (git) -- updated by fast-forward, never portable copying.
 function M.isCheckout(root)
   root = root or M.root()
   return exists(join(join(root, ".git"), "HEAD")) or exists(join(root, ".git"))
 end
 
 function M.currentVersion(root)
+  root = root or M.root()
+  if M.isCheckout(root) then
+    if M.checkoutVersionRoot ~= root then
+      local pipe = io.popen("git -C " .. q(root) .. " rev-parse HEAD 2>" .. (M.platform() == "Windows" and "nul" or "/dev/null"))
+      local sha = pipe and pipe:read("*l")
+      if pipe then pipe:close() end
+      M.checkoutVersion = Source.validSha(sha) and sha:lower() or nil
+      M.checkoutVersionRoot = root
+    end
+    return M.checkoutVersion
+  end
   local commit = readText(join(root or M.root(), M.COMMIT_FILE))
   commit = commit and commit:match("%S+")
   if Source.validSha(commit) then return commit:lower() end
@@ -331,7 +343,7 @@ function M.launch(script, visible)
   return os.execute(("sh '%s' >/dev/null 2>&1 &"):format(script)) ~= nil
 end
 
-local function q(path) -- quoted for the script (Windows paths get backslashes)
+q = function(path) -- quoted for the script (Windows paths get backslashes)
   if M.platform() == "Windows" then
     if not path:match("^%a+://") then path = path:gsub("/", "\\") end
     return '"' .. path .. '"'
@@ -397,6 +409,7 @@ function M.check(auto)
   if M.state.step == "checking" or M.state.step == "downloading" or M.state.step == "unpacking"
       or M.state.step == "staged" or M.state.step == "installing" then return end
   M.nextCheck = os.time() + M.CHECK_INTERVAL
+  M.checkoutVersionRoot = nil
   local okDir, dir = pcall(M.workDir)
   if not okDir then M.state = { step = "error", error = "no update folder: " .. tostring(dir), auto = auto } return end
   local out = join(dir, "latest.json")
@@ -408,8 +421,20 @@ end
 
 function M.download()
   local rel = M.state.release
-  if M.state.step ~= "ready" or not rel or not rel.url or M.isCheckout() then return end
+  if M.state.step ~= "ready" or not rel or not rel.url then return end
   local dir = M.workDir()
+  if M.isCheckout() then
+    local win = M.platform() == "Windows"
+    local script = join(dir, win and "prepare-checkout.ps1" or "prepare-checkout.sh")
+    local log = join(dir, "checkout.log")
+    local body = require("GitUpdate").script(M.root(), rel.tag, win)
+    if not writeText(script, body) then M.state.step, M.state.error = "error", "couldn't prepare Git update" return end
+    local command = (win and "powershell -NoProfile -ExecutionPolicy Bypass -File " or "sh ") .. q(script)
+    local j, err = job("checkout", { command .. " > " .. q(log) .. " 2>&1" })
+    if not j then M.state.step, M.state.error = "error", err return end
+    M.state.step, M.state.job, M.state.checkout, M.state.log = "downloading", j, true, log
+    return
+  end
   local pkg = join(dir, rel.asset)
   M.downloadNumber = (M.downloadNumber or 0) + 1
   local staged = join(dir, "source-" .. os.time() .. "-" .. M.downloadNumber)
@@ -449,7 +474,7 @@ end
 function M.poll()
   local st = M.state
   if os.getenv("POKEPORT_NO_UPDATE_CHECK") ~= "1" and M.nextCheck and os.time() >= M.nextCheck and
-      (st.step == "latest" or st.step == "error" or st.step == "ready") then
+      (st.step == "latest" or st.step == "error" or st.step == "ready" or st.step == "blocked") then
     M.check(true)
     return
   end
@@ -465,9 +490,18 @@ function M.poll()
     local current = M.currentVersion()
     local newer = rel.tag ~= current
     M.state = { step = newer and "ready" or "latest", release = rel, current = current, auto = st.auto, checked = os.time() }
-    if newer and not M.isCheckout() then M.download() end
+    if newer then M.download() end
   elseif st.step == "downloading" then
     local ok = finished(st.job)
+    if st.checkout then
+      if ok == nil then return end
+      if not ok then
+        st.step, st.error = "blocked", "Git could not safely fast-forward this checkout. Local changes and mods were kept. Details: " .. st.log
+        return
+      end
+      st.step = "staged"
+      return
+    end
     st.got = fileSize(st.pkg)
     if ok == nil then return end
     if not ok then st.step, st.error = "error", "the download failed" return end
@@ -502,19 +536,25 @@ end
 -- start it, and return true (the editor should quit straight after).
 function M.install(relaunch)
   local st = M.state
-  if st.step ~= "staged" or not st.package then return nil, "nothing downloaded" end
+  if st.step ~= "staged" or (not st.package and not st.checkout) then return nil, "nothing downloaded" end
   local root = M.root()
-  if M.isCheckout(root) then return nil, "this editor is a git checkout" end
+  if M.isCheckout(root) and not st.checkout then return nil, "this editor is a git checkout" end
   local pid = M.pid()
   if pid <= 0 then return nil, "couldn't identify the editor process" end
   if not Source.validSha(st.release.tag) then return nil, "invalid source commit" end
-  if not writeText(join(st.package, M.COMMIT_FILE), st.release.tag .. "\n") then
+  if not st.checkout and not writeText(join(st.package, M.COMMIT_FILE), st.release.tag .. "\n") then
     return nil, "couldn't record source commit"
   end
   local win = M.platform() == "Windows"
-  local script = join(st.staged, win and "install.ps1" or "install.sh")
-  local body = Source.installScript(root, st.package, pid, win,
-    M.LAUNCHERS[M.platform()] or "ContentEditor.sh", relaunch ~= false and os.getenv("POKEPORT_UPDATE_NO_RELAUNCH") ~= "1")
+  local script = join(st.staged or M.workDir(), win and "install.ps1" or "install.sh")
+  local launcher = M.LAUNCHERS[M.platform()] or "ContentEditor.sh"
+  local restart = relaunch ~= false and os.getenv("POKEPORT_UPDATE_NO_RELAUNCH") ~= "1"
+  local body
+  if st.checkout then
+    body = require("GitUpdate").script(root, st.release.tag, win, pid, restart and launcher or nil)
+  else
+    body = Source.installScript(root, st.package, pid, win, launcher, restart)
+  end
   if not writeText(script, body) then return nil, "couldn't write the helper" end
   local command = (win and "powershell -NoProfile -ExecutionPolicy Bypass -File " or "sh ") .. q(script)
   local j, err = job("install", {
