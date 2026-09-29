@@ -21,6 +21,7 @@ function M.label()
   end
   if st.step == "staged" then return "Restart to update", "good" end
   if st.step == "checking" and not st.auto then return "Checking...", "ghost" end
+  if not U.autoEnabled() then return "Updates off", "ghost" end
   return "Updates", "ghost"
 end
 
@@ -29,6 +30,7 @@ function M.isOpen(S) return S._updateOpen == true end
 function M.open(S)
   S._updateOpen = true
   local step = U.state.step
+  if not U.autoEnabled() then return end
   if step == "idle" or step == "error" or (step == "latest" and os.time() - (U.state.checked or 0) > 60) then
     U.check(false)
   end
@@ -41,10 +43,16 @@ local function lines(S)
   local function add(text, colour) out[#out + 1] = { text, colour } end
   local installed = U.currentVersion()
   add("Installed source: " .. (installed and U.short(installed) or "could not determine the current commit"), PAL.muted)
-  if st.step == "idle" or st.step == "checking" then
+  local auto = U.autoEnabled()
+  if not auto then
+    add("Automatic updates are off (Settings > Updates). The editor stays as it is until you update it here.", PAL.yellow)
+  end
+  if st.step == "idle" and not auto then
+    buttons[#buttons + 1] = { "Check now", "ghost", function() U.check(false) end }
+  elseif st.step == "idle" or st.step == "checking" then
     add("Checking GitHub for a newer editor...")
   elseif st.step == "latest" then
-    add("Up to date with GitHub main. Updates are automatic.", PAL.green)
+    add(auto and "Up to date with GitHub main. Updates are automatic." or "Up to date with GitHub main.", PAL.green)
     buttons[#buttons + 1] = { "Check again", "ghost", function() U.check(false) end }
   elseif st.step == "blocked" then
     add("Automatic update paused", PAL.yellow)
@@ -75,7 +83,8 @@ local function lines(S)
         or ("Downloading... %s of %s"):format(mb(st.got or 0), mb(rel.size)), PAL.text)
       out.progress = rel.size and st.got and math.min(1, st.got / rel.size) or 0
     elseif st.step == "staged" then
-      add("Ready. The update installs automatically when you close the editor, or you can restart now. Your mods stay untouched.", PAL.text)
+      add(auto and "Ready. The update installs automatically when you close the editor, or you can restart now. Your mods stay untouched."
+        or "Downloaded. It installs only when you press Restart to update. Your mods stay untouched.", PAL.text)
       buttons[#buttons + 1] = { S._updateUnsaved and "Save and restart" or "Restart to update", "primary", "install" }
     elseif st.step == "installing" then
       add(("Closing the editor to install %s -- it opens again by itself in a few seconds."):format(U.short(rel.tag)), PAL.green)

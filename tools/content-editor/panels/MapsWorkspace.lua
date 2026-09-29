@@ -330,6 +330,8 @@ function MapsWorkspace.update(S, dt)
 end
 
 function MapsWorkspace.wheelmoved(S, dy, dx)
+  -- Border editor (Gen 3): its own view reads the wheel (Gen3Maps).
+  if S and S.mapBorderEditor and Generation.isGen3(S) then return false end
   if MapBuilder.wheelmoved and MapBuilder.wheelmoved(S, dy, dx) then return true end
   return Maps.wheelmoved and Maps.wheelmoved(S, dy, dx) or false
 end

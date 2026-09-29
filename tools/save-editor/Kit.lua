@@ -536,7 +536,7 @@ local KINDS = {
                border = PAL.green, borderA = 0.45 },
   danger   = { flat = PAL.red, flatA = 0.12, ink = PAL.redSoft,
                border = PAL.red, borderA = 0.45 },
-  disabled = { flat = { 120, 132, 158 }, flatA = 0.22, ink = PAL.steel,
+  disabled = { flat = PAL.disabledFlat, flatA = 0.22, ink = PAL.steel,
                border = PAL.steel, borderA = 0.3 },
 }
 

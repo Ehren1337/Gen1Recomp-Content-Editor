@@ -52,8 +52,123 @@ local PAL = {
   chipTop     = { 61, 74, 109 },   -- #3d4a6d
   chipBot     = { 32, 42, 69 },    -- #202a45
   chipInk     = { 207, 224, 255 }, -- #cfe0ff
+  -- disabled button fill
+  disabledFlat = { 120, 132, 158 },
 }
 Theme.PAL = PAL
+
+-- ---------------------------------------------------------------- themes
+-- Editor settings > Theme recolours the chrome: background, cards, text and
+-- the accent (`blue`, whatever its colour). Green / yellow / red keep their
+-- meaning and the version rail keeps the games' colours, so those never
+-- change. Colours are rewritten in place, so every module holding a PAL
+-- entry (Kit's button kinds, panels) follows straight away.
+
+-- The keys a theme sets.
+Theme.CHROME = { "bgTop", "bgMid", "bgBot", "cardTint", "cardBody", "cardBorder", "rowBg",
+  "text", "detail", "muted", "caption", "faint", "blue", "blueInk", "steel",
+  "chipTop", "chipBot", "chipInk", "disabledFlat" }
+
+local STOCK = {}
+for _, k in ipairs(Theme.CHROME) do STOCK[k] = { PAL[k][1], PAL[k][2], PAL[k][3] } end
+Theme.STOCK = STOCK
+
+-- Purple (#46004e, hue 294), made to keep the stock look's contrast: body text
+-- 15.9:1 on the background, captions 7.7:1, accent 6.9:1. Every other colour
+-- is this palette turned to another hue, keeping each colour's saturation and
+-- lightness, so they all read the same.
+local PURPLE = {
+  bgTop = { 70, 0, 78 }, bgMid = { 41, 0, 46 }, bgBot = { 23, 0, 26 },
+  cardTint = { 217, 108, 229 }, cardBody = { 37, 12, 40 }, cardBorder = { 168, 122, 178 },
+  rowBg = { 31, 9, 34 },
+  text = { 243, 223, 245 }, detail = { 227, 198, 230 }, muted = { 203, 159, 208 },
+  caption = { 194, 143, 200 }, faint = { 162, 111, 168 },
+  blue = { 217, 108, 229 }, blueInk = { 250, 207, 255 }, steel = { 185, 149, 189 },
+  chipTop = { 104, 61, 109 }, chipBot = { 65, 32, 69 }, chipInk = { 250, 207, 255 },
+  disabledFlat = { 158, 120, 162 },
+}
+Theme.PURPLE = PURPLE
+
+-- Ready-made looks, named after the games (Alpha Sapphire is the editor's
+-- original look; "purple" still works for older settings files). `hue` ones are the purple palette
+-- turned to that hue; `sat` scales every colour's saturation (Soul Silver is
+-- nearly grey), `accent` / `bg` nudge the lightness of the accent and of the
+-- background (Ruby is darker, Emerald's accent lighter). `mascot` is the
+-- FireRed species number whose front sprite the Settings pop-up shows on the
+-- cart, read from the player's own imported game (never shipped).
+Theme.PRESETS = {
+  { id = "firered", label = "Fire Red", hue = 6, mascot = 6 },                 -- Charizard
+  { id = "leafgreen", label = "Leaf Green", hue = 112, mascot = 3 },           -- Venusaur
+  { id = "ruby", label = "Omega Ruby", hue = 346, accent = -0.06, bg = -0.03, mascot = 405 }, -- Groudon
+  { id = "stock", label = "Alpha Sapphire", mascot = 404 },                    -- Kyogre
+  { id = "emerald", label = "Gamma Emerald", hue = 148, accent = 0.08, mascot = 406 }, -- Rayquaza
+  { id = "heartgold", label = "Heart Gold", hue = 44, mascot = 250 },          -- Ho-Oh
+  { id = "soulsilver", label = "Soul Silver", hue = 216, sat = 0.14, accent = 0.08, mascot = 249 }, -- Lugia
+}
+
+local ACCENT = { blue = true, cardTint = true }
+local BG = { bgTop = true, bgMid = true, bgBot = true, cardBody = true, rowBg = true }
+
+local function rgbToHsl(c)
+  local r, g, b = c[1] / 255, c[2] / 255, c[3] / 255
+  local mx, mn = math.max(r, g, b), math.min(r, g, b)
+  local l = (mx + mn) / 2
+  if mx == mn then return 0, 0, l end
+  local d = mx - mn
+  local s = l > 0.5 and d / (2 - mx - mn) or d / (mx + mn)
+  local h
+  if mx == r then h = (g - b) / d + (g < b and 6 or 0)
+  elseif mx == g then h = (b - r) / d + 2
+  else h = (r - g) / d + 4 end
+  return h * 60, s, l
+end
+
+local function hslToRgb(h, s, l)
+  local function f(n)
+    local k = (n + h / 30) % 12
+    local a = s * math.min(l, 1 - l)
+    return l - a * math.max(-1, math.min(k - 3, 9 - k, 1))
+  end
+  local function byte(v) return math.floor(v * 255 + 0.5) end
+  return { byte(f(0)), byte(f(8)), byte(f(4)) }
+end
+Theme.rgbToHsl, Theme.hslToRgb = rgbToHsl, hslToRgb
+
+--- The chrome colours for a theme: "stock", a preset id, or "custom" with a
+-- hue (0-359). Unknown ids give stock.
+function Theme.palette(id, hue)
+  if id == "purple" then return PURPLE end
+  local preset
+  if id ~= "custom" then
+    for _, p in ipairs(Theme.PRESETS) do if p.id == id then preset = p end end
+    if not (preset and preset.hue) then return STOCK end
+    hue = preset.hue
+  end
+  preset = preset or {}
+  hue = (tonumber(hue) or 294) % 360
+  local out = {}
+  for _, k in ipairs(Theme.CHROME) do
+    local _, s, l = rgbToHsl(PURPLE[k])
+    s = s * (preset.sat or 1)
+    if ACCENT[k] then l = l + (preset.accent or 0) end
+    if BG[k] then l = l + (preset.bg or 0) end
+    out[k] = hslToRgb(hue, s, math.max(0, math.min(1, l)))
+  end
+  return out
+end
+
+Theme.current = { id = "stock" }
+
+--- Use a theme from now on (recolours in place).
+function Theme.apply(id, hue)
+  local pal = Theme.palette(id, hue)
+  for _, k in ipairs(Theme.CHROME) do
+    local c = PAL[k]
+    c[1], c[2], c[3] = pal[k][1], pal[k][2], pal[k][3]
+  end
+  Theme.current = { id = pal == STOCK and "stock" or id, hue = id == "custom" and hue or nil }
+  return Theme.current
+end
 
 local G = love and love.graphics or nil
 

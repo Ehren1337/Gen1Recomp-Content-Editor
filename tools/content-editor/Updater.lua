@@ -405,6 +405,15 @@ end
 
 M.state = { step = "idle" }
 
+--- Automatic updates (check at start and every 15 minutes, download, install
+-- on close). Off with Settings > Updates or POKEPORT_NO_UPDATE_CHECK=1; the
+-- Updates button can still check and install by hand.
+function M.autoEnabled()
+  if os.getenv("POKEPORT_NO_UPDATE_CHECK") == "1" then return false end
+  local ok, on = pcall(function() return require("EditorSettings").get("autoUpdate") end)
+  return not ok or on ~= false
+end
+
 function M.check(auto)
   if M.state.step == "checking" or M.state.step == "downloading" or M.state.step == "unpacking"
       or M.state.step == "staged" or M.state.step == "installing" then return end
@@ -473,7 +482,7 @@ end
 --- Call every frame: moves the steps along.
 function M.poll()
   local st = M.state
-  if os.getenv("POKEPORT_NO_UPDATE_CHECK") ~= "1" and M.nextCheck and os.time() >= M.nextCheck and
+  if M.autoEnabled() and M.nextCheck and os.time() >= M.nextCheck and
       (st.step == "latest" or st.step == "error" or st.step == "ready" or st.step == "blocked") then
     M.check(true)
     return
@@ -490,7 +499,8 @@ function M.poll()
     local current = M.currentVersion()
     local newer = rel.tag ~= current
     M.state = { step = newer and "ready" or "latest", release = rel, current = current, auto = st.auto, checked = os.time() }
-    if newer then M.download() end
+    -- With automatic updates off, a check only reports; Download update fetches it.
+    if newer and M.autoEnabled() then M.download() end
   elseif st.step == "downloading" then
     local ok = finished(st.job)
     if st.checkout then
