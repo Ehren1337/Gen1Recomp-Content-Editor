@@ -2,11 +2,13 @@ local ok, err = pcall(function()
   package.path = "tools/content-editor/?.lua;tools/content-editor/panels/?.lua;"
     .. "tools/save-editor/?.lua;tools/save-editor/panels/?.lua;"
     .. package.path
-  package.preload["src.link.Json"] = package.preload["src.link.Json"] or function()
-    return {
-      encode = function() return "{}" end,
-      decode = function() return {} end,
-    }
+  if not pcall(require, "src.link.Json") then
+    package.preload["src.link.Json"] = function()
+      return {
+        encode = function() return "{}" end,
+        decode = function() return {} end,
+      }
+    end
   end
   -- stub love for Preview
   love = love or {}
@@ -486,7 +488,8 @@ local ok, err = pcall(function()
       uiFitted = { ["battleHud.hud1"] = true },
     }, false)
     local body = table.concat(overlay, "\n")
-    assert(body:find("src.ui.BattleState"), "missing fitted HUD overlay wrap")
+    assert(body:find("src.battle.BattleState", 1, true), "missing fitted HUD overlay wrap")
+    assert(body:find('"newWild", "newTrainer"', 1, true), "Gen 1 HUD overlay must wrap both battle constructors")
   end
   do
     package.loaded["src.core.GameVersion"] = nil

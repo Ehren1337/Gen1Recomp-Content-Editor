@@ -1,5 +1,5 @@
 local runtime = assert(arg[1], "Pass the Gen 3 runtime directory")
-package.path = "tools/content-editor/?.lua;tools/content-editor/panels/?.lua;"
+package.path = "tools/content-editor/?.lua;tools/content-editor/panels/?.lua;tools/save-editor/?.lua;"
   .. runtime .. "/?.lua;" .. package.path
 local Properties = require("Gen3MapProperties")
 local Moves = require("src.core.game3.field_moves")

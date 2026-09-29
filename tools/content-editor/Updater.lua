@@ -452,7 +452,10 @@ function M.download()
   if M.platform() == "Windows" then
     lines[#lines + 1] = "if not %errorlevel%==0 exit /b %errorlevel%"
     lines[#lines + 1] = "mkdir " .. q(staged)
-    lines[#lines + 1] = "tar -xzf " .. q(pkg) .. " -C " .. q(staged) .. " --strip-components=1"
+    -- GNU tar (e.g. Git Bash's) reads "C:\..." as a remote host; use Windows' bsdtar.
+    lines[#lines + 1] = 'set "TAR=%SystemRoot%\\System32\\tar.exe"'
+    lines[#lines + 1] = 'if not exist "%TAR%" set "TAR=tar"'
+    lines[#lines + 1] = '"%TAR%" -xzf ' .. q(pkg) .. " -C " .. q(staged) .. " --strip-components=1"
   else
     lines[#lines + 1] = "[ -s " .. q(pkg) .. " ] || exit 1"
     lines[#lines + 1] = "mkdir -p " .. q(staged) .. " || exit 1"

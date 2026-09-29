@@ -1,4 +1,5 @@
-package.path='tools/content-editor/?.lua;tools/content-editor/panels/?.lua;'..package.path
+local runtime=assert(os.getenv("POKEPORT_RECOMP"))
+package.path='tools/content-editor/?.lua;tools/content-editor/panels/?.lua;'..runtime..'/?.lua;'..package.path
 package.loaded.ModIO={};package.loaded.Preview={}
 local L=require('LayeredMap')
 local C=require('Gen3Collision')

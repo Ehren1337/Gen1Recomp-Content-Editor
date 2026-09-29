@@ -1,6 +1,7 @@
 -- Run with POKEPORT_RECOMP pointing at a Gen 3-capable checkout.
 local root = assert(os.getenv("POKEPORT_RECOMP"), "Set POKEPORT_RECOMP")
-package.path = "tools/content-editor/?.lua;" .. root .. "/?.lua;" .. package.path
+package.path = "tools/content-editor/?.lua;tools/save-editor/?.lua;" .. root .. "/?.lua;" .. package.path
+love = love or {filesystem={read=function(path) local f=assert(io.open(path,"rb"));local s=f:read("*a");f:close();return s end}}
 local G = require("Gen3")
 local Generation = require("Generation")
 local Schemas = require("src.mods.Schemas")
@@ -53,6 +54,7 @@ local main = Writer.emitMain(saved,data)
 local calls = {}
 local content = setmetatable({}, {__index=function(_,name)
   return setmetatable({}, {__index=function(_,mode)
+    if mode == "get" then return function(_,id) return G.catalog(data,name)[id] end end
     return function(_,id,value)
       assert(G.check(name,id,value))
       calls[name] = {id=id,value=value,mode=mode}
@@ -60,7 +62,7 @@ local content = setmetatable({}, {__index=function(_,name)
   end})
 end})
 Version.set("firered")
-assert(loadstring(main))()({content=content,generation=3,events={on=function() end}})
+assert(loadstring(main))()({content=content,generation=3,events={on=function() end},hooks={wrap=function() end}})
 for _,name in ipairs(G.registries) do assert(calls[name],name.." missing") end
 assert(calls.text.mode == "override" and calls.pokemon.mode == "patch")
 local spec = Schemas.shapeFor("pokemon",Schemas.REGISTRIES.pokemon,3)

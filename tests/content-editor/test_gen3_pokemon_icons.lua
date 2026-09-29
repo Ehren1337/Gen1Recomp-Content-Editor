@@ -8,6 +8,7 @@ package.loaded.ModIO={
     files[path]=bytes;return true
   end,
   ensureDirectory=function() return true end,
+  listSubdirs=function() return {} end,
 }
 local Icons=require("Gen3PokemonIcons")
 local original=love.image.newImageData(32,64)

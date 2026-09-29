@@ -60,12 +60,33 @@ jobs:
         run: |
           lua tests/test_state_stack.lua
           lua tests/content-editor/test_manifest_target.lua
+          lua tests/content-editor/test_manifest_panel.lua
+          lua tests/content-editor/test_runtime_internals.lua
           lua tests/content-editor/test_playtest_paths.lua
           lua tests/content-editor/test_playtest_options.lua
           lua tests/content-editor/test_mapbuilder_manifest.lua
           lua tests/content-editor/test_tileset_export.lua
           lua tests/content-editor/test_world_palette_overrides.lua
           lua tests/content-editor/test_updater.lua
+      - name: Run headless editor tests (no ROM data)
+        shell: bash
+        env:
+          POKEPORT_RECOMP: runtime/gen1recomp
+        run: |
+          export EDITOR_TEST_ROOT="$(pwd -W 2>/dev/null || pwd)"
+          for t in \
+            test_editor_theme test_guides test_large_map_render test_map_elevations \
+            test_mouse_scroll test_offline_gifts test_world_activities \
+            test_gen3 test_gen3_large_export test_gen3_action_inputs test_gen3_battle_positions test_gen3_behavior_options \
+            test_gen3_borders test_gen3_clock test_gen3_clock_events test_gen3_cutscene_preview test_gen3_doors \
+            test_gen3_event_actions test_gen3_event_commands test_gen3_event_playtest \
+            test_gen3_event_playtest_paths test_gen3_event_story test_gen3_exit_types test_gen3_map_identity \
+            test_gen3_map_properties test_gen3_new_pokemon test_gen3_paint_collision test_gen3_rom_artwork \
+            test_gen3_starter_choices test_gen3_void test_gen3_water_repair test_gen3_waterfall test_gen3_whirlpool; do
+            echo "::group::$t"
+            lua "tests/content-editor/$t.lua" runtime/gen1recomp
+            echo "::endgroup::"
+          done
       - name: Verify source updates preserve mods and roll back failures
         shell: bash
         env:
@@ -103,6 +124,32 @@ jobs:
           unzip -l "$root/runtime/gen1recomp.love" | grep -q 'src/mods/Runtime.lua'
           test -f "$root/tools/content-editor/WorldPaletteOverrides.lua"
           test ! -e "$root/runtime/patches"
+
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Build Windows portable package
+        shell: pwsh
+        run: ./scripts/pack_content_editor.ps1 -Platform windows
+      - name: Verify Windows archive
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem dist/win -Filter *.zip | Select-Object -First 1
+          if (-not $archive) { throw 'Windows zip missing' }
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath package
+          $root = (Get-ChildItem package -Recurse -Filter ContentEditor.bat | Select-Object -First 1).DirectoryName
+          if (-not $root) { throw 'ContentEditor.bat missing' }
+          if (Test-Path "$root/src") { throw 'runtime src/ leaked into package root' }
+          if (Test-Path "$root/runtime/patches") { throw 'runtime/patches present' }
+          foreach ($f in 'tests/love_stub.lua', 'tools/content-editor/WorldPaletteOverrides.lua', 'love/love.exe', 'love/gen1recomp.exe') {
+            if (-not (Test-Path "$root/$f")) { throw "$f missing" }
+          }
+          # gen1recomp.exe is love.exe with the runtime zip appended.
+          python -c "import sys, zipfile; names = set(zipfile.ZipFile(sys.argv[1]).namelist()); missing = [n for n in ('src/core/Input.lua', 'src/mods/Runtime.lua') if n not in names]; sys.exit('fused runtime missing: ' + ', '.join(missing) if missing else 0)" "$root/love/gen1recomp.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'fused runtime check failed' }
 
   macos-package:
     runs-on: ubuntu-latest

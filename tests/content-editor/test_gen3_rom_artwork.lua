@@ -1,4 +1,5 @@
-package.path = "tools/content-editor/?.lua;" .. package.path
+local runtime = assert(os.getenv("POKEPORT_RECOMP"))
+package.path = "tools/content-editor/?.lua;" .. runtime .. "/?.lua;" .. package.path
 local Rom = require("Gen3Rom")
 local originalOpen = Rom.open
 local pixels = 0

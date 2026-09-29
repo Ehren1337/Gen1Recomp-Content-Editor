@@ -71,6 +71,25 @@ local common={[0]="Give an item with a message",[1]="Pick up an item",[2]="Show 
 -- FireRed data/specials.inc: zero-based entry 32 is EnterColosseumPlayerSpot.
 -- src/cable_club.c uses 0x8004 for format and 0x8005 for the player's spot.
 M.specials[32]="Start a multiplayer battle at the Colosseum"
+for id,label in pairs({
+  [0x27]="Set the player's team aside",[0x28]="Bring back the set-aside team",[0x29]="Choose Pokémon to enter a battle",[0x5D]="Ask the player to save the game",
+  [0x77]="Prepare the Heracross size record",[0x78]="Compare a Heracross with the size record",[0x79]="Prepare the Magikarp size record",[0x7A]="Compare a Magikarp with the size record",
+  [0xA3]="Check whether a Fan Club member is a fan of the player",[0xA4]="Count the player's fans in the Fan Club",[0xA5]="Prepare a Fan Club member's name",[0xA6]="Update Fan Club fans after a link battle",
+  [0xA7]="Update Fan Club fans for time played",[0xA8]="Record the player's first Fan Club fans",[0xA9]="Update the Fan Club after becoming Champion",[0xAA]="Check for a new Fan Club fan",
+  [0xC1]="Hatch an Egg",[0xC2]="Show an Egg hatching",[0xC4]="Show the link battle records",[0xD5]="Prepare Professor Oak's Pokédex rating",
+  [0xDB]="Choose a Pokémon to relearn a move",[0xDC]="Choose a move to forget",[0xDD]="Forget the chosen move",[0xDE]="Prepare the Pokémon's nickname and the move to forget",[0xDF]="Count the chosen Pokémon's moves",[0xE0]="Teach a remembered move",
+  [0xEB]="Prepare the e-Reader trainer's greeting",[0xEC]="Start a special battle",[0xF6]="Check the e-Reader trainer data",[0xF8]="Keep only three Pokémon on the team",
+  [0x107]="Fade out to view the Hall of Fame",[0x108]="Show the diploma",[0x11D]="Prepare the e-Reader trainer's name",[0x11F]="Check which way the player is facing (unused entry)",
+  [0x127]="Turn the character toward the player",[0x128]="Release the character's held movement",[0x142]="Set the e-Reader trainer's appearance",[0x14B]="Bring back the set-aside Bag",
+  [0x15C]="Check whether the Seafoam Islands current carries the player to land",[0x15E]="Check for room for more Game Corner coins",[0x167]="Update the Trainer Card photo",[0x168]="Check what the Sticker Man can praise",
+  [0x170]="Let the player walk away from a sign message",[0x173]="Unlock a Fame Checker fact",[0x174]="Update a person's Fame Checker entry",
+  [0x180]="Check the saved Wonder Card",[0x186]="Read a Wonder Card count",[0x189]="Check the Wonder News reward",[0x18B]="Show the museum fossil picture",[0x18C]="Hide the museum fossil picture",
+  [0x18E]="Choose a Pokémon for a wireless minigame",[0x191]="Show the S.S. Anne leaving port",[0x192]="Check for a Pokémon that can play Pokémon Jump",[0x194]="Run a Trainer Tower action",
+  [0x195]="Show the Pokémon Jump records",[0x196]="Prepare a TM or HM move name",[0x19C]="Show the Berry Powder exchange menu",[0x19D]="Hide the Berry Powder exchange menu",
+  [0x19E]="Check for enough Berry Powder",[0x19F]="Take Berry Powder from the player",[0x1A0]="Show the player's Berry Powder",[0x1A1]="Show the Pokémon League lighting effect",
+  [0x1A2]="Show the Berry Crush rankings",[0x1A3]="Check which Cape Brink move the first Pokémon can learn",[0x1A4]="Check whether all Cape Brink moves are learned",[0x1A5]="Play the credits",
+  [0x1A6]="Show the Dodrio Berry Picking records",[0x1AB]="Handle touching the Deoxys triangle",[0x1BA]="Repeat the wing flapping sound",
+}) do M.specials[id]=label end
 -- Gen3Clock: added to the game by the mod, not the ROM.
 M.specials[0xE100]="Read the clock (day, date and time)"
 M.specialHelp={
@@ -135,7 +154,7 @@ schema("goto_if call_if",{{"cond","Continue when the previous check","condition"
 schema("opendoor closedoor setdooropen setdoorclosed",{{false,"Map column"},{false,"Map row"}})
 schema("giveegg",{{false,"Pokémon inside the Egg","species"}})
 schema("setwildbattle",{{"species","Wild Pokémon","species"},{"level","Level"},{"item","Held item","item"}})
-schema("givemon",{{"species","Pokémon to give","species"},{"level","Level"},{false,"Held item","item"},{false,"Reserved game value"},{false,"Reserved game value"}})
+schema("givemon",{{"species","Pokémon to give","species"},{"level","Level"},{false,"Held item","item"},{false,"Reserved game value"},{false,"Reserved game value"},{false,"Reserved game value"}})
 schema("showmonpic",{{false,"Pokémon picture","species"},{false,"Screen column"},{false,"Screen row"}})
 schema("setmonmove",{{false,"Pokémon on the team","teamSlot"},{false,"Move to replace","moveSlot"},{false,"New move","move"}})
 schema("checkpartymove",{{false,"Move to look for","move"}})
@@ -153,7 +172,8 @@ schema("warphole",{{false,"Destination map group"},{false,"Destination map numbe
 schema("setflashlevel animateflash",{{false,"Darkness level"}})
 schema("playmoncry",{{false,"Pokémon","species"},{false,"Cry effect"}})
 schema("showmoneybox",{{false,"Screen column"},{false,"Screen row"},{false,"Use multiplayer money","yesno"}})
-schema("showcoinsbox hidecoinsbox updatecoinsbox updatemoneybox",{{false,"Screen column"},{false,"Screen row"}})
+schema("showcoinsbox hidecoinsbox updatecoinsbox hidemoneybox",{{false,"Screen column"},{false,"Screen row"}})
+schema("updatemoneybox",{{false,"Screen column"},{false,"Screen row"},{false,"Reserved game value"}})
 require("Gen3ActionFields")(schema)
 local extraFields={introText={"Before-battle dialogue","dialogue"},defeatText={"Trainer's defeat dialogue","dialogue"},victoryText={"Trainer's victory dialogue","dialogue"},notEnoughText={"Dialogue when the player cannot battle","dialogue"},eventScript={"Event after the battle","event"},localId={"Character","character"},flags={"Battle flags"}}
 M.schemas=schemas

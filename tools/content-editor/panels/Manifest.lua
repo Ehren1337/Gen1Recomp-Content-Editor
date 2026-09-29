@@ -99,6 +99,7 @@ local function loadDraft(S, modId)
   local data, err = ModIO.readManifest(modId)
   S.manifestSource = data
   S.manifestText = {}
+  S.manifestImports = {}
   if not data then
     S.manifestDraft = defaultDraft(modId)
     S.manifestLoadError = tostring(err)
@@ -121,6 +122,16 @@ local function loadDraft(S, modId)
   d.log_url = type(d.log_url) == "string" and d.log_url or ""
   S.manifestText.required_assets = assetsText(data.required_assets)
   S.manifestText.optional_assets = assetsText(data.optional_assets)
+  for _, group in ipairs({ { data.required_imports, true }, { data.optional_imports, false } }) do
+    for _, e in ipairs(type(group[1]) == "table" and group[1] or {}) do
+      if type(e) == "table" then
+        local entry = {}
+        for k, v in pairs(e) do entry[k] = v end
+        local md5 = type(e.md5) == "table" and table.concat(e.md5, ", ") or tostring(e.md5 or "")
+        S.manifestImports[#S.manifestImports + 1] = { entry = entry, required = group[2], md5Text = md5 }
+      end
+    end
+  end
   -- New-mod defaults are `games: ["all"]` + gen2compat. An existing file that
   -- omitted both is Gen 1 only in the loader. Do not keep those defaults, or
   -- the Manifest tab shows YES while Gold skips with "not marked gen2compat".
@@ -180,6 +191,7 @@ for _, k in ipairs({
   "optional_dependencies", "conflicts", "incompatible", "experimental",
   "description", "language", "affects_link", "github", "log_url",
   "required_assets", "optional_assets", "options_schema", "assets_transforms",
+  "required_imports", "optional_imports",
 }) do MANAGED_KEYS[k] = true end
 
 function Manifest.save(S, App)
@@ -218,6 +230,17 @@ function Manifest.save(S, App)
   if #requiredAssets > 0 then payload.required_assets = requiredAssets end
   local optionalAssets = parseAssets(S.manifestText.optional_assets)
   if #optionalAssets > 0 then payload.optional_assets = optionalAssets end
+  local requiredImports, optionalImports = {}, {}
+  for _, item in ipairs(S.manifestImports or {}) do
+    local entry = {}
+    for k, v in pairs(item.entry) do entry[k] = v end
+    local hashes = splitCsv(item.md5Text)
+    entry.md5 = #hashes == 1 and hashes[1] or hashes
+    local list = item.required and requiredImports or optionalImports
+    list[#list + 1] = entry
+  end
+  if #requiredImports > 0 then payload.required_imports = requiredImports end
+  if #optionalImports > 0 then payload.optional_imports = optionalImports end
   if d.options_schema and d.options_schema ~= "" then
     payload.options_schema = d.options_schema
   end
@@ -506,6 +529,38 @@ function Manifest.draw(S, x, y, w, h, App)
     S.manifestText.optional_assets = field(S, "mf_oassets", fx, fy, fw, fh_,
       S.manifestText.optional_assets, "importer/pack")
   end)
+
+  Kit.text("micro", "imports (files the player supplies into baseroms/)", px, py + 6 * s, PAL.caption)
+  py = py + 26 * s
+  local gapX = 6 * s
+  local idW, fileW, reqW, delW = 100 * s, 140 * s, 88 * s, 30 * s
+  local md5W = math.max(60 * s, propW - idW - fileW - reqW - delW - 4 * gapX)
+  local removeAt
+  for i, item in ipairs(S.manifestImports) do
+    local e, ix = item.entry, px
+    e.id = field(S, "mf_imp_id" .. i, ix, py, idW, fh, e.id or "", "id")
+    ix = ix + idW + gapX
+    e.file = field(S, "mf_imp_file" .. i, ix, py, fileW, fh, e.file or "", "file.gb")
+    ix = ix + fileW + gapX
+    item.md5Text = field(S, "mf_imp_md5" .. i, ix, py, md5W, fh, item.md5Text, "md5, md5...")
+    ix = ix + md5W + gapX
+    if Kit.chip(ix, py, reqW, fh, item.required and "required" or "optional", item.required, PAL.yellow) then
+      item.required = not item.required
+      markManifestDirty(S)
+    end
+    ix = ix + reqW + gapX
+    if Kit.button(ix, py, delW, fh, "x", { kind = "ghost" }) then removeAt = i end
+    py = py + fh + 8 * s
+  end
+  if removeAt then
+    table.remove(S.manifestImports, removeAt)
+    markManifestDirty(S)
+  end
+  if Kit.button(px, py, 120 * s, fh, "+ Add import", { kind = "ghost" }) then
+    S.manifestImports[#S.manifestImports + 1] = { entry = {}, required = true, md5Text = "" }
+    markManifestDirty(S)
+  end
+  py = py + fh + 12 * s
 
   Kit.text("micro",
     "Write validates against the engine manifest schema, then saves mods/<id>/manifest.json.",

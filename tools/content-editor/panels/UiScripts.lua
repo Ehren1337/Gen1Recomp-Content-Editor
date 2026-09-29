@@ -80,7 +80,7 @@ local CATALOG = {
     gen2 = { module = "src.ui.gen2.Diploma", rel = "src/ui/gen2/Diploma.lua" } },
   { id = "battle", group = "Battle", label = "Battle state",
     tip = "Battle flow and HUD host",
-    gen1 = { module = "src.ui.BattleState", rel = "src/ui/BattleState.lua" },
+    gen1 = { module = "src.battle.BattleState", rel = "src/battle/BattleState.lua" },
     gen2 = { module = "src.ui.gen2.BattleState",
       rel = "src/ui/gen2/BattleState.lua" } },
   { id = "battleHud", group = "Battle", label = "Battle HUD",

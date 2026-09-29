@@ -1,5 +1,6 @@
 local root=assert(os.getenv("POKEPORT_RECOMP"))
 package.path="tools/content-editor/?.lua;tools/save-editor/?.lua;"..root.."/?.lua;"..package.path
+love=love or {filesystem={read=function(path) local f=assert(io.open(path,"rb"));local s=f:read("*a");f:close();return s end}}
 local G,Writer=require("Gen3"),require("ModWriter")
 -- Large route data must not overflow the entry function's early-return jump.
 local large = {game="firered",gen3Layered={}}

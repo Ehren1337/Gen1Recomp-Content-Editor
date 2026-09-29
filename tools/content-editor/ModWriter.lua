@@ -1805,7 +1805,7 @@ local FITTED_SCREENS = {
   billsPc = { "src.ui.gen2.PcMenu" },
   stats = { "src.ui.gen2.SummaryMenu", "src.ui.SummaryMenu" },
   diploma = { "src.ui.gen2.Diploma", "src.ui.Diploma" },
-  battleHud = { "src.ui.gen2.BattleState", "src.ui.BattleState" },
+  battleHud = { "src.ui.gen2.BattleState", "src.battle.BattleState" },
   overworldFx = {},
   emotionBubbles = {},
   emotes = {},
@@ -2034,14 +2034,18 @@ function ModWriter.emitCustomUi(out, project, gen2)
   out[#out + 1] = "      end"
   out[#out + 1] = "      return self"
   out[#out + 1] = "    end"
-  out[#out + 1] = "    local function wrapNew(modname, adopt)"
+  out[#out + 1] = "    local function wrapNew(modname, adopt, ctors)"
   out[#out + 1] = "      local ok, M = pcall(require, modname)"
-  out[#out + 1] = "      if not (ok and M and type(M.new) == \"function\") then return end"
-  out[#out + 1] = "      local orig = M.new"
-  out[#out + 1] = "      function M.new(game, a, b)"
-  out[#out + 1] = "        local self = orig(game, a, b)"
-  out[#out + 1] = "        if type(self) == \"table\" then adopt(self, game) end"
-  out[#out + 1] = "        return self"
+  out[#out + 1] = "      if not (ok and type(M) == \"table\") then return end"
+  out[#out + 1] = "      for _, name in ipairs(ctors or { \"new\" }) do"
+  out[#out + 1] = "        local orig = M[name]"
+  out[#out + 1] = "        if type(orig) == \"function\" then"
+  out[#out + 1] = "          M[name] = function(game, ...)"
+  out[#out + 1] = "            local self = orig(game, ...)"
+  out[#out + 1] = "            if type(self) == \"table\" then adopt(self, game) end"
+  out[#out + 1] = "            return self"
+  out[#out + 1] = "          end"
+  out[#out + 1] = "        end"
   out[#out + 1] = "      end"
   out[#out + 1] = "    end"
 
@@ -2268,9 +2272,12 @@ function ModWriter.emitCustomUi(out, project, gen2)
       "src.ui.gen2.Pokegear", "src.ui.gen2.NamingScreen", "src.ui.NamingScreen",
       "src.ui.gen2.PcMenu", "src.ui.gen2.SummaryMenu", "src.ui.SummaryMenu",
       "src.ui.gen2.Diploma", "src.ui.Diploma",
-      "src.ui.gen2.BattleState", "src.ui.BattleState",
+      "src.ui.gen2.BattleState", "src.battle.BattleState",
     }) do
       local path = byScreen[modname]
+      -- Gen 1's battle state has no `new`; battles are built by these two.
+      local ctors = modname == "src.battle.BattleState"
+        and ', { "newWild", "newTrainer" }' or ""
       if path then
         local lit = rewriteModPaths(string.format("%q", path))
         out[#out + 1] = "    wrapNew(" .. string.format("%q", modname) .. ", function(self)"
@@ -2283,7 +2290,7 @@ function ModWriter.emitCustomUi(out, project, gen2)
         out[#out + 1] = "        uiFitted(overlay, 0, 0, 160, 144)"
         out[#out + 1] = "        if type(orig) == \"function\" then orig(self, ...) end"
         out[#out + 1] = "      end"
-        out[#out + 1] = "    end)"
+        out[#out + 1] = "    end" .. ctors .. ")"
       end
     end
   end

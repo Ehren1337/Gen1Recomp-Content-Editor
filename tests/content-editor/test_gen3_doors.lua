@@ -36,7 +36,11 @@ Doors.getDoorEntryAt=function(mapId,x,y)
   return nativeDoorLookup(mapId,x,y)
 end
 local canvas={setFilter=function() end}
-love={graphics=setmetatable({newCanvas=function() return canvas end},{__index=function() return function() end end})}
+local function newSpriteBatch()
+  return {setColor=function() end,add=function() end,release=function() end}
+end
+love={graphics=setmetatable({newCanvas=function() return canvas end,newSpriteBatch=newSpriteBatch},
+  {__index=function() return function() end end})}
 local function ref(pair,mid) return {source="@runtime:"..pair,tile=mid} end
 local source={cellWidth=5,cellHeight=1,baseTileset="pallet",gen3Border={width=0,height=0,mids={}},
   collision={"door","door","door","walk","door"},layers={
@@ -58,8 +62,12 @@ local mod={id="door_test",events={on=function(_,_,fn) fn({game={data={maps=maps}
 local exported=require("Gen3LayeredRuntime")
 assert(not exported:find("package.loaded",1,true),"Exported mod cannot access package.loaded in sandbox")
 local run=assert(loadstring("return function(mod,layered) "..exported.." end"))()
-local layered={maps={FR_TEST=source,FR_INSIDE=inside,FR_NEW=fresh},sources={},animations={}}
-run(mod,layered)
+-- Each export gets fresh layered data; building replaces its map entries.
+local function export()
+  hooks:removeOwner("door_test")
+  run(mod,{maps={FR_TEST=source,FR_INSIDE=inside,FR_NEW=fresh},sources={},animations={}})
+end
+export()
 assert(maps.FR_TEST.midLayout:midAt(0,0)~=0x2A3,"Test must renumber door tiles")
 assert(Doors.getDoorEntryAt("FR_TEST",0,0).tile=="Pallet","Renumbered house door lost")
 assert(Doors.getDoorEntryAt("TEST",1,0).tile=="SlidingSingle","Sliding door lost")
@@ -108,6 +116,7 @@ assert(sounds[1]==Doors.SOUND_SLIDING and draws[1]=="closed" and draws[2]=="half
 Doors.reset()
 source.layers[1].cells[2]=ref("pallet",0x15B)
 behaviors.pallet[0x15B]=0x69
+export()
 Doors._sheets.SlidingDouble=Doors._sheets.SlidingSingle
 draws={}
 Doors.open("FR_INSIDE",1,0,{})
@@ -126,8 +135,7 @@ assert(require("src.core.game3.scripting.interaction_scripts").behaviors[newPair
   "New-map walkable door lost its native warp behavior")
 -- A fresh export can move a door to a different cell without ROM coordinates.
 source.layers[1].cells[1],source.layers[1].cells[4]=source.layers[1].cells[4],source.layers[1].cells[1]
-hooks:removeOwner("door_test")
-run(mod,layered)
+export()
 assert(Doors.getDoorEntryAt("FR_TEST",0,0)==nil)
 assert(Doors.getDoorEntryAt("FR_TEST",3,0).tile=="Pallet","Moved door lost")
 Runtime.reset()
