@@ -1,20 +1,12 @@
 -- GUIDES tab: step-by-step guides (content in GuidesData.lua, see Guides.lua).
 -- A list of guides by topic on the left; the chosen guide's numbered steps
 -- on the right, each with "Take me there" when it has a place to go.
---
--- GuideEditor.lua, when present, is an authoring tool that isn't part of the
--- public editor; everything here works without it.
 
 local Kit = require("Kit")
 local Theme = require("Theme")
 local PAL = Theme.PAL
 local Pane = require("FormPane")
 local Guides = require("Guides")
-local hasEditor, Editor = pcall(require, "GuideEditor")
-if not hasEditor then
-  if not tostring(Editor):find("not found", 1, true) then print("GuideEditor: " .. tostring(Editor)) end
-  Editor = nil
-end
 
 local M = {}
 
@@ -101,11 +93,6 @@ end
 
 function M.draw(S, x, y, w, h, App)
   local s = Kit.scale
-  if Editor then
-    local drawn
-    drawn, y, h = Editor.draw(S, x, y, w, h, App)
-    if drawn then return end
-  end
   local gen3 = require("Generation").isGen3(S)
   local data = Guides.data()
   local guide = Guides.find(S.guideId, data.guides) or data.guides[1]
@@ -122,16 +109,6 @@ function M.draw(S, x, y, w, h, App)
     return
   end
   drawGuide(S, App, guide, px, pw, y, h, gen3)
-end
-
---- Key presses, for GuideEditor when present. Returns a status line or nil.
-function M.keypressed(key)
-  return Editor and Editor.keypressed(key) or nil
-end
-
---- Anything to show next to the title (GuideEditor's tag when present).
-function M.titleTag(x, y)
-  if Editor then Editor.titleTag(x, y) end
 end
 
 return M

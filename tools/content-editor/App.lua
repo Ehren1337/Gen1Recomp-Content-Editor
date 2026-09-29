@@ -404,6 +404,8 @@ end
 
 function App.load(modPath, opts)
   opts = opts or {}
+  -- Editor settings (Settings button): the look first, so everything draws in it.
+  pcall(function() require("EditorSettings").applyTheme() end)
   S = State.new()
   local prefsPeek = DataSource.loadPrefs()
   -- main.lua always passes version="red" unless POKEPORT_VERSION is set.
@@ -449,7 +451,7 @@ function App.load(modPath, opts)
       if tag then say("Updated to " .. require("Updater").short(tag) .. " -- your mods weren't touched") end
     end)
   end
-  if not opts.eventWindow and os.getenv("POKEPORT_NO_UPDATE_CHECK") ~= "1" then
+  if not opts.eventWindow and require("Updater").autoEnabled() then
     pcall(function() require("Updater").check(true) end)
   end
 end
@@ -1635,7 +1637,6 @@ function App.draw()
   local titleY = railH + 10 * s
   local btnH = 32 * s
   Kit.text("title", "CONTENT EDITOR", 20 * s, titleY, PAL.heading)
-  require("GuidesPanel").titleTag(20 * s + Kit.textWidth("title", "CONTENT EDITOR") + 12 * s, titleY + 4 * s)
   local chip = S.path and (S.path:match("[/\\]([^/\\]+)$") or S.path)
     or S.browseModId or "(no mod)"
   if anyDirty(S) then chip = chip .. " *" end
@@ -1672,6 +1673,8 @@ function App.draw()
     end, true, staged and "Close the editor, install the update and open it again (your mods aren't touched)"
       or "Check for a newer Content Editor and install it (your mods aren't touched)")
   end
+  rbtn("Settings", "ghost", function() require("SettingsPopup").open(S) end, true,
+    "Editor settings: theme colours (saved on this computer, not in your mod)")
 
   local tabY = railH + 70 * s
   local tabH = 36 * s
@@ -1758,7 +1761,7 @@ function App.draw()
       or SpeciesPicker.isOpen(S) or ItemPicker.isOpen(S)
       or ChoicePicker.isOpen(S)
       or BattleAnims.isPickerOpen(S) or S._pathPrompt or S.mapTilesetPicker
-      or S._updateOpen then
+      or S._updateOpen or S._settingsOpen then
     Kit.blockClicks = true
   end
   RegList.clearNav(S)
@@ -1840,6 +1843,10 @@ function App.draw()
     Kit.blockClicks = false
     require("UpdatePopup").draw(S, App, W, H)
   end
+  if S._settingsOpen then
+    Kit.blockClicks = false
+    require("SettingsPopup").draw(S, App, W, H)
+  end
 
   Kit.endFrame()
   wheelY = 0
@@ -1847,8 +1854,6 @@ end
 
 function App.keypressed(key)
   if not S then return end
-  local guideNote = require("GuidesPanel").keypressed(key)
-  if guideNote then say(guideNote) end
   if require("Gen3EventWindow").busy(S) then
     if S._eventWindow then S._eventWindow.process.focus() end
     return
@@ -1881,6 +1886,7 @@ function App.keypressed(key)
   if not require("Generation").isGen3(S) and EventScriptEditor.keypressed(S, key, App) then return end
   if Kit.keypressed(key) then return end
   if key == "escape" then
+    if S._settingsOpen then require("SettingsPopup").close(S); return end
     if PalettePicker.keypressed(S, key) then return end
     if SpeciesPicker.keypressed(S, key) then return end
     if ItemPicker.keypressed(S, key) then return end
@@ -2003,7 +2009,7 @@ function App.quit()
     say("Unsaved changes — quit again to discard")
     return true
   end
-  if require("Updater").state.step == "staged" then
+  if require("Updater").state.step == "staged" and require("Updater").autoEnabled() then
     local ok, err = require("Updater").install(false)
     if not ok then require("Updater").log("automatic install failed: " .. tostring(err)) end
   end

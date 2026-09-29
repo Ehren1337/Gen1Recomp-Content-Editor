@@ -46,6 +46,25 @@ after 15 minutes. Source staging requires `tar` plus PowerShell on Windows, or
 `tar` and `zip` on Linux/macOS. Packages record `content-editor-commit.txt`.
 `POKEPORT_NO_UPDATE_CHECK=1` disables startup and periodic automatic checks.
 
+## Editor settings
+
+**Settings** (top bar) holds the editor's own settings, kept in the save
+folder's `editor-settings.lua`: mods, updates and the editor folder never
+touch them. **Theme** picks the editor's colours: Fire Red, Leaf Green, Omega
+Ruby, Alpha Sapphire (the original look), Gamma Emerald, Heart Gold or Soul
+Silver, or any colour from the hue bar. The chosen look
+applies straight away. `Theme.lua` recolours the chrome in place (`Theme.apply`);
+every non-stock look is the Purple palette turned to another hue with each
+colour's saturation and lightness kept, so text stays as readable (checked
+at every hue in `tests/content-editor/test_editor_theme.lua`). Green, yellow
+and red keep their meaning, and the game colours on the top stripe stay.
+
+**Updates** turns automatic updates off (`autoUpdate = false`): no checks at
+start or every 15 minutes, no background download and no install on close,
+so local changes to the editor's own files stay. The top bar then says
+**Updates off**; its pop-up can still **Check now** and download / install by
+hand. `POKEPORT_NO_UPDATE_CHECK=1` also turns them off (`Updater.autoEnabled`).
+
 ## Cutscene maker and viewer (Gen 3)
 
 **Playtest event** launches the linked Gen1Recomp game on the selected event's
@@ -441,6 +460,35 @@ FireRed-only. Those tools report this limitation in LeafGreen rather than readin
 a remembered FireRed ROM. Cache-backed editing and custom imported assets remain
 available. Requires the updated runtime; the older bundled runtime has no
 LeafGreen engine support.
+
+## Outside the map (FireRed / LeafGreen)
+
+**Maps → Border → Around the map** shows a map, the maps connected to it (blue
+outlines, named) and the tiles around them, as the game draws them. Space
+outside every map belongs to the **nearest** map, which decides its fill and
+keeps the tiles painted there, so the space around connected maps joins up
+the same from either side:
+
+- **Game border** — the game's repeating border pattern (**Pattern** view).
+- **Extrude** — the map's last 2 rows and columns carried on outward, so 2×2
+  things like trees stay whole.
+
+**This map** picks one for the open map, or follows the **Mod default**, which
+covers outdoor maps (Town, City, Route, Ocean route); indoor maps keep the game
+border unless they choose Extrude themselves.
+
+Any cell outside the maps, within the nearest map's **Margin** (0–64 tiles, 16 by default) can be painted
+by hand from any tileset (**Paint tileset**): **Paint** sets a tile (click or
+drag), **Revert** clears it back to the fill, **Pick** copies any cell's tile
+and tileset. Right-click any tile (on the map or around it) to pick it without
+changing tools, like the map builder's Pencil. Zoom with **-** / **+** or the mouse wheel over the map (50% to
+800%, around the pointer); Shift+wheel scrolls up/down, Ctrl+wheel left/right. Move around with the
+**Pan** tool (drag), or with any tool by dragging with the middle mouse button
+or with Space held. The **Map** tool switches to another map: click a connected
+map (or the space nearest to it) to edit its border instead.
+Painted tiles win over the fill and are only for looks; nobody can
+walk outside a map. The game uses them from `main.lua` (the engine isn't
+changed), and they replace the player's VOID FILL option on those cells.
 
 ## Combine duplicate tiles
 
