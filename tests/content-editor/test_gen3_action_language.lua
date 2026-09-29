@@ -52,4 +52,13 @@ local catalog={root={{op="special",id=0},{op="specialvar",[1]=32781,[2]=60},{op=
 local rows=Story.rows(S,"root",catalog)
 assert(rows[1].label=="Heal the player's Pokémon" and rows[2].label:find("Open Pokémon storage") and rows[3].label=="Give the player money")
 assert(rows[2].script=="root" and rows[2].index==2)
+local GameVersion=require("src.core.GameVersion");GameVersion.set("emerald")
+local emerald=require("src.core.game3.constants").of("emerald").specials.byName
+assert(L.specials[emerald.ShowPokemonStorageSystemPC]=="Open Pokémon storage","Emerald specials use Emerald's numbering")
+assert(L.specials[60]=="Check whether a rematch should start","Special 60 is ShouldTryRematchBattle in Emerald")
+assert(L.specials[0xE100] and L.validNumber({op="setflag"},{index=1},100))
+local Inputs=require("Gen3ActionInputs")
+local opponent=Inputs.observe(Inputs.new(),{op="special",id=emerald.CreateEnemyEventMon},"root",1)
+assert(opponent and opponent[1].label=="Pokémon","Emerald opponent inputs")
+GameVersion.set("red")
 print("PASS: readable game actions, source ownership, alias preservation and numeric bounds")

@@ -89,4 +89,10 @@ tests/content-editor/leafgreen-smoke/*.png
 /tests/content-editor/layer-benchmark-smoke/baseline.lua
 /tests/content-editor/layer-benchmark-smoke/*.txt
 /tests/content-editor/hgss-playtest/*.log
+/tests/content-editor/emerald-tabs-smoke/result.txt
+/tests/content-editor/emerald-tabs-smoke/*.png
+/tests/content-editor/emerald-playtest/mod/
+/tests/content-editor/emerald-playtest/export.txt
+/tests/content-editor/emerald-playtest/*.log
+/tests/content-editor/emerald-playtest/*.png
 /tools/diag-music/*.txt

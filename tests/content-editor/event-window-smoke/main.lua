@@ -75,7 +75,7 @@ function love.load(args)
     love.graphics.setCanvas({canvas,stencil=true});K.layout(1360,860);K.beginFrame(0,0,false,0)
     Builder.draw(S,20,45,1320,790,App);K.endFrame();love.graphics.setCanvas()
     if case[3] then assert(not S._eventWindowRequest,"Dragging opened the event window")
-    else assert(S._eventWindowRequest and S._eventWindowRequest.kind==case[2],"Click release did not open the selected event") end
+    else assert(S.builderPane=="details" and not S._eventWindowRequest,"Click release did not show the selected event") end
     S._eventWindowRequest=nil
   end
   require("History").clear(S);baseline=require("ModWriter").encodeLua(S.project)

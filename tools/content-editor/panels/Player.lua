@@ -702,10 +702,12 @@ end
 -- landmarks.spawns.SPAWN_HOME, 3000 money, empty bag/PC.
 function Player.vanillaBoot(S)
   if Generation.isGen3(S) then
-    local start=require("src.core.game3.map_ids").NEW_GAME_START
+    local game=Generation.id(S)
+    local start=require("src.core.game3.map_ids").newGameStart(game)
+    local frlg=game=="firered" or game=="leafgreen"
     return {startMap=start.map,startX=start.x,startY=start.y,startFacing=start.facing or "down",startMoney=3000,
       lastHeal={map=start.healMap or start.map,x=start.healX or start.x,y=start.healY or start.y},
-      playerName="RED",rivalName="BLUE",startItems={},startPcItems={{id="POTION",count=1}},namePresets={}}
+      playerName=frlg and "RED" or "",rivalName=frlg and "BLUE" or "",startItems={},startPcItems={{id="POTION",count=1}},namePresets={}}
   end
   if Generation.isGen2(S) then
     local lm = S.data and (S.data.gen2Landmarks or S.data.landmarks)

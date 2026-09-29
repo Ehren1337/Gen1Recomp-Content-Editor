@@ -2,9 +2,9 @@
 local M={}
 function M.open(S)
   -- These supplementary decoders still use verified BPRE0 offsets. Never
-  -- silently use the global FireRed ROM path while editing LeafGreen.
-  if require("Generation").id(S)=="leafgreen" then
-    return nil,"This supplementary ROM tool currently requires FireRed USA 1.0; LeafGreen cache editing is supported"
+  -- silently use the global FireRed ROM path while editing another game.
+  if require("Generation").id(S)~="firered" then
+    return nil,"This supplementary ROM tool currently requires FireRed USA 1.0; cache editing is supported for this game"
   end
   if S.data._g3RomBytes then return S.data._g3RomBytes end
   local IO=require("ModIO")
@@ -62,20 +62,19 @@ function M.formPicture(S,species,back,frame,paletteFrame,shiny)
   if not ok then return nil,"FireRed artwork unavailable: "..tostring(image) end
   return image,err
 end
+-- The game's in-game trades, from the imported cache (src/data/ingame_trades.h).
 function M.trades(S)
   if S.data._g3RomTrades then return S.data._g3RomTrades end
-  local b,err=M.open(S);if not b then return {},err end
+  local path="data/generated/gba/trades/ingame_trades.lua"
+  local bytes=S.data._gen3Read and S.data._gen3Read(path)
+  if not bytes then return {},"Missing Gen 3 cache: "..path end
+  local pack,err=require("Gen3Decode").decode(bytes,{allowArray=true,allowComments=true})
+  if type(pack)~="table" or type(pack.trades)~="table" then return {},path..": "..tostring(err) end
   local species={};for id,rec in pairs(require("Gen3").catalog(S.data,"pokemon")) do species[rec.index]=id end
-  local function str(p,n)
-    local out={};local chars=require("src.core.game3.scripting.text_ir").CHARMAP
-    for i=0,n-1 do local c=b:byte(p+i+1);if c==255 then break end;out[#out+1]=chars[c] or "?" end
-    return table.concat(out)
-  end
   local out={}
-  for i=0,8 do
-    local p=0x26cf8c+i*60;local ivs={};for j=0,5 do ivs[j+1]=b:byte(p+15+j) end
-    out["ROM_"..i]={give=species[u16(b,p+56)],get=species[u16(b,p+12)],nickname=str(p,11),otName=str(p+43,11),
-      otId=u32(b,p+24),ivs=ivs,abilityNum=b:byte(p+21),personality=u32(b,p+36),heldItem=u16(b,p+40),otGender=b:byte(p+55),nativeIndex=i}
+  for i,t in pairs(pack.trades) do
+    out["ROM_"..i]={give=species[t.requestedSpecies],get=species[t.species],nickname=t.nickname,otName=t.otName,
+      otId=t.otId,ivs=t.ivs,abilityNum=t.abilityNum,personality=t.personality,heldItem=t.heldItem,otGender=t.otGender,nativeIndex=i}
   end
   S.data._g3RomTrades=out;return out
 end

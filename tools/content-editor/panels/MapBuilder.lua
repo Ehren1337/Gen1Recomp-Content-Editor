@@ -1487,7 +1487,7 @@ local function drawCanvas(S, source, x, y, w, h, App)
       elseif drag.move and not drag.moved then
         if Generation.isGen3(S) then
           S.builderPane="details";Maps.selectEvent(S,drag.kind,drag.index)
-        else require("Gen3EventWindow").request(S,S.mapId,drag.kind,drag.index) end
+        end
       elseif drag.click and not drag.moved and eventTool.id == "trigger" then
         Maps.placeTriggerCell(S, drag.x, drag.y, App)
       elseif drag.click and not drag.moved and eventTool.id == "berry" then

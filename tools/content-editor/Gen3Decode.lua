@@ -5,10 +5,38 @@ local M = {}
 local Serializer = require("src.core.SaveSerializer")
 local MARK = "__content_editor_nil_literal_7cf1"
 
+-- Large extracts (Emerald's scripts) are split into chunks the runtime runs:
+-- local T = {} / do (function(T) / T["KEY"] = {...} / end)(T) end / return T.
+-- Rebuild them as one table literal for the data-only parser instead.
+local CHUNK_LINES = { ["local T = {}"] = true, ["do (function(T)"] = true, ["end)(T) end"] = true }
+local function unchunk(bytes)
+  local entries, entry, ended = {}, nil, false
+  for line in bytes:gmatch("[^\r\n]+") do
+    if ended then
+      if not line:match("^%s*$") then return nil,"Unexpected data after return T" end
+    elseif line == "return T" then ended = true
+    elseif CHUNK_LINES[line] then
+      if entry then entries[#entries+1] = table.concat(entry, "\n");entry = nil end
+    elseif line:match("^T%[") then
+      if entry then entries[#entries+1] = table.concat(entry, "\n") end
+      entry = { (line:gsub("^T(%b[])%s*=", "%1 =")) }
+    elseif entry then entry[#entry+1] = line
+    elseif not line:match("^%s*%-%-") then return nil,"Unsupported generated statement: "..line:sub(1,80)
+    end
+  end
+  if not ended then return nil,"Missing return T" end
+  return "return {\n"..table.concat(entries, ",\n").."\n}"
+end
+
 function M.decode(bytes, limits)
   if type(bytes)~="string" then return nil,"Expected Lua data text" end
   if #bytes>((limits or {}).maxBytes or 16*1024*1024) then return nil,"Lua data exceeds size limit" end
   local value, err = Serializer.decode(bytes, limits)
+  if not value and bytes:match("^%s*local T = {}") then
+    local plain, problem = unchunk(bytes)
+    if not plain then return nil,problem end
+    return M.decode(plain, limits)
+  end
   if not value and bytes:find("local M =",1,true) then
     local result, ended
     for line in bytes:gmatch("[^\r\n]+") do

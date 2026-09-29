@@ -2,43 +2,44 @@
 -- State belongs to one control-flow path; conditional branches get a copy.
 local M={}
 local copy=require("src.mods.Merge").deepCopy
-local battles={[0x138]=true,[0x137]=true,[0x139]=true,[0x143]=true,[0x156]=true}
+local battles={StartLegendaryBattle=true,StartGroudonKyogreBattle=true,StartRegiBattle=true,StartSouthernIslandBattle=true,StartMarowakBattle=true,
+  BattleSetup_StartLegendaryBattle=true,BattleSetup_StartLatiBattle=true}
 local opponent={{0x8004,"Pokémon","species",1,65535},{0x8005,"Level",nil,1,100},{0x8006,"Held item","item",0,65535}}
 M.specials={
   -- pret/pokefirered src/cable_club.c: EnterColosseumPlayerSpot and its tasks.
-  [32]={{0x8004,"Battle format","linkBattleFormat",1,5},{0x8005,"Player's battle spot","linkBattleSpot",0,3}},
-  [0x1BB]=opponent,
-  [0xF003]={{0x8000,"Pokémon","species",1,65535}},
-  [0x7C]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x7D]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x9E]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x147]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x148]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x150]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x17C]={{0x8004,"Species to look for","species",1,65535}},
-  [0xC5]={{0x8005,"Price to check",nil,0,65535}},
-  [0xC6]={{0x8005,"Price to charge",nil,0,65535}},
-  [0x163]={{0x8004,"Pokémon to mark as seen","species",1,65535}},
-  [0x1B4]={{0x8004,"Species to look for","species",1,65535}},
-  [0x7B]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0xBA]={{0x8004,"Pokémon on the team","teamSlot",0,5}},
-  [0x85]={{0x8004,"Do not count this team Pokémon","teamSlot",0,5}},
-  [0x96]={{0x8004,"Saved switch for this hidden item",nil,32,4095}},
-  [0xD4]={{0x8004,"Pokédex to count","pokedex",0,1}},
-  [0xBB]={{0x8004,"Pokémon to leave at the Day Care","teamSlot",0,5}},
-  [0x176]={{0x8004,"Pokémon to leave at the Day Care","teamSlot",0,5}},
-  [0xC0]={{0x8004,"Pokémon to return","daycareSlot",0,1}},
-  [0xBF]={{0x8004,"Day Care Pokémon to check","daycareSlot",0,1}},
-  [0xBE]={{0x8004,"Day Care Pokémon to check","daycareSlot",0,1}},
-  [0xFF]={{0x8005,"Pokémon offered by the player","teamSlot",0,5}},
-  [0x197]={{0x8004,"Pokémon to massage","teamSlot",0,5}},
-  [0x13A]={{0x800F,"Character to move","character",1,65535}},
-  [0x17D]={{0x8004,"Help topic number",nil,0,65535}},
-  [0x5F]={{0x8004,"Phrase editor type",nil,0,65535}},
-  [0x1B2]={{0x8004,"Cursor column",nil,0,65535},{0x8005,"Cursor row",nil,0,65535},{0x8006,"Hide the cursor","yesno",0,1}},
-  [0x132]={{0x8005,"Floor to display","elevatorFloor",0,15}},
-  [0x111]={{0x8005,"Starting floor","elevatorFloor",0,15},{0x8006,"Destination floor","elevatorFloor",0,15}},
-  [0x158]={{0x8004,"Choice-list number",nil,0,65535}},
+  EnterColosseumPlayerSpot={{0x8004,"Battle format","linkBattleFormat",1,5},{0x8005,"Player's battle spot","linkBattleSpot",0,3}},
+  CreateEnemyEventMon=opponent,
+  PlayCry={{0x8000,"Pokémon","species",1,65535}},
+  BufferMonNickname={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  IsMonOTIDNotPlayers={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  ChangePokemonNickname={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  GetPartyMonSpecies={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  IsSelectedMonEgg={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  IsMonOTNameNotPlayers={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  DoesPlayerPartyContainSpecies={{0x8004,"Species to look for","species",1,65535}},
+  IsEnoughForCostInVar0x8005={{0x8005,"Price to check",nil,0,65535}},
+  SubtractMoneyFromVar0x8005={{0x8005,"Price to charge",nil,0,65535}},
+  SetSeenMon={{0x8004,"Pokémon to mark as seen","species",1,65535}},
+  PlayerPartyContainsSpeciesWithPlayerID={{0x8004,"Species to look for","species",1,65535}},
+  NameRaterWasNicknameChanged={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  GetSelectedMonNicknameAndSpecies={{0x8004,"Pokémon on the team","teamSlot",0,5}},
+  CountPartyAliveNonEggMons_IgnoreVar0x8004Slot={{0x8004,"Do not count this team Pokémon","teamSlot",0,5}},
+  SetHiddenItemFlag={{0x8004,"Saved switch for this hidden item",nil,32,4095}},
+  GetPokedexCount={{0x8004,"Pokédex to count","pokedex",0,1}},
+  StoreSelectedPokemonInDaycare={{0x8004,"Pokémon to leave at the Day Care","teamSlot",0,5}},
+  PutMonInRoute5Daycare={{0x8004,"Pokémon to leave at the Day Care","teamSlot",0,5}},
+  TakePokemonFromDaycare={{0x8004,"Pokémon to return","daycareSlot",0,1}},
+  GetDaycareCost={{0x8004,"Day Care Pokémon to check","daycareSlot",0,1}},
+  GetNumLevelsGainedFromDaycare={{0x8004,"Day Care Pokémon to check","daycareSlot",0,1}},
+  GetTradeSpecies={{0x8005,"Pokémon offered by the player","teamSlot",0,5}},
+  DaisyMassageServices={{0x8004,"Pokémon to massage","teamSlot",0,5}},
+  SetUpTrainerMovement={{0x800F,"Character to move","character",1,65535}},
+  Script_SetHelpContext={{0x8004,"Help topic number",nil,0,65535}},
+  ShowEasyChatScreen={{0x8004,"Phrase editor type",nil,0,65535}},
+  BrailleCursorToggle={{0x8004,"Cursor column",nil,0,65535},{0x8005,"Cursor row",nil,0,65535},{0x8006,"Hide the cursor","yesno",0,1}},
+  DrawElevatorCurrentFloorWindow={{0x8005,"Floor to display","elevatorFloor",0,15}},
+  AnimateElevator={{0x8005,"Starting floor","elevatorFloor",0,15},{0x8006,"Destination floor","elevatorFloor",0,15}},
+  ListMenu={{0x8004,"Choice-list number",nil,0,65535}},
 }
 function M.new() return {vars={}} end
 function M.clone(state) return copy(state) end
@@ -76,12 +77,13 @@ function M.observe(state,row,script,index)
     state.pending=fields;result=copy(fields)
   elseif op=="special" or op=="specialvar" then
     local id=op=="special" and (row.id or row[1]) or row[2]
-    if M.specials[id] then
-      result=variableInputs(state,M.specials[id],script,index)
-      result.help=require("Gen3ActionLanguage").specialHelp[id]
+    local L=require("Gen3ActionLanguage");local name=L.specialName(id)
+    if M.specials[name] then
+      result=variableInputs(state,M.specials[name],script,index)
+      result.help=L.specialHelp[id]
     end
-    if id==0x1BB then state.pending=copy(result)
-    elseif battles[id] then result=copy(state.pending) or unpreparedBattle(script,index);state.pending=nil end
+    if name=="CreateEnemyEventMon" then state.pending=copy(result)
+    elseif battles[name] then result=copy(state.pending) or unpreparedBattle(script,index);state.pending=nil end
     if result and not result.newBattle and op=="specialvar" then
       result[#result+1]={label="Store the answer in saved number",min=0x4000,max=65535,value=row[1],
         binding={script=script,index=index,position=1,expectedOp="specialvar"}}
@@ -101,8 +103,8 @@ function M.prepareBattle(S,catalog,target,values)
     or not values.item or values.item%1~=0 or values.item<0 or values.item>65535 then return false end
   local source=((S.project.gen3 or {}).map_scripts or {})[target.script] or catalog[target.script]
   local step=source and source[target.index]
-  if not step or not (step.op=="dowildbattle" or (step.op=="special" and battles[step.id or step[1]])
-    or (step.op=="specialvar" and battles[step[2]])) then return false end
+  local name=step and require("Gen3ActionLanguage").specialName(step.op=="special" and (step.id or step[1]) or step[2])
+  if not step or not (step.op=="dowildbattle" or ((step.op=="special" or step.op=="specialvar") and battles[name])) then return false end
   local rows=copy(source)
   table.insert(rows,target.index,{op="setwildbattle",species=values.species,level=values.level,item=values.item})
   S.project.gen3=S.project.gen3 or {};S.project.gen3.map_scripts=S.project.gen3.map_scripts or {}

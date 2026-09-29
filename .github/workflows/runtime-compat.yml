@@ -78,7 +78,8 @@ jobs:
             test_editor_theme test_guides test_large_map_render test_map_elevations \
             test_mouse_scroll test_offline_gifts test_world_activities \
             test_gen3 test_gen3_large_export test_gen3_action_inputs test_gen3_battle_positions test_gen3_behavior_options \
-            test_gen3_borders test_gen3_clock test_gen3_clock_events test_gen3_cutscene_preview test_gen3_doors \
+            test_gen3_borders test_gen3_clock test_gen3_clock_events test_gen3_cutscene_preview \
+            test_gen3_decode_chunks test_gen3_doors \
             test_gen3_event_actions test_gen3_event_commands test_gen3_event_playtest \
             test_gen3_event_playtest_paths test_gen3_event_story test_gen3_exit_types test_gen3_map_identity \
             test_gen3_map_properties test_gen3_new_pokemon test_gen3_paint_collision test_gen3_rom_artwork \

@@ -274,7 +274,8 @@ function M.draw(S, x, y, w, h, App)
     x, y, PAL.muted)
   y = y + 32 * s
   local cw = math.min(w, 760 * s)
-  if not require("Generation").isGen3(S) or not S.project then
+  local game = require("Generation").id(S)
+  if not (game == "firered" or game == "leafgreen") or not S.project then
     Kit.emptyBox(x, y, cw, 120 * s, "No game patches for this game yet (FireRed and LeafGreen have the real time clock).")
     return
   end

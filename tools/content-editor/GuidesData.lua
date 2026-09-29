@@ -13,7 +13,7 @@ return {
       summary = "Make a mod, point the editor at your game, save it and play it.",
       steps = {
         { "PROJECT tab, 1 PROJECT: type a name in New mod id and press Create. Your mods show as buttons there too -- click one to open it.", go = { tab = "project" } },
-        { "2 TARGET GAME: pick the game the mod is for (FireRed or LeafGreen for Gen 3).", go = { tab = "project" } },
+        { "2 TARGET GAME: pick the game the mod is for (FireRed, LeafGreen or Emerald for Gen 3).", go = { tab = "project" } },
         { "3 GAME DATA: Link Recomp to your Gen1Recomp folder (Playtest needs it), or Import ROM so the editor can read the game. Nothing from the ROM is copied into your mod.", go = { tab = "project" } },
         { "Change something in any tab, then press Save at the top right (Ctrl+S). Save writes your mod into mods/<your mod id>." },
         { "4 CHECK & RUN: Validate mod finds mistakes, Scan mod checks for ripped game files, and Playtest mod starts the game with your mod.", go = { tab = "project" } },
@@ -44,7 +44,7 @@ return {
     {
       id = "clock", category = "gen3", gen3 = true,
       title = "Real Time Clock (day and night)",
-      summary = "Outdoor maps follow the player's clock: morning, day and night, like Pokemon Crystal.",
+      summary = "Outdoor maps follow the player's clock: morning, day and night, like Pokemon Crystal. FireRed and LeafGreen only.",
       steps = {
         { "GAME PATCHES: turn Real Time Clock On. Encounter tables come on with it.", go = { tab = "patches" } },
         { "Press Settings (or go to GFX > Day & night) to set when morning, day and night start, the fade, and the colours.", go = { tab = "gfx", set = { g3GfxMode = "daynight" } } },
@@ -56,7 +56,7 @@ return {
     {
       id = "clock_npc", category = "gen3", gen3 = true,
       title = "An NPC who tells the time",
-      summary = "A person who reads the day, date and time, then says something different in the morning, the day and at night.",
+      summary = "A person who reads the day, date and time, then says something different in the morning, the day and at night. FireRed and LeafGreen only.",
       steps = {
         { "GAME PATCHES: turn Real Time Clock On. Morning, day and night start at the hours set in GFX > Day & night.", go = { tab = "patches" } },
         { "MAPS: open the map (Pallet Town, say) and press Edit this map if it isn't editable yet.", go = { tab = "maps" } },
@@ -73,7 +73,7 @@ return {
     {
       id = "night_looks", category = "gen3", gen3 = true,
       title = "Lit windows and lamps at night",
-      summary = "Give blocks their own night colours so windows and lamps glow in the dark.",
+      summary = "Give blocks their own night colours so windows and lamps glow in the dark. FireRed and LeafGreen only.",
       steps = {
         { "GFX > Blocks: pick a tileset and a block (a window, say).", go = { tab = "gfx", set = { g3GfxMode = "blocks" } } },
         { "Press Night look, select the pixels that should light up, choose a colour and press Use this colour." },
@@ -84,7 +84,7 @@ return {
     {
       id = "time_encounters", category = "gen3", gen3 = true,
       title = "Wild Pokemon by time of day",
-      summary = "Different wild Pokemon in the morning, by day and at night.",
+      summary = "Different wild Pokemon in the morning, by day and at night. FireRed and LeafGreen only.",
       steps = {
         { "GAME PATCHES: Real Time Clock On, and Encounter tables On. FireRed's own routes and caves get Pokemon Crystal's morning / day / night lists straight away.", go = { tab = "patches" } },
         { "ENCOUNTERS: pick a map, then Grass and Morning, Day or Night. Change any slot like a normal list.", go = { tab = "encounters", set = { g3EncounterKind = "land", g3EncounterSection = "wild", g3EncounterTime = "night" } } },
@@ -95,7 +95,7 @@ return {
     {
       id = "clean", category = "gen3", gen3 = true,
       title = "Start from scratch (Clean Project)",
-      summary = "A blank game: no story, events or FireRed maps. Only do this at the start of a project.",
+      summary = "A blank game: no story, events or FireRed maps. Only do this at the start of a project. FireRed and LeafGreen only.",
       steps = {
         { "GAME PATCHES > Clean Project > Apply, read the warning, then Wipe and start clean. Everything in the open mod is wiped -- it can't be undone.", go = { tab = "patches" } },
         { "You get one blank starter map; a new game starts there. The intro only asks boy or girl and the player's name." },
