@@ -246,7 +246,7 @@ jobs to `mapbuilder_transforms.lua`. On first game load, Gen1Recomp builds the
 frame PNGs under `save/mod-derived/<mod-id>/mapbuilder/`; they are derived output
 and should not be included when sharing the mod.
 
-The linked Gen1Recomp checkout at `D:\decomp\gen1recomp` contains the required
+The pinned Gen1Recomp runtime in `runtime/gen1recomp` contains the required
 runtime handling in `src/render/TileRenderer.lua`. If the mod is shared with
 another player, their Gen1Recomp build must also support `animatedTiles` frame
 records. If terrain appears but stays static, update/rebuild that runtime and

@@ -14,7 +14,9 @@ local PROFILES = { "content", "overhaul", "total_conversion" }
 local CATEGORIES = {
   "GAMEPLAY", "QUEST", "COSMETIC", "AUDIO", "UI", "FIX", "OTHER",
 }
-local PERMISSIONS = { "engine_internals", "filesystem", "network" }
+local PERMISSIONS = {}
+for name in pairs(ManifestSchema.PERMISSIONS) do PERMISSIONS[#PERMISSIONS + 1] = name end
+table.sort(PERMISSIONS)
 
 local function cycle(list, cur)
   local idx = 1
@@ -34,6 +36,31 @@ local function splitCsv(s)
   for part in tostring(s or ""):gmatch("[^,]+") do
     part = part:match("^%s*(.-)%s*$")
     if part and part ~= "" then out[#out + 1] = part end
+  end
+  return out
+end
+
+-- Asset packs are edited as "importer/pack@range, ..." text.
+local function assetsText(list)
+  if type(list) ~= "table" then return "" end
+  local out = {}
+  for _, a in ipairs(list) do
+    if type(a) == "table" then
+      local s = tostring(a.importer or "") .. "/" .. tostring(a.pack or "")
+      if a.version then s = s .. "@" .. tostring(a.version) end
+      out[#out + 1] = s
+    end
+  end
+  return table.concat(out, ", ")
+end
+
+local function parseAssets(text)
+  local out = {}
+  for _, part in ipairs(splitCsv(text)) do
+    local spec, version = part:match("^(.-)@(.+)$")
+    spec = spec or part
+    local importer, pack = spec:match("^%s*(.-)%s*/%s*(.-)%s*$")
+    out[#out + 1] = { importer = importer or spec, pack = pack, version = version }
   end
   return out
 end
@@ -64,11 +91,14 @@ local function defaultDraft(id)
     language = false,
     description = "",
     github = "",
+    log_url = "",
   }
 end
 
 local function loadDraft(S, modId)
   local data, err = ModIO.readManifest(modId)
+  S.manifestSource = data
+  S.manifestText = {}
   if not data then
     S.manifestDraft = defaultDraft(modId)
     S.manifestLoadError = tostring(err)
@@ -88,6 +118,9 @@ local function loadDraft(S, modId)
   d.language = d.language == true
   d.github = d.github or ""
   d.description = d.description or ""
+  d.log_url = type(d.log_url) == "string" and d.log_url or ""
+  S.manifestText.required_assets = assetsText(data.required_assets)
+  S.manifestText.optional_assets = assetsText(data.optional_assets)
   -- New-mod defaults are `games: ["all"]` + gen2compat. An existing file that
   -- omitted both is Gen 1 only in the loader. Do not keep those defaults, or
   -- the Manifest tab shows YES while Gold skips with "not marked gen2compat".
@@ -131,35 +164,60 @@ local function field(S, id, x, y, w, h, value, ph)
   return v
 end
 
+-- Shows the raw text so separators survive while typing; the draft keeps the parsed list.
+local function listField(S, key, id, x, y, w, h, ph)
+  local d = S.manifestDraft
+  local v = field(S, id, x, y, w, h, S.manifestText[key] or csv(d[key]), ph)
+  S.manifestText[key] = v
+  d[key] = splitCsv(v)
+end
+
+-- Keys this tab writes; every other key in the loaded manifest is kept as-is.
+local MANAGED_KEYS = {}
+for _, k in ipairs({
+  "id", "name", "version", "api", "entry", "profile", "game_version", "games",
+  "gen2compat", "category", "priority", "permissions", "dependencies",
+  "optional_dependencies", "conflicts", "incompatible", "experimental",
+  "description", "language", "affects_link", "github", "log_url",
+  "required_assets", "optional_assets", "options_schema", "assets_transforms",
+}) do MANAGED_KEYS[k] = true end
+
 function Manifest.save(S, App)
   local d = S.manifestDraft
   if not (d and S.browseModId) then
     S.status = "No mod selected"
     return false
   end
-  local payload = {
-    id = tostring(d.id or S.browseModId),
-    name = tostring(d.name or ""),
-    version = tostring(d.version or ""),
-    api = tonumber(d.api) or 2,
-    entry = tostring(d.entry or "main.lua"),
-    profile = tostring(d.profile or "content"),
-    game_version = tostring(d.game_version or ""),
-    games = type(d.games) == "table" and d.games or {},
-    gen2compat = d.gen2compat == true,
-    category = tostring(d.category or "OTHER"),
-    priority = tonumber(d.priority) or 0,
-    permissions = d.permissions or {},
-    dependencies = d.dependencies or {},
-    optional_dependencies = d.optional_dependencies or {},
-    conflicts = d.conflicts or {},
-    incompatible = d.incompatible or {},
-    experimental = d.experimental == true,
-    description = tostring(d.description or ""),
-  }
+  local payload = {}
+  for k, v in pairs(S.manifestSource or {}) do
+    if not MANAGED_KEYS[k] then payload[k] = v end
+  end
+  payload.id = tostring(d.id or S.browseModId)
+  payload.name = tostring(d.name or "")
+  payload.version = tostring(d.version or "")
+  payload.api = tonumber(d.api) or 2
+  payload.entry = tostring(d.entry or "main.lua")
+  payload.profile = tostring(d.profile or "content")
+  payload.game_version = tostring(d.game_version or "")
+  if type(d.games) == "table" and #d.games > 0 then payload.games = d.games end
+  payload.gen2compat = d.gen2compat == true
+  payload.category = tostring(d.category or "OTHER")
+  payload.priority = tonumber(d.priority) or 0
+  payload.permissions = d.permissions or {}
+  payload.dependencies = d.dependencies or {}
+  payload.optional_dependencies = d.optional_dependencies or {}
+  payload.conflicts = d.conflicts or {}
+  payload.incompatible = d.incompatible or {}
+  payload.experimental = d.experimental == true
+  payload.description = tostring(d.description or "")
   if d.language == true then payload.language = true end
   if type(d.affects_link) == "boolean" then payload.affects_link = d.affects_link end
   if d.github and d.github ~= "" then payload.github = d.github end
+  if d.log_url and d.log_url ~= "" then payload.log_url = d.log_url end
+  local requiredAssets = parseAssets(S.manifestText.required_assets)
+  if #requiredAssets > 0 then payload.required_assets = requiredAssets end
+  local optionalAssets = parseAssets(S.manifestText.optional_assets)
+  if #optionalAssets > 0 then payload.optional_assets = optionalAssets end
   if d.options_schema and d.options_schema ~= "" then
     payload.options_schema = d.options_schema
   end
@@ -344,13 +402,10 @@ function Manifest.draw(S, x, y, w, h, App)
     d.game_version = field(S, "mf_gv", fx, fy, fw, fh_, d.game_version, ">=0.0.0-dev <1.0.0")
   end)
   row("games", function(fx, fy, fw, fh_)
-    local cur = csv(d.games)
-    local v = field(S, "mf_games", fx, fy, fw, fh_, cur, "all")
-    if v ~= cur then
-      local Generation = require("Generation")
-      d.games = splitCsv(v)
-      d.gen2compat = Generation.coversGen2(d.games)
-      markManifestDirty(S)
+    local before = csv(d.games)
+    listField(S, "games", "mf_games", fx, fy, fw, fh_, "all")
+    if csv(d.games) ~= before then
+      d.gen2compat = require("Generation").coversGen2(d.games)
     end
   end)
   row("gen2compat", function(fx, fy, fw, fh_)
@@ -377,11 +432,15 @@ function Manifest.draw(S, x, y, w, h, App)
         if #nextGames == 0 then nextGames = { "gen1" } end
         d.games = nextGames
       end
+      S.manifestText.games = nil
       markManifestDirty(S)
     end
   end)
   row("github", function(fx, fy, fw, fh_)
     d.github = field(S, "mf_gh", fx, fy, fw, fh_, d.github or "", "owner/repo")
+  end)
+  row("log_url", function(fx, fy, fw, fh_)
+    d.log_url = field(S, "mf_log", fx, fy, fw, fh_, d.log_url or "", "https://... (needs network)")
   end)
   row("description", function(fx, fy, fw, fh_)
     d.description = field(S, "mf_desc", fx, fy, fw, fh_, d.description or "", "Short summary")
@@ -428,20 +487,24 @@ function Manifest.draw(S, x, y, w, h, App)
   flagRow("language", "language")
 
   row("dependencies", function(fx, fy, fw, fh_)
-    local v = field(S, "mf_deps", fx, fy, fw, fh_, csv(d.dependencies), "mod_a, mod_b@^1")
-    d.dependencies = splitCsv(v)
+    listField(S, "dependencies", "mf_deps", fx, fy, fw, fh_, "mod_a, mod_b@^1")
   end)
   row("optional_deps", function(fx, fy, fw, fh_)
-    local v = field(S, "mf_odeps", fx, fy, fw, fh_, csv(d.optional_dependencies), "")
-    d.optional_dependencies = splitCsv(v)
+    listField(S, "optional_dependencies", "mf_odeps", fx, fy, fw, fh_, "")
   end)
   row("conflicts", function(fx, fy, fw, fh_)
-    local v = field(S, "mf_conf", fx, fy, fw, fh_, csv(d.conflicts), "")
-    d.conflicts = splitCsv(v)
+    listField(S, "conflicts", "mf_conf", fx, fy, fw, fh_, "")
   end)
   row("incompatible", function(fx, fy, fw, fh_)
-    local v = field(S, "mf_inc", fx, fy, fw, fh_, csv(d.incompatible), "")
-    d.incompatible = splitCsv(v)
+    listField(S, "incompatible", "mf_inc", fx, fy, fw, fh_, "")
+  end)
+  row("required_assets", function(fx, fy, fw, fh_)
+    S.manifestText.required_assets = field(S, "mf_rassets", fx, fy, fw, fh_,
+      S.manifestText.required_assets, "importer/pack@^1.0.0, ...")
+  end)
+  row("optional_assets", function(fx, fy, fw, fh_)
+    S.manifestText.optional_assets = field(S, "mf_oassets", fx, fy, fw, fh_,
+      S.manifestText.optional_assets, "importer/pack")
   end)
 
   Kit.text("micro",

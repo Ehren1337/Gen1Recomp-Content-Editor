@@ -33,11 +33,11 @@ jobs:
       - name: Verify runtime provenance
         shell: bash
         run: |
-          test -z "$(git ls-files src data main.lua conf.lua)"
+          test -z "$(git ls-files src data)"
           test -z "$(git ls-files 'runtime/patches/**')"
           test -z "$(git -C runtime/gen1recomp status --porcelain)"
           test ! -e src
-          test ! -e main.lua
+          grep -q 'tools/content-editor/runtime/main.lua' main.lua
       - name: Assemble source editor workspace
         shell: pwsh
         run: |

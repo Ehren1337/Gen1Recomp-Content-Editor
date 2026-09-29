@@ -24,7 +24,8 @@ local MANIFEST_KEY_ORDER = {
   "games", "gen2compat",
   "category", "priority", "permissions", "dependencies", "optional_dependencies",
   "conflicts", "incompatible", "experimental", "language", "affects_link",
-  "description", "github", "options_schema", "assets_transforms",
+  "description", "github", "log_url", "options_schema", "assets_transforms",
+  "required_assets", "optional_assets",
 }
 
 local function trim(value)

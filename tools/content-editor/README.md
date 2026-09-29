@@ -520,8 +520,8 @@ starting tiles are marked **A** in the palette.
 
 Save emits `tileset.animatedTiles` plus `mapbuilder_transforms.lua`. Gen1Recomp
 builds the derived frame images on first load. Playback therefore requires a
-Gen1Recomp runtime with `animatedTiles` support; the development runtime used by
-this project is `D:\decomp\gen1recomp` (`src/render/TileRenderer.lua`).
+Gen1Recomp runtime with `animatedTiles` support; the pinned runtime in
+`runtime/gen1recomp` provides it (`src/render/TileRenderer.lua`).
 
 ```sh
 git submodule update --init --recursive

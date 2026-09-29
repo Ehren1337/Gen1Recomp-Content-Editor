@@ -88,3 +88,5 @@ tests/content-editor/leafgreen-smoke/*.png
 /tests/content-editor/layer-performance-smoke/result.txt
 /tests/content-editor/layer-benchmark-smoke/baseline.lua
 /tests/content-editor/layer-benchmark-smoke/*.txt
+/tests/content-editor/hgss-playtest/*.log
+/tools/diag-music/*.txt
