@@ -26,13 +26,13 @@ local MODES_GEN1 = {
   { id = "title", label = "Title",
     tip = "Logo, version ribbon, copyright, music, cycle species" },
   { id = "intro", label = "Intro",
-    tip = "Studio splash, skip intro, Game Freak / fight / Yellow cinema art" },
+    tip = "Studio splash, skip intro and opening cinema art" },
   { id = "oak", label = "Oak",
     tip = "New-game Oak speech: pics, music, demo species, lines" },
   { id = "credits", label = "Credits",
     tip = "End-roll screens, silhouette mons, THE END art" },
   { id = "minigames", label = "Minigames",
-    tip = "Slot machine and Yellow Surfing Pikachu (Pikachu's Beach)" },
+    tip = "Game Corner slot machine and other minigames" },
   { id = "boot", label = "Boot screens",
     tip = "splash / title / newGame screen registry ids" },
   { id = "menus", label = "Menus",
@@ -331,6 +331,19 @@ local function imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, label,
     browseImage(App, label .. " PNG", function(rel) onSet(rel) end)
   end
   fy = fy + fh + 4 * s
+  local lineY, lineH = fy, 0
+  if cur:match("^assets/") and not cur:match("^assets/generated/") then
+    local on = S.project and S.project.uiTrueColor and S.project.uiTrueColor[cur] or false
+    local tipText = Generation.isGen2(S)
+      and "Draw this image in its own colors in the GEN 2 color mode"
+      or "Draw this image in its own colors in the ADVANCED color mode"
+    if Kit.chip(fx + fieldW - 96 * s, fy, 96 * s, 20 * s, "True color", on,
+        PAL.green, PAL.steel, tipText) then
+      ensureBucket(S, "uiTrueColor")[cur] = (not on) or nil
+      App.markDirty()
+    end
+    lineH = 22 * s
+  end
   local exp = expectedPath or cur
   local ew, eh = UiSafe.imageSize(S, exp)
   local aw, ah = UiSafe.imageSize(S, cur)
@@ -349,7 +362,7 @@ local function imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, label,
     Kit.text("micro", string.format("%dx%d", aw, ah), viewX, fy, PAL.faint)
     fy = fy + 14 * s
   end
-  return fy + 4 * s
+  return math.max(fy, lineY + lineH) + 4 * s
 end
 
 local function drawLayoutChips(x, y, w, h, cur, options)
@@ -482,6 +495,46 @@ local GS_SPLASH_SHEETS = {
     tip = "Sparkle frames after the star lands" },
 }
 
+-- Crystal's TitleState draws only these; the gray set shows when color is off,
+-- so a replaced image is written to both.
+local CRYSTAL_TITLE_ART = {
+  { "screen", "screenGray", "Screen BG", "Full title art, including the logo and CRYSTAL VERSION (160 × 144)" },
+  { "gem", "gemGray", "Gem", "Crystal gem that drops in above the logo (48 × 80)" },
+}
+
+-- Only replaced frames are stored, by frame number; the rest stay the game's.
+local function setCrystalSuicune(S, index, path, App)
+  for _, key in ipairs({ "suicuneFrames", "suicuneFramesGray" }) do
+    local list = {}
+    for i, p in pairs(ensureBucket(S, "title")[key] or {}) do list[i] = p end
+    list[index] = path
+    setKey(S, "title", key, next(list) and list or nil, App)
+  end
+end
+
+local function drawCrystalTitleArt(S, App, viewX, fy, labelW, fieldW, fh, s)
+  for _, row in ipairs(CRYSTAL_TITLE_ART) do
+    local key, grayKey, label, tip = row[1], row[2], row[3], row[4]
+    fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, label,
+      "ui_title_" .. key, pathOf(select(1, eff(S, "title", key))), function(path)
+        setKey(S, "title", key, path, App)
+        setKey(S, "title", grayKey, path, App)
+      end, tip)
+  end
+  local own = ensureBucket(S, "title").suicuneFrames or {}
+  local base = dataField(S, "title").suicuneFrames or {}
+  for i = 1, 4 do
+    fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Suicune " .. i,
+      "ui_title_suicune" .. i, pathOf(own[i] or base[i]), function(path)
+        setCrystalSuicune(S, i, path, App)
+      end, "Suicune animation frame " .. i .. " (64 × 48)")
+  end
+  return imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "© splash",
+    "ui_title_copyrightSplash", pathOf(select(1, eff(S, "title", "copyrightSplash"))), function(path)
+      setKey(S, "title", "copyrightSplash", path, App)
+    end, "Copyright on the Game Freak splash")
+end
+
 local function drawTitleGen2(S, x, y, w, h, App)
   local s = Kit.scale
   ensureBucket(S, "title")
@@ -494,19 +547,21 @@ local function drawTitleGen2(S, x, y, w, h, App)
 
   Kit.caption(viewX, fy, crystalUi(S) and "CRYSTAL TITLE" or "GOLD TITLE")
   fy = fy + 24 * s
-  Kit.text("small", "Layout", viewX, fy + 6 * s, PAL.caption)
-  do
+  if not Generation.isCrystal(S) then
+    Kit.text("small", "Layout", viewX, fy + 6 * s, PAL.caption)
     local cur = tostring(select(1, eff(S, "title", "layout")) or "")
     local picked = drawLayoutChips(viewX + labelW, fy, fieldW, fh, cur, {
       { id = "", label = "Vanilla", tip = "Ho-Oh / Suicune cinema title" },
       { id = "custom", label = "Custom", tip = "Fitted full-screen title stills" },
     })
     if picked ~= cur then setKey(S, "title", "layout", picked ~= "" and picked or nil, App) end
+    fy = fy + fh + 8 * s
   end
-  fy = fy + fh + 8 * s
   fy = UiPreview.draw(S, "title", viewX, fy, viewW, s)
 
-  if tostring(select(1, eff(S, "title", "layout")) or "") == "custom" then
+  if Generation.isCrystal(S) then
+    fy = drawCrystalTitleArt(S, App, viewX, fy, labelW, fieldW, fh, s)
+  elseif tostring(select(1, eff(S, "title", "layout")) or "") == "custom" then
     fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Screen",
       "ui_title_screen", pathOf(select(1, eff(S, "title", "screen"))),
       function(p) setKey(S, "title", "screen", p, App) end,
@@ -535,7 +590,9 @@ local function drawTitleGen2(S, x, y, w, h, App)
   end
 
   local rows
-  if crystalUi(S) then
+  if Generation.isCrystal(S) then
+    rows = {}
+  elseif crystalUi(S) then
     rows = {
       { "image", "Logo",
         "Optional extra logo overlay. Crystal already draws the logo on Screen BG" },
@@ -572,19 +629,19 @@ local function drawTitleGen2(S, x, y, w, h, App)
       end, tip)
   end
 
-  Kit.text("small", "Layout", viewX, fy + 6 * s, PAL.caption)
-  Kit.offerTooltip(viewX, fy, labelW, fh,
-    crystalUi(S)
-      and "crystal_title uses Screen BG as the full Crystal title"
-      or "gold_title is Ho-Oh / clouds; crystal_title uses Screen BG as the full title")
-  do
+  if not Generation.isCrystal(S) then
+    Kit.text("small", "Layout", viewX, fy + 6 * s, PAL.caption)
+    Kit.offerTooltip(viewX, fy, labelW, fh,
+      crystalUi(S)
+        and "crystal_title uses Screen BG as the full Crystal title"
+        or "gold_title is Ho-Oh / clouds; crystal_title uses Screen BG as the full title")
     local placeholder = crystalUi(S) and "crystal_title" or "gold_title"
     local cur = tostring(select(1, eff(S, "title", "layout")) or placeholder)
     local v = RegList.field(App, "ui_title_layout", viewX + labelW, fy, fieldW, fh,
       cur, placeholder)
     if v ~= cur then setKey(S, "title", "layout", v ~= "" and v or nil, App) end
+    fy = fy + fh + 8 * s
   end
-  fy = fy + fh + 8 * s
 
   local layoutRows
   if crystalUi(S) then
@@ -612,10 +669,12 @@ local function drawTitleGen2(S, x, y, w, h, App)
     fy = fy + fh + 6 * s
   end
 
-  Kit.text("small", "Music id", viewX, fy + 6 * s, PAL.caption)
-  drawMusicPicker(S, App, viewX + labelW, fy, fieldW, fh,
-    "title", "music", "Music_TitleScreen")
-  fy = fy + fh + 8 * s
+  if not Generation.isCrystal(S) then
+    Kit.text("small", "Music id", viewX, fy + 6 * s, PAL.caption)
+    drawMusicPicker(S, App, viewX + labelW, fy, fieldW, fh,
+      "title", "music", "Music_TitleScreen")
+    fy = fy + fh + 8 * s
+  end
 
   if next(S.project.title) and Kit.button(viewX, fy, 120 * s, fh, "Clear all", {
       kind = "danger", tooltip = "Remove project.title overrides",
@@ -647,8 +706,7 @@ local function drawTitle(S, x, y, w, h, App)
   do
     local cur = tostring(select(1, eff(S, "title", "layout")) or "")
     local picked = drawLayoutChips(viewX + labelW, fy, fieldW, fh, cur, {
-      { id = "", label = "Vanilla", tip = "Red/Blue cycling title" },
-      { id = "yellow_pikachu", label = "Yellow", tip = "Pikachu title layout" },
+      { id = "", label = "Vanilla", tip = Generation.label(S) .. " title screen" },
       { id = "custom", label = "Custom", tip = "Fitted full-screen title stills" },
     })
     if picked ~= cur then setKey(S, "title", "layout", picked ~= "" and picked or nil, App) end
@@ -719,17 +777,18 @@ local function drawTitle(S, x, y, w, h, App)
   fy = drawCycleSpecies(S, App, viewX, fy, labelW, fieldW, fh, s,
     select(1, eff(S, "title", "cycleSpecies")))
 
-  local pika = pathOf(select(1, eff(S, "title", "pikachu")))
-  local bubble = pathOf(select(1, eff(S, "title", "pikaBubble")))
-  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Pikachu",
-    "ui_title_pika", pika, function(p) setKey(S, "title", "pikachu", p, App) end,
-    "Yellow title Pikachu sprite")
-  fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Bubble",
-    "ui_title_bub", bubble, function(p) setKey(S, "title", "pikaBubble", p, App) end,
-    "Pikachu speech bubble on the Yellow title")
-
   local yellowTitle = yellowUi(S)
-    or tostring(select(1, eff(S, "title", "layout")) or "") == "yellow_pikachu"
+  if yellowTitle then
+    local pika = pathOf(select(1, eff(S, "title", "pikachu")))
+    local bubble = pathOf(select(1, eff(S, "title", "pikaBubble")))
+    fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Pikachu",
+      "ui_title_pika", pika, function(p) setKey(S, "title", "pikachu", p, App) end,
+      "Title screen Pikachu sprite")
+    fy = imageRow(S, App, viewX, fy, labelW, fieldW, fh, s, "Bubble",
+      "ui_title_bub", bubble, function(p) setKey(S, "title", "pikaBubble", p, App) end,
+      "Pikachu speech bubble on the title screen")
+  end
+
   local titlePals
   if yellowTitle then
     titlePals = {
@@ -2871,6 +2930,7 @@ local function drawMinigames(S, x, y, w, h, App)
   ensureBucket(S, "menuGfx")
   local gen2 = Generation.isGen2(S)
   local games = gen2 and MINIGAMES_GEN2 or MINIGAMES_GEN1
+  if not (gen2 or yellowUi(S)) then games = { MINIGAMES_GEN1[1] } end
   if not S.uiMinigame then S.uiMinigame = "slots" end
   local valid = false
   for i = 1, #games do
@@ -2885,11 +2945,12 @@ local function drawMinigames(S, x, y, w, h, App)
   local fh = 28 * s
   local fieldW = viewW - labelW - 12 * s
 
-  Kit.caption(viewX, fy, gen2 and "MINIGAMES (GOLD/CRYSTAL)" or "MINIGAMES")
+  Kit.caption(viewX, fy, "MINIGAMES")
   fy = fy + 22 * s
   Kit.text("micro", gen2
       and "Game Corner slots / card flip, and Ruins of Alph Unown puzzle"
-      or "Game Corner slots, and Yellow Surfing Pikachu (Pikachu's Beach)",
+      or #games > 1 and "Game Corner slots, and Surfing Pikachu (Pikachu's Beach)"
+      or "Game Corner slots",
     viewX, fy, PAL.muted)
   fy = fy + 20 * s
 

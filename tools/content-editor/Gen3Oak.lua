@@ -46,6 +46,7 @@ function M.scene(S,x,y,w,h,App)
   K.caption(x,y+h-52*scale,"Restart the preview after changing settings or dialogue.")
 end
 function M.draw(S,x,y,w,h,App)
+  if require("Generation").id(S)=="emerald" then return require("Gen3Birch").draw(S,x,y,w,h,App) end
   local K,C=require("Kit"),require("ChoicePicker");local scale=K.scale
   local top=require("RegList").modeChips(S,"g3OakMode",{{id="scene",label="Full intro"},{id="dialogue",label="Dialogue"},{id="artwork",label="Artwork"}},x,y,scale)
   h=h-(top-y);y=top
@@ -91,7 +92,7 @@ function M.emit(p,encode,out)
     Scene.oakPrint=function(self,key,speed) return Runtime.call("editor.gen3.oakPrint",original,self,key,speed) end
   end
   mod.hooks:wrap("editor.gen3.oakPrint",function(proceed,scene,key,speed)
-    return proceed(scene,oakLines[key] or key,speed)
+    return oakScene.printLine(proceed,scene,key,speed,oakLines[key])
   end)
 ]=]
 end

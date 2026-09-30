@@ -39,10 +39,6 @@ function love.load()
   assert(flags.modsByVersion.leafgreen.leafgreen_test and flags.modsByVersion.firered.old)
   assert(require("PlaytestPaths").windowsLaunch("love.exe",runtime,"leafgreen"):find("--game=leafgreen",1,true))
   local found=false;for _,id in ipairs(require("Cartkit").BASES) do if id=="leafgreen" then found=true end end;assert(found)
-  local bytes,reason=require("Gen3Rom").open(S);assert(bytes==nil and reason:find("supplementary",1,true))
-  data._g3RomBytes="FireRed cached bytes"
-  assert(require("Gen3Rom").open(S)==nil,"LeafGreen used cached FireRed bytes")
-  data._g3RomBytes=nil
   local K=require("Kit");local canvas=love.graphics.newCanvas(1360,860)
   S.dataPrefs={mode="recomp",recompRoot=runtime};S.dataSource="recomp"
   love.graphics.setCanvas({canvas,stencil=true});love.graphics.clear(.04,.06,.12,1);K.layout(1360,860);K.beginFrame(0,0,false,0)

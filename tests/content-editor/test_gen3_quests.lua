@@ -53,14 +53,14 @@ return function(data,root)
     exported[name]={}
     content[name]={register=function(_,k,v) exported[name][k]=v end,override=function(_,k,v) exported[name][k]=v end}
   end
-  assert(loadstring(emitted))()({generation=3,content=content})
+  assert(loadstring(emitted))()({generation=3,content=content,events={on=function() end},hooks={wrap=function() end}})
   assert(exported.map_scripts[key][1].op=="lock" and type(exported.text[key.."_Text_offer"])=="table")
   S.project.maps.EDITOR_QUEST_MAP={objects={{scriptKey=key}}}
   local pins=require("Gen3Dialog").pins(S,"EDITOR_QUEST_MAP")
   assert(#pins==5,"Map dialogue omitted generated quest branches")
   S.project.maps.EDITOR_QUEST_MAP=nil
   local IO=require("ModIO");local path=root.."/tests/content-editor/gen3-smoke/quest-project"
-  S.path=path;S.mapId="FR_ROUTE10";S.mapSection="objects";S.mapObjectIndex=1
+  S.path=path;S.mapId="FR_ROUTE_10";S.mapSection="objects";S.mapObjectIndex=1
   assert(require("Gen3Workspace").convert(S,S.mapId))
   local object=assert(S.project.maps[S.mapId].objects[1])
   local oldObject=require("src.mods.Merge").deepCopy(object)

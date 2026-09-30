@@ -2,7 +2,7 @@
 return function(data,root)
  local IO,G=require("ModIO"),require("Gen3")
  local path=root.."/tests/content-editor/gen3-smoke/audit-project"
- if not IO.readText(path.."/manifest.json") then return end
+ if not IO.readText(path.."/manifest.json") or not IO.readText(root.."/mods/FireRed-Test/editor_project.lua") then return end
  local project=assert(IO.load(path));local original=assert(IO.readText(path.."/editor_project.lua"))
  local function load()
   local fresh={};G.load(fresh,data._gen3Read)

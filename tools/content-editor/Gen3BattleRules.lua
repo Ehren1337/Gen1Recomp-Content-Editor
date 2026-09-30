@@ -9,7 +9,7 @@ M.fields={
 function M.draw(S,x,y,w,h,App)
   local K=require("Kit");local s=K.scale
   if not S.project then return end
-  K.caption(x,y,"FIRERED BATTLE RULES")
+  K.caption(x,y,(({firered="FIRERED",leafgreen="LEAFGREEN",emerald="EMERALD"})[require("Generation").id(S)] or "GEN 3").." BATTLE RULES")
   y=y+38*s
   local values=S.project.gen3BattleRules or {}
   for _,row in ipairs(M.fields) do

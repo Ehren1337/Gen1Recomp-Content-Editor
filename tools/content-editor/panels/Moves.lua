@@ -579,7 +579,7 @@ function Moves.draw(S, x, y, w, h, App)
   end
   Kit.text("micro",
     gen2
-      and "Gold: EFFECT_*, effect chance, description, animation#. Gen1 flags hidden."
+      and (Generation.label(S) .. ": EFFECT_*, effect chance, description, animation#.")
       or "Muted list rows are vanilla. First edit clones into the mod (Save = patch).",
     viewX, fy + 4 * s, PAL.faint)
   fy = fy + 28 * s

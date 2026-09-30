@@ -383,7 +383,7 @@ local function drawBreeding(S, speciesId, x, y, w, s)
   Kit.caption(x, y, "BREEDING")
   y = y + 22 * s
   if not Generation.isGen2(S) and not Generation.isGen3(S) then
-    Kit.text("micro", "Red, Blue, and Yellow have no breeding.",
+    Kit.text("micro", Generation.label(S) .. " has no breeding.",
       x, y, PAL.muted)
     return y + 20 * s
   end

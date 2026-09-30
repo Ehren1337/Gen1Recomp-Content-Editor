@@ -1,16 +1,13 @@
 local M={}
+-- The game's egg moves, from the imported cache (src/data/pokemon/egg_moves.h).
 function M.originalMoves(S)
   if S.data._editorEggMoves then return S.data._editorEggMoves end
-  local bytes,err=require("Gen3Rom").open(S);if not bytes then return nil,err end
-  local result,current={},nil
-  for offset=0x25ef0c,0x26ef0c,2 do
-    local a,b=bytes:byte(offset+1,offset+2);assert(a and b,"Egg move table is truncated")
-    local v=a+b*256
-    if v==65535 then S.data._editorEggMoves=result;return result end
-    if v>=20000 then current=v-20000;assert(current<=411,"Invalid egg species");result[current]={}
-    else assert(current and v>0 and v<=354,"Invalid egg move");table.insert(result[current],v) end
-  end
-  error("Egg move terminator not found")
+  local path="data/generated/gba/pokemon/egg_moves.lua"
+  local bytes=S.data._gen3Read and S.data._gen3Read(path)
+  if not bytes then return nil,"Missing Gen 3 cache: "..path end
+  local moves,err=require("Gen3Decode").decode(bytes,{allowArray=true,allowComments=true})
+  if type(moves)~="table" then return nil,path..": "..tostring(err) end
+  S.data._editorEggMoves=moves;return moves
 end
 function M.ensure(S)
   if S.project.gen3Breeding then return S.project.gen3Breeding end
@@ -75,7 +72,7 @@ function M.draw(S,x,y,w,h,App)
     if value~=old then local ok,err=pcall(function() M.ensure(S)[row[1]]=value end);if ok then App.markDirty() else S.status=tostring(err) end end
     y=y+36*s
   end
-  K.caption(x,y,"Hatched Pokemon start at level 5, matching FireRed.");y=y+34*s
+  K.caption(x,y,"Hatched Pokemon start at level 5, matching the original game.");y=y+34*s
   K.caption(x,y,"Assign the service to an NPC (replaces that NPC's conversation)");y=y+34*s
   local maps=L.mergeIds(S.project.maps,S.data.maps);local labels={}
   for _,id in ipairs(maps) do labels[id]=require("Gen3Labels").map(id) end

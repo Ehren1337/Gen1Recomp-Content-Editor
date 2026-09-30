@@ -65,7 +65,7 @@ local LUA_RECIPES = {
   { id = "R48", api = "hooks:wrap(render.letterbox)", note = "SGB border" },
   { id = "R49", api = "hooks:wrap(pokemon.sprite)", note = "pick sprites at draw time" },
   { id = "R52", api = "mod.world:availableFieldActions", note = "one-button field actions" },
-  { id = "R53", api = "battle.caught_marker_visible", note = "Gen2 battle QoL toggles" },
+  { id = "R53", api = "battle.caught_marker_visible", note = "battle QoL toggles" },
   { id = "R54", api = "mod.steps", note = "real-world step events" },
 }
 

@@ -121,6 +121,7 @@ function State.blankProject(id, name)
     menuGfx = {},       -- Gen1 field chrome / Gold gen2MenuGfx sheet overrides
     uiMismatch = {},    -- dotted menu keys whose import size != vanilla
     uiFitted = {},      -- mismatched keys drawn as a fitted overlay instead
+    uiTrueColor = {},   -- imported UI image paths drawn in their own colors
     uiScripts = {},     -- UI tab script copies: id -> { module, rel }
     diploma = {},       -- Gold: gen2Diploma sheet
     pokedex = {},       -- Gold: gen2Pokedex.entries overrides (kind/text/…)
@@ -199,6 +200,7 @@ function State.ensureProjectFields(project)
   project.menuGfx = project.menuGfx or {}
   project.uiMismatch = project.uiMismatch or {}
   project.uiFitted = project.uiFitted or {}
+  project.uiTrueColor = project.uiTrueColor or {}
   project.uiScripts = project.uiScripts or {}
   project.minigames = project.minigames or {}
   project.diploma = project.diploma or {}

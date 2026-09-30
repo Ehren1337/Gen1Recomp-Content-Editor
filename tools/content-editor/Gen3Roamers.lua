@@ -1,7 +1,17 @@
 local M={}
 local K,C=require("Kit"),require("ChoicePicker")
-function M.defaults()
-  local maps={};for i=1,25 do maps[#maps+1]=i==21 and "FR_ROUTE21_NORTH" or (i<=2 and "FR_ROUTE_" or "FR_ROUTE")..i end
+function M.starterKeys(game)
+  return game=="emerald" and {"treecko","torchic","mudkip"} or {"bulbasaur","charmander","squirtle"}
+end
+-- Emerald values match its own Latias roamer (pokeemerald/src/roamer.c).
+function M.defaults(game)
+  if game=="emerald" then
+    local maps={};for i=101,134 do maps[#maps+1]="EM_ROUTE"..i end
+    return {id="hoenn_lati",name="Hoenn roaming legendary",enabled=true,selection="fixed",species="LATIAS",
+      starters={treecko="LATIAS",torchic="LATIAS",mudkip="LATIAS"},level=40,chance=25,
+      unlock="postgame",flag=0x864,flee="attempt",defeat="stop",maps=maps}
+  end
+  local maps={};for i=1,25 do maps[#maps+1]="FR_ROUTE_"..i..(i==21 and "_NORTH" or "") end
   return {id="kanto_beast",name="Kanto roaming legendary",enabled=true,selection="starter",species="ENTEI",
     starters={bulbasaur="ENTEI",charmander="SUICUNE",squirtle="RAIKOU"},level=50,chance=25,
     unlock="postgame",flag=0x844,flee="attempt",defeat="stop",maps=maps}
@@ -10,17 +20,17 @@ function M.add(S)
   local rows=S.project.gen3Roamers or {};S.project.gen3Roamers=rows
   local used={};for _,row in ipairs(rows) do used[row.id]=true end
   local i=1;while used["roamer_"..i] do i=i+1 end
-  local row=M.defaults();row.id="roamer_"..i;row.name="New roaming Pokemon";row.selection="fixed";row.unlock="always"
+  local row=M.defaults(require("Generation").id(S));row.id="roamer_"..i;row.name="New roaming Pokemon";row.selection="fixed";row.unlock="always"
   rows[#rows+1]=row;return row
 end
-function M.validate(rows)
+function M.validate(rows,game)
   local seen={}
   for _,row in ipairs(rows) do
     assert(type(row.id)=="string" and row.id~="" and not seen[row.id],"Roamers need unique IDs");seen[row.id]=true
     assert(type(row.name)=="string" and row.name:match("%S"),"Give each roamer a name")
     assert(row.selection=="fixed" or row.selection=="starter","Choose how the roaming Pokemon is selected")
     assert(type(row.species)=="string" and row.species~="","Choose a roaming Pokemon")
-    if row.selection=="starter" then for _,k in ipairs({"bulbasaur","charmander","squirtle"}) do assert(type(row.starters[k])=="string" and row.starters[k]~="","Choose all three starter-dependent roamers") end end
+    if row.selection=="starter" then for _,k in ipairs(M.starterKeys(game)) do assert(type(row.starters[k])=="string" and row.starters[k]~="","Choose all three starter-dependent roamers") end end
     assert(type(row.level)=="number" and row.level%1==0 and row.level>=1 and row.level<=100,"Roamer level must be 1 to 100")
     assert(type(row.chance)=="number" and row.chance%1==0 and row.chance>=1 and row.chance<=100,"Roamer chance must be 1 to 100 percent")
     assert(row.unlock=="always" or row.unlock=="postgame" or row.unlock=="flag","Choose when roaming starts")
@@ -33,9 +43,10 @@ function M.validate(rows)
 end
 function M.draw(S,x,y,w,h,App)
   local s=K.scale;local fh=30*s;local rows=S.project.gen3Roamers
+  local game=require("Generation").id(S);local emerald=game=="emerald"
   if not rows then
     K.caption(x,y,"Roaming Pokemon travel between maps and remember their remaining HP and status.")
-    if K.button(x,y+42*s,300*s,fh,"Set up roaming legendary",{kind="good"}) then S.project.gen3Roamers={M.defaults()};App.markDirty() end
+    if K.button(x,y+42*s,300*s,fh,"Set up roaming legendary",{kind="good"}) then S.project.gen3Roamers={M.defaults(game)};App.markDirty() end
     if K.button(x,y+84*s,300*s,fh,"Create a custom roaming Pokemon",{}) then M.add(S);App.markDirty() end
     return
   end
@@ -51,21 +62,21 @@ function M.draw(S,x,y,w,h,App)
   end
   K.caption(x,y,"Name");local name=K.textfield("roamerName",x+210*s,y,w-220*s,fh,row.name,"Roamer name","An editor label, such as Kanto legendary or Wandering Mew.")
   if name~=row.name then row.name=name;App.markDirty() end;y=y+42*s
-  choice("Choose Pokemon","selection",{"fixed","starter"},{fixed="Always the same Pokemon",starter="Depends on the starter choice"},"Starter choice means the original left/middle/right choice in Oak's lab, even if you replace the starter species.")
+  choice("Choose Pokemon","selection",{"fixed","starter"},{fixed="Always the same Pokemon",starter="Depends on the starter choice"},"Starter choice means the original left/middle/right choice in "..(emerald and "Birch's bag" or "Oak's lab")..", even if you replace the starter species.")
   local function species(label,bag,key)
     K.caption(x,y,label);require("SpeciesPicker").field(S,{x=x+210*s,y=y,w=w-220*s,h=fh,current=bag[key],onPick=function(id) bag[key]=id;App.markDirty() end});y=y+44*s
   end
   if row.selection=="starter" then
-    species("Bulbasaur choice",row.starters,"bulbasaur");species("Charmander choice",row.starters,"charmander");species("Squirtle choice",row.starters,"squirtle")
+    for _,key in ipairs(M.starterKeys(game)) do species(key:gsub("^%l",string.upper).." choice",row.starters,key) end
   else species("Pokemon",row,"species") end
   for _,v in ipairs({{"Level","level"},{"Encounter chance %","chance"}}) do
     K.caption(x,y,v[1]);K.offerTooltip(x,y,w,fh,v[2]=="level" and "The level used when this roamer is first created in a save." or "Chance of replacing a normal grass encounter while this roamer is on the same map. Multiple roamers share the roll.")
     local n=require("RegList").num(App,"roamer_"..v[2],x+210*s,y,130*s,fh,row[v[2]]);n=math.max(1,math.min(100,math.floor(n)))
     if n~=row[v[2]] then row[v[2]]=n;App.markDirty() end;y=y+42*s
   end
-  choice("Starts roaming","unlock",{"postgame","always","flag"},{postgame="After Celio's Ruby / Sapphire quest",always="As soon as the mod is active",flag="When a story flag is set"})
+  choice("Starts roaming","unlock",{"postgame","always","flag"},{postgame=emerald and "After entering the Hall of Fame" or "After Celio's Ruby / Sapphire quest",always="As soon as the mod is active",flag="When a story flag is set"})
   if row.unlock=="flag" then
-    local flags,labels={},{};for id,name in pairs(require("src.core.game3.scripting.flags").NAMES or {}) do if type(id)=="number" and id>0 then flags[#flags+1]=id;labels[id]=name:gsub("^FLAG_",""):gsub("_"," ") end end;table.sort(flags)
+    local flags,labels={},{};for id,name in pairs(require("src.core.game3.scripting.flags").forVersion(game).NAMES or {}) do if type(id)=="number" and id>0 then flags[#flags+1]=id;labels[id]=name:gsub("^FLAG_",""):gsub("_"," ") end end;table.sort(flags)
     choice("Story flag","flag",flags,labels)
   end
   choice("Battle behavior","flee",{"attempt","fight"},{attempt="Fight, then flee after a turn unless trapped",fight="Stay and fight"})
@@ -91,7 +102,7 @@ function M.draw(S,x,y,w,h,App)
   y=y+44*s;Pane.finish(S,"roamerScroll",first,y,view)
 end
 function M.emit(p,encode,out)
-  if not p.gen3Roamers then return end;M.validate(p.gen3Roamers)
+  if not p.gen3Roamers then return end;M.validate(p.gen3Roamers,p.game)
   out[#out+1]="local roamers=(function()\n"..assert(love.filesystem.read("tools/content-editor/Gen3RoamersRuntime.lua")).."\nend)()\nroamers.install(mod,"..encode(p.gen3Roamers)..")"
 end
 return M

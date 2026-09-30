@@ -47,7 +47,7 @@ function Panel.draw(S,x,y,w,h,App)
     return
   end
   local id=S.g3AnimId
-  if not id then Kit.caption(fx,y,"Import FireRed or LeafGreen to extract animations");return end
+  if not id then Kit.caption(fx,y,"Import FireRed, LeafGreen or Emerald to extract animations");return end
   local value=edits[id] or catalog[id]
   if S._g3AnimValue~=value or S._g3AnimId~=id then
     if S._g3AnimId~=id then

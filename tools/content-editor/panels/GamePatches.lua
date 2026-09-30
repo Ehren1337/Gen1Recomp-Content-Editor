@@ -1,7 +1,8 @@
 -- GAME PATCHES tab: switches for features a mod adds on top of the game
 -- (nothing in the engine is changed; each one is generated into main.lua).
--- FireRed / LeafGreen: the real time clock (day and night, Gen3DayNight),
--- with its encounter tables as a setting of it.
+-- FireRed / LeafGreen / Emerald: the real time clock (day and night,
+-- Gen3DayNight); on FireRed / LeafGreen with its encounter tables as a
+-- setting of it.
 --
 -- Each patch is a title, one line under it and an Off / On switch; what it
 -- does in detail opens in a pop-up (Description).
@@ -28,7 +29,7 @@ local function clockText(S)
   local DN = require("Gen3DayNight")
   local on, cfg = DN.enabled(S.project), DN.settings(S.project)
   local lines = {
-    "The game follows the player's own clock, like Crystal. Outdoor maps (Town, City, Route, Ocean route) look like morning, day or night; buildings, caves, battles and menus look the same all day.",
+    "The game follows the player's own clock. Outdoor maps (Town, City, Route, Ocean route) look like morning, day or night; buildings, caves, battles and menus look the same all day.",
     ("Morning from %d:00, day from %d:00, night from %d:00, with a %d-minute fade (Settings)."):format(
       cfg.morning, cfg.day, cfg.night, cfg.blend),
     ("%d blocks have a night look: lit windows, lamps and signs."):format(#DN.paintedBlocks(S.project)),
@@ -156,9 +157,15 @@ M.confirms = {
 
 local function dayNight() return require("Gen3DayNight") end
 
+local function kanto(S)
+  local game = require("Generation").id(S)
+  return game == "firered" or game == "leafgreen"
+end
+
+-- `kanto` patches and subs are FireRed / LeafGreen only.
 M.PATCHES = {
   {
-    id = "clean", title = "Clean Project", subtitle = "Start from scratch: no story, events or maps (Fire Red, Leaf Green)",
+    id = "clean", kanto = true, title = "Clean Project", subtitle = "Start from scratch: no story, events or maps",
     action = { label = "Apply", confirm = "clean",
       tooltip = "Wipe this project and start clean -- asks first" },
     note = function(S)
@@ -166,10 +173,10 @@ M.PATCHES = {
     end,
   },
   {
-    id = "clock", title = "Real Time Clock", subtitle = "Day and night cycles (Fire Red, Leaf Green)",
+    id = "clock", title = "Real Time Clock", subtitle = "Day and night cycles",
     isOn = function(S) return dayNight().enabled(S.project) end,
     setOn = function(S, on)
-      local changed = dayNight().setEnabled(S.project, on)
+      local changed = dayNight().setEnabled(S.project, on, kanto(S))
       if changed then dayNight().syncCrystalPopulation(S) end -- Encounter tables follow the clock
       return changed
     end,
@@ -182,7 +189,7 @@ M.PATCHES = {
       open = function(S) S.tab, S.g3GfxMode = "gfx", "daynight" end },
     subs = {
       {
-        id = "encounters", title = "Encounter tables", subtitle = "Pre-configured Day/ night encounters that can be edited",
+        id = "encounters", kanto = true, title = "Encounter tables", subtitle = "Pre-configured Day/ night encounters that can be edited",
         isOn = function(S) return dayNight().encountersEnabled(S.project) end,
         setOn = function(S, on)
           if on and not dayNight().enabled(S.project) then
@@ -212,7 +219,10 @@ local function patchCard(S, App, patch, x, y, w)
   local s = Kit.scale
   local colW = 186 * s
   local rx = x + w - colW - 16 * s
-  local subs = patch.subs or {}
+  local subs = {}
+  for _, sub in ipairs(patch.subs or {}) do
+    if kanto(S) or not sub.kanto then subs[#subs + 1] = sub end
+  end
   local mainH = patch.settings and 132 or 96
   local subH = 62
   local cardH = (mainH + #subs * subH + (#subs > 0 and 10 or 0)) * s
@@ -274,9 +284,8 @@ function M.draw(S, x, y, w, h, App)
     x, y, PAL.muted)
   y = y + 32 * s
   local cw = math.min(w, 760 * s)
-  local game = require("Generation").id(S)
-  if not (game == "firered" or game == "leafgreen") or not S.project then
-    Kit.emptyBox(x, y, cw, 120 * s, "No game patches for this game yet (FireRed and LeafGreen have the real time clock).")
+  if not (kanto(S) or require("Generation").id(S) == "emerald") or not S.project then
+    Kit.emptyBox(x, y, cw, 120 * s, "No game patches for " .. require("Generation").label(S) .. " yet.")
     return
   end
   -- Encounter tables: Crystal's lists filled in / taken out to match the switch
@@ -285,7 +294,9 @@ function M.draw(S, x, y, w, h, App)
   local open = S._gamePatchPopup ~= nil or S._gamePatchConfirm ~= nil
   local blocked = Kit.blockClicks
   if open then Kit.blockClicks = true end
-  for _, patch in ipairs(M.PATCHES) do y = patchCard(S, App, patch, x, y, cw) end
+  for _, patch in ipairs(M.PATCHES) do
+    if kanto(S) or not patch.kanto then y = patchCard(S, App, patch, x, y, cw) end
+  end
   Kit.blockClicks = blocked
   if open then popup(S, App, x, top, w, h) end
 end

@@ -49,7 +49,7 @@ function M.assets(data,project)
       elseif child:match("%.png$") or child:match("%.rgba$") then result[child]={path=child} end
     end
   end
-  for _,dir in ipairs({"minigames","slot_machine","berry_crush","pokemon_jump","dodrio_berry_picking","trainers","chrome","items","pokemon/battle","pokemon/party","pokemon/summary","pokemon/battle_anims","pokemon/battle_transition","intro","region_map","naming","pokedex","pokemon/pokedex","trainer_card","help","quest_log","ow","field_effects","native"}) do visit(root..dir,0) end
+  for _,dir in ipairs({"minigames","slot_machine","berry_crush","pokemon_jump","dodrio_berry_picking","trainers","chrome","items","pokemon/battle","pokemon/party","pokemon/summary","pokemon/battle_anims","pokemon/battle_transition","intro","region_map","naming","pokedex","pokemon/pokedex","trainer_card","help","quest_log","ow","field_effects","native","birch","rse/bag","rse/summary"}) do visit(root..dir,0) end
   -- Available even when a cache provider cannot enumerate files.
   local known={menu_message_rgba={48,24},std_rgba={24,24},signpost_rgba={40,32},keypad_icons={128,32}}
   for i=0,9 do known["user_frame_"..i]={24,24} end

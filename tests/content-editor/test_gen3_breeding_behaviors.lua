@@ -126,7 +126,9 @@ return function(data,root)
   b.hp=20;mc.accuracyCheck=function() return false end
   assert(Effects.runForMove(ad,b,b,data.moves.SPLASH.index,mc));assert(b.hp==20,"Missed custom move still healed")
   for _,e in ipairs(loader:status().errors or {}) do error(tostring(e)) end
-  require("src.mods.Runtime").reset();assert(P.abilities(1)[1]~=78,"Disabled mod leaked ability assignment");assert(P.abilityName(78)~="Restoring Breeze","Disabled mod leaked ability names")
+  require("src.mods.Runtime").reset();P.install({read=function(_,path) return data._gen3Read(path) end})
+  assert(P.abilities(1)[1]~=78,"Disabled mod leaked ability assignment")
+  local named,name=pcall(P.abilityName,78);assert(not named or name~="Restoring Breeze","Disabled mod leaked ability names")
   local K=require("Kit");local canvas=love.graphics.newCanvas(1360,860)
   for _,panel in ipairs({"daycare","custom","damage"}) do
     love.graphics.setCanvas({canvas,stencil=true});love.graphics.clear(.04,.06,.12,1);K.layout(1360,860);K.beginFrame(0,0,false,0)

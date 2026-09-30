@@ -344,7 +344,7 @@ local function drawOverworld(S, x, y, w, h, App)
   Kit.text("micro", Generation.isGen2(S)
       and (hasKris(S)
         and "Crystal: Chris and Kris sheets. Remap writes gen2PlayerSprites; sheet → sprites:patch."
-        or "Gold: ChrisStateSprites. Remap writes gen2PlayerSprites; sheet → sprites:patch.")
+        or Generation.label(S) .. ": ChrisStateSprites. Remap writes gen2PlayerSprites; sheet → sprites:patch.")
       or "Sheet layout: 16×(16×frames). Walkers use 6 frames — stand D/U/L, walk D/U/L; right = flip left.",
     viewX, fy, PAL.faint)
   fy = fy + 28 * s

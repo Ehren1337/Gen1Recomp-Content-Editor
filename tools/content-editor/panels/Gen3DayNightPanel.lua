@@ -747,14 +747,15 @@ function M.draw(S, x, y, w, h, App)
   Kit.caption(vx, fy, "DAY AND NIGHT")
   fy = fy + 22 * s
   Kit.text("small", Kit.ellipsize("small",
-    "Outdoor maps follow the player's own clock, like Crystal. Buildings, caves and battles look the same all day.",
+    "Outdoor maps follow the player's own clock. Buildings, caves and battles look the same all day.",
     vw), vx, fy, PAL.muted)
   fy = fy + 26 * s
   local on, changed = Kit.checkbox(vx, fy, math.min(vw, 360 * s), 30 * s, DN.enabled(S.project),
     "Use day and night in this mod")
   if changed then
     local before = #DN.paintedBlocks(S.project)
-    if DN.setEnabled(S.project, on) then
+    local game = require("Generation").id(S)
+    if DN.setEnabled(S.project, on, game == "firered" or game == "leafgreen") then
       App.markDirty()
       local added = #DN.paintedBlocks(S.project) - before
       if added > 0 then S.status = ("Day and night on -- %d blocks start with the default night look"):format(added) end
@@ -779,7 +780,7 @@ function M.draw(S, x, y, w, h, App)
   end
   fy = fy + 52 * s
   local okHours = cfg.morning < cfg.day and cfg.day < cfg.night
-  Kit.text("micro", okHours and "Crystal: morning 4, day 10, night 18. A new part fades in over the fade minutes."
+  Kit.text("micro", okHours and "Defaults: morning 4, day 10, night 18. A new part fades in over the fade minutes."
     or "Morning, day and night must start in that order.", vx, fy, okHours and PAL.faint or PAL.red)
   fy = fy + 24 * s
 
@@ -797,7 +798,7 @@ function M.draw(S, x, y, w, h, App)
     if r then swatch(cx + 192 * s, fy + 3 * s, 20 * s, r, g, b) end
   end
   fy = fy + 36 * s
-  if Kit.button(vx, fy, 150 * s, 24 * s, "Crystal defaults", { kind = "ghost", font = "micro",
+  if Kit.button(vx, fy, 150 * s, 24 * s, "Default settings", { kind = "ghost", font = "micro",
       tooltip = "Hours 4 / 10 / 18, 30-minute fade, the default tints" }) then
     local any = false
     for _, k in ipairs({ "morning", "day", "night", "blend", "morningTint", "nightTint" }) do

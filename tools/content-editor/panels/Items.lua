@@ -663,7 +663,7 @@ function Items.draw(S, x, y, w, h, App)
   end
   if gen2 then
     Kit.text("micro",
-      "Gold pack is pocket chrome + text — no per-item bag icons. Preview shows PackGFX for this pocket.",
+      Generation.label(S) .. " pack is pocket chrome + text — no per-item bag icons. Preview shows PackGFX for this pocket.",
       formX, fy, PAL.faint)
     fy = fy + 18 * s
   else
@@ -760,7 +760,7 @@ function Items.draw(S, x, y, w, h, App)
   fy = fy + 18 * s
   if Generation.isGen2(S) then
     Kit.text("micro",
-      "Gold: Save patches item data (pocket/teaches/held). Ball chips emit balls:register; other use overrides stay vanilla.",
+      Generation.label(S) .. ": Save patches item data (pocket/teaches/held). Ball chips emit balls:register; other use overrides stay vanilla.",
       formX, fy, PAL.muted)
     fy = fy + 20 * s
   end

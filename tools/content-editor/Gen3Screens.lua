@@ -56,12 +56,14 @@ function M.validate(config)
 end
 function M.payload(S,config)
  M.validate(config);local result=Copy(config);result.art={}
- for _,kind in ipairs({"credits","areas"}) do if config[kind.."Enabled"]==false then result[kind]=nil end end
+ if config.emeraldCredits then require("Gen3RseCredits").validate(config.emeraldCredits) end
+ for _,kind in ipairs({"credits","areas","emeraldCredits"}) do if config[kind.."Enabled"]==false then result[kind]=nil end end
  for _,r in ipairs(result.areas or {}) do
   if r.show~="off" and not r.image and not r.custom then r.image=encoded(assert(Data.image(S,"areas",r.id))) end
  end
+ local known={};for _,a in ipairs(Data.creditArt) do known[a.id]=true end
  for _,r in ipairs(result.credits or {}) do
-  if not r.image and r.art and r.art~="none" and not result.art[r.art] then result.art[r.art]=encoded(assert(Data.image(S,"credits",r.art))) end
+  if not r.image and known[r.art] and not result.art[r.art] then result.art[r.art]=encoded(assert(Data.image(S,"credits",r.art))) end
  end
  if result.credits and config.creditsStyle~="pages" then result.movie=require("Gen3CreditsBuild").build(S,result.credits) end
  return result
@@ -72,6 +74,7 @@ function M.emit(p,encode,out)
  out[#out+1]="local creditsMovie=(function()\n"..assert(love.filesystem.read("tools/content-editor/Gen3CreditsMovie.lua")).."\nend)()\nlocal screens=(function()\n"..assert(love.filesystem.read("tools/content-editor/Gen3ScreensRuntime.lua")).."\nend)()\nscreens.movie=creditsMovie\nscreens.install(mod,"..encode(payload)..")"
 end
 function M.draw(S,x,y,w,h,App,kind)
+ if kind=="credits" and require("Generation").id(S)=="emerald" then require("Gen3RseCredits").draw(S,x,y,w,h,App);return end
  local K,C,IO=require("Kit"),require("ChoicePicker"),require("ModIO");local s=K.scale;local fh=28*s
  local defaults,err=M.defaults(S,kind);if not defaults then K.caption(x,y,tostring(err));return end
  local config=S.project.gen3Screens or {};local rows=config[kind] or defaults

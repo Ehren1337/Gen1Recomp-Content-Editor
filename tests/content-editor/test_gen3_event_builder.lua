@@ -3,7 +3,7 @@ return function(data,root,output)
   local S=require("State").new();S.data=data;S.version="firered";S.project=require("State").blankProject("event_builder_test");S.project.game="firered"
   require("Gen3ContentAdapter").prepare(S)
   local B=require("Gen3EventBuilder")
-  local d={kind="dialog",map=data.maps.FR_ROUTE10 and "FR_ROUTE10" or "FR_PALLET_TOWN",npc="1",text="Welcome, {PLAYER}!"}
+  local d={kind="dialog",map=data.maps.FR_ROUTE_10 and "FR_ROUTE_10" or "FR_PALLET_TOWN",npc="1",text="Welcome, {PLAYER}!"}
   local key=assert(B.create(S,d))
   assert(S.project.maps[d.map].objects[1].scriptKey==key)
   local before=require("ModWriter").encodeLua(S.project)

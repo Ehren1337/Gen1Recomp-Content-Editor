@@ -9,6 +9,7 @@ local State = require("State")
 local Preview = require("Preview")
 local Generation = require("Generation")
 local UiSafe = require("UiSafe")
+local UiTrueColor = require("UiTrueColorRuntime")
 local PAL = Theme.PAL
 
 local UiPreview = {}
@@ -77,6 +78,35 @@ local function blitSgbZones(canvas, zones)
   G.setShader()
 end
 
+-- Canvas rects of true-color images drawn during a presentGbCanvas body.
+local trueColorRects
+
+local function collectTrueColor(x, y, w, h)
+  if trueColorRects then trueColorRects[#trueColorRects + 1] = { x, y, w, h } end
+end
+
+local function syncTrueColor(S)
+  local list = {}
+  for rel, on in pairs(S.project and S.project.uiTrueColor or {}) do
+    if on then list[#list + 1] = rel end
+  end
+  UiTrueColor.setPaths("editor", list)
+  UiTrueColor.install(collectTrueColor)
+end
+
+-- Re-blit true-color rects unshaded over the SGB-colorized canvas.
+local function blitTrueColor(canvas, rects)
+  local G = love.graphics
+  for _, r in ipairs(rects) do
+    local x1, y1 = math.max(0, math.floor(r[1])), math.max(0, math.floor(r[2]))
+    local x2 = math.min(GB_W, math.ceil(r[1] + r[3]))
+    local y2 = math.min(GB_H, math.ceil(r[2] + r[4]))
+    if x2 > x1 and y2 > y1 then
+      G.draw(canvas, G.newQuad(x1, y1, x2 - x1, y2 - y1, GB_W, GB_H), x1, y1)
+    end
+  end
+end
+
 -- Draw `body` at identity into a 160×144 canvas, then blit (colorized
 -- when `zones` is set). LOVE scissors stay in screen space across
 -- setCanvas, so the editor clip would empty engine movie layers.
@@ -104,13 +134,18 @@ local function presentGbCanvas(st, body, zones)
   G.setCanvas(canvas)
   G.clear(0, 0, 0, 1)
   G.setColor(1, 1, 1, 1)
+  local outerRects = trueColorRects
+  trueColorRects = {}
   pcall(body)
+  local rects = trueColorRects
+  trueColorRects = outerRects
   if previous then G.setCanvas(previous) else G.setCanvas() end
   if sx then G.setScissor(sx, sy, sw, sh) else G.setScissor() end
   G.pop()
   G.setColor(1, 1, 1, 1)
   if type(zones) == "table" and zones[1] then
     blitSgbZones(canvas, zones)
+    blitTrueColor(canvas, rects)
   else
     G.draw(canvas, 0, 0)
   end
@@ -234,7 +269,7 @@ end
 
 local function img(S, path)
   if not path or path == "" then return nil end
-  return Preview.image(S, path)
+  return UiTrueColor.tag(Preview.image(S, path), path)
 end
 
 -- Engine movies read game.input / game.stack. Preview must never skip on click.
@@ -324,6 +359,21 @@ local function crystalTitle(S)
   return tostring(eff(S, "title", "layout") or "") == "crystal_title"
 end
 
+-- The project keeps only replaced Suicune frames, by frame number.
+local function suicuneFrames(S)
+  local out = {}
+  local base = dataField(S, "title").suicuneFrames
+  local own = S.project and S.project.title and S.project.title.suicuneFrames
+  base = type(base) == "table" and base or {}
+  own = type(own) == "table" and own or {}
+  local i = 1
+  while own[i] or base[i] do
+    out[i] = img(S, pathOf(own[i] or base[i]))
+    i = i + 1
+  end
+  return out
+end
+
 local function frameList(S, key, fallback)
   local out = {}
   local paths = eff(S, "title", key)
@@ -340,7 +390,7 @@ end
 
 local function buildTitle(S)
   local layout = eff(S, "title", "layout")
-  if tostring(layout or "") == "custom" then
+  if tostring(layout or "") == "custom" and not Generation.isCrystal(S) then
     return {
       kind = "title",
       custom = true,
@@ -381,7 +431,8 @@ local function buildTitle(S)
         crystal = true,
         screen = img(S, screenPath),
         gem = img(S, gemPath),
-        suicuneFrames = frameList(S, "suicuneFrames", suicunePath),
+        suicuneFrames = Generation.isCrystal(S) and suicuneFrames(S)
+          or frameList(S, "suicuneFrames", suicunePath),
         suicuneX = tonumber(eff(S, "title", "suicuneX")) or 48,
         suicuneY = tonumber(eff(S, "title", "suicuneY")) or 96,
         suicuneEvery = tonumber(eff(S, "title", "suicuneEvery")) or 8,
@@ -4596,6 +4647,7 @@ function UiPreview.draw(S, mode, x, y, w, s)
   if active and p and p.state then
     local drawer = DRAWERS[mode]
     if drawer then
+      syncTrueColor(S)
       love.graphics.setColor(1, 1, 1, 1)
       pcall(drawer, p.state, S)
     end
@@ -4609,17 +4661,17 @@ function UiPreview.draw(S, mode, x, y, w, s)
   Kit.popClip()
 
   local tips = {
-    title = "Ho-Oh flap + cloud scroll · live",
-    intro = "copyright → studio splash → fight / Gen2 cinema / Yellow · live",
+    title = "title screen · live",
+    intro = "copyright → studio splash → opening cinema · live",
     oak = "Oak pic + speech lines · live",
     theme = "textBox / choiceBox + blinking cursor · live",
     fonts = "scroll selected font sheet · live",
     strings = "selected string in a text box · live",
-    townmap = "tiled Kanto map + cursor (Red) / pokegear landmarks (Gold) · live",
+    townmap = "town map + cursor · live",
     badges = "trainer card badge grid · live",
     boot = "splash → title → newGame screen ids · live",
     credits = "Hall of Fame credits roll · live",
-    minigames = "Game Corner / Unown puzzle / Pikachu's Beach · live",
+    minigames = "minigames · live",
     menus = "In-game chrome screens · live",
   }
   local info = tips[mode] or mode

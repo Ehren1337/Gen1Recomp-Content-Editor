@@ -17,7 +17,7 @@ return function(data,root)
   local fresh={};require("Gen3").load(fresh,data._gen3Read);local loader,err=require("Gen3Mod").load(fresh,S.path);assert(loader,err)
   local RT=require("src.mods.Runtime");local F=require("src.core.game3.field");local old=F._session;F._session=session
   local rng=require("src.core.game3.rng");local random=rng.Random;rng.Random=function() return 0 end
-  local E=require("src.core.game3.encounters");local land=E.rollLand;E.rollLand=function() return {species=16,level=3} end
+  local E=require("src.core.game3.encounters");local rules=E.rules();local step=rules.step;rules.step=function() return {species=16,level=3} end
   local e=E.onStep("FR_ROUTE_1","land");assert(e._editorRoamer and e.species==244)
   assert(not E.onStep("FR_ROUTE_2","land")._editorRoamer,"Roamer appeared on wrong map")
   local Party=require("src.core.game3.party");assert(Party.giveMon(session,1,60));session.vars[0x4020]=10
@@ -66,7 +66,7 @@ return function(data,root)
   assert(saved.map=="FR_ROUTE_2" and not saved.finished,"Native battle end did not update roamer")
   NativeRuntime.session=oldNative
   RT.reset();assert(not E.onStep("FR_ROUTE_1","land")._editorRoamer,"Disabled mod left roaming hook active")
-  E.rollLand=land;rng.Random=random;F._session=old
+  rules.step=step;rng.Random=random;F._session=old
   local K=require("Kit");local canvas=love.graphics.newCanvas(1360,860)
   love.graphics.setCanvas({canvas,stencil=true});love.graphics.clear(.04,.06,.12,1);K.layout(1360,860);K.beginFrame(0,0,false,0)
   S.g3EncounterSection="roamers";require("Gen3EncounterForms").draw(S,20,20,1320,810,{markDirty=function() end})

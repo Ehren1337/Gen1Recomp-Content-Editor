@@ -27,7 +27,41 @@ function M.emit(project,encode,out)
   end
   local originalGifts = setmetatable({}, {__mode="k"})
   local selectedStarters = setmetatable({}, {__mode="k"})
+  -- Emerald picks from Birch's bag, which reads one species table and gives at a fixed level.
+  local rseSlots, rseSpecies = {}, {}
   for _, rule in ipairs(starterRules) do
+    if rule.starterSlot then
+      local target = assert(mod.content.pokemon:get(rule.species), "Unknown starter species: " .. rule.species)
+      local source = assert(mod.content.pokemon:get(rule.matchSpecies[1]), "Unknown starter source: " .. rule.matchSpecies[1])
+      rseSlots[rule.starterSlot] = {index = target.index, level = rule.level, nickname = rule.nickname ~= "" and rule.nickname or nil}
+      rseSpecies[source.index] = target.index
+    end
+  end
+  if next(rseSlots) then
+    local StarterChoose = require("src.ui.game3.rse.starter_choose")
+    local FieldRse = require("src.core.game3.scripting.natives_field_rse")
+    local Runtime = require("src.mods.Runtime")
+    if not StarterChoose._editorStarterBridge then
+      StarterChoose._editorStarterBridge = true
+      local species, give = StarterChoose.species, FieldRse.giveStarter
+      StarterChoose.species = function(...) return Runtime.call("editor.gen3.rse.starterSpecies", species, ...) end
+      FieldRse.giveStarter = function(...) return Runtime.call("editor.gen3.rse.giveStarter", give, ...) end
+    end
+    mod.hooks:wrap("editor.gen3.rse.starterSpecies", function(proceed, ...)
+      local original = proceed(...)
+      return rseSpecies[original] or original
+    end)
+    mod.hooks:wrap("editor.gen3.rse.giveStarter", function(proceed, ctx, selection, sess)
+      local slot = rseSlots[tonumber(selection)]
+      if not slot then return proceed(ctx, selection, sess) end
+      local Rse = require("src.core.game3.rse.init")
+      sess = sess or Rse.session()
+      Rse.setVar("VAR_STARTER_MON", selection, sess)
+      local code = require("src.core.game3.party").giveMonToPlayer(sess, slot.index, slot.level, slot.nickname)
+      return slot.index, code
+    end)
+  end
+  for _, rule in ipairs(starterRules) do if not rule.starterSlot then
     local target = assert(mod.content.pokemon:get(rule.species), "Unknown starter species: " .. rule.species)
     local sourceIndices = {}
     for _, name in ipairs(rule.matchSpecies) do
@@ -76,7 +110,7 @@ function M.emit(project,encode,out)
         if rule.nickname and rule.nickname~="" then gift.nickname=rule.nickname end
       end
     end,-1000)
-  end]=]
+  end end]=]
 end
 return M
 

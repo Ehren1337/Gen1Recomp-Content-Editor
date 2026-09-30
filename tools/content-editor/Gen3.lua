@@ -26,7 +26,7 @@ function Gen3.load(data, read, list)
   data._gen3Read = read
   data._gen3List = list
   data._g3Animations,data._g3Audio,data._g3Assets=nil,nil,nil
-  data._g3ActionMarts=nil
+  data._g3ActionMarts,data._g3DexEntries=nil,nil
   data._editorGen3Catalog,data._gen3Layouts,data._gen3DerivedLayouts=nil,nil,nil
   data._editorGen3Report=nil
   data._modPokemonArt=nil
@@ -36,7 +36,7 @@ function Gen3.load(data, read, list)
   data._g3TownMaps=nil
   data._g3Fame=nil
   data._editorGen3Audio,data._g3ShopLocations=nil,nil
-  data._g3RomBytes,data._g3RomTrades,data._g3ShinyImages=nil,nil,nil
+  data._g3RomTrades,data._g3ShinyImages=nil,nil
   data._g3MapHeaders=nil
   data._editorMaps,data._editorTilesets=nil,nil
   data._g3CollisionDefaults=nil
@@ -115,7 +115,7 @@ function Gen3.projectError(project)
   local Generation = require("Generation")
   if not Generation.isGen3({version=project.game or project.version}) then
     if (project.gen3 and next(project.gen3)) or next(project.gen3Borders or {}) or next(project.gen3Terrain or {}) or next(project.gen3Hooks or {}) or next(project.gen3Starters or {}) or require("Gen3Native").used(project) or next(project.gen3MapLayouts or {}) or require("Gen3Void").used(project) then
-      return "This project has Gen 3 edits. Select FireRed or LeafGreen before saving."
+      return "This project has Gen 3 edits. Select FireRed, LeafGreen or Emerald before saving."
     end
     return nil
   end

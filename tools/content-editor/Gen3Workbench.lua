@@ -54,7 +54,7 @@ function M.emit(p,encode,out)
   end
   for key,mult in pairs(p.type_matchups or {}) do
     local a,d=key:match("^([^>]+)>([^>]+)$")
-    assert(typeIds[a] and typeIds[d] and (mult==0 or mult==5 or mult==10 or mult==20),"Invalid FireRed matchup")
+    assert(typeIds[a] and typeIds[d] and (mult==0 or mult==5 or mult==10 or mult==20),"Invalid type matchup")
   end
   out[#out+1]="  local workbench="..encode({boot=p.boot or {},shops=p.marts or {},types=p.types or {},matchups=p.type_matchups or {},typeIds=typeIds})
   out[#out+1]=M.source

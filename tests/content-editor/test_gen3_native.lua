@@ -22,6 +22,8 @@ project.gen3Terrain={FR_EDITOR_TEST={[1025]={mid=7,coll=0,elev=3}}}
 project.gen3Animations={["moves/1"]={{op="delay",frames=9},{op="end"}}}
 project.gen3Assets={["data/generated/gba/chrome/std_rgba.rgba"]={file="assets/test.rgba",width=24,height=24}}
 project.gen3Audio={songs={["300"]=301},sounds={["5"]=6},mapSongs={FR_EDITOR_TEST=301}}
+project.gen3.pokemon={BULBASAUR={index=1,dexEntry={kind="E2E KIND",height=7,weight=69}}}
+project.gen3DexText={[1]="E2E dex line\nsecond line"}
 local dir="tests/content-editor/gen3-smoke/native-project"
 assert(IO.ensureDirectory(dir.."/assets"))
 assert(IO.writeText(dir.."/assets/test.rgba",string.rep(string.char(0,255,0,255),24*24)))
@@ -52,6 +54,9 @@ local asset=Cache.read("firered/data/generated/gba/chrome/std_rgba.rgba")
 assert(asset==string.rep(string.char(0,255,0,255),24*24),"Native asset was not replaced")
 local pack=assert(loadstring(assert(Cache.read(require("Gen3Resources").animationPath))))()
 assert(pack.moves[1][1].frames==9,"Animation edit did not reach the native pack")
+local PokedexData=require("src.core.game3.pokedex_data");PokedexData._entries=nil;PokedexData.init()
+local entry=PokedexData._entries[1]
+assert(entry.category=="E2E KIND" and entry.description=="E2E dex line\nsecond line","Pokédex edit did not reach the FireRed Pokédex")
 local Audio=require("src.core.game3.audio")
 local remapped=loader.hooks:call("editor.gen3.audio.playSong",function(id) return id end,300)
 assert(remapped==301)

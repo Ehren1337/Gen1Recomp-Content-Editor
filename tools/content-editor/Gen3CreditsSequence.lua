@@ -1,19 +1,19 @@
 -- Scene order, pan directions, and frame counts from pret FireRed credits.c.
 return {maps={
 ["INDIGO"]={map="FR_INDIGO_PLATEAU_EXTERIOR",x=11,y=6,dx=0,dy=0},
-["ROUTE23"]={map="FR_ROUTE23",x=11,y=107,dx=0,dy=1},
+["ROUTE23"]={map="FR_ROUTE_23",x=11,y=107,dx=0,dy=1},
 ["VIRIDIAN_CITY"]={map="FR_VIRIDIAN_CITY",x=30,y=34,dx=0,dy=-1},
 ["PEWTER_CITY"]={map="FR_PEWTER_CITY",x=20,y=26,dx=0,dy=-1},
 ["CERULEAN_CITY"]={map="FR_CERULEAN_CITY",x=8,y=6,dx=1,dy=1},
-["ROUTE25"]={map="FR_ROUTE25",x=25,y=6,dx=1,dy=0},
+["ROUTE25"]={map="FR_ROUTE_25",x=25,y=6,dx=1,dy=0},
 ["VERMILION_CITY"]={map="FR_VERMILION_CITY",x=9,y=7,dx=1,dy=1},
-["ROUTE10"]={map="FR_ROUTE10",x=11,y=68,dx=0,dy=1},
+["ROUTE10"]={map="FR_ROUTE_10",x=11,y=68,dx=0,dy=1},
 ["CELADON_CITY"]={map="FR_CELADON_CITY",x=48,y=16,dx=-1,dy=0},
 ["SAFFRON_CITY"]={map="FR_SAFFRON_CITY",x=39,y=5,dx=0,dy=1},
-["ROUTE17"]={map="FR_ROUTE17",x=7,y=43,dx=0,dy=1},
+["ROUTE17"]={map="FR_ROUTE_17",x=7,y=43,dx=0,dy=1},
 ["FUCHSIA_CITY"]={map="FR_FUCHSIA_CITY",x=28,y=5,dx=0,dy=1},
 ["CINNABAR_ISLAND"]={map="FR_CINNABAR_ISLAND",x=13,y=17,dx=0,dy=-1},
-["ROUTE21_NORTH"]={map="FR_ROUTE21_NORTH",x=8,y=20,dx=0,dy=-1}
+["ROUTE21_NORTH"]={map="FR_ROUTE_21_NORTH",x=8,y=20,dx=0,dy=-1}
 },commands={
 {op="map",id="ROUTE23",frames=48,reset=false},
 {op="text",page=1,frames=300},

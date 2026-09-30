@@ -1,14 +1,20 @@
 local M={}
 local function copy(v) return require("src.mods.Merge").deepCopy(v) end
+-- pokefirered and pokeemerald include/constants/flags.h and vars.h.
+local IDS={
+  firered={postgame=0x844,starterVar=0x4031,repelVar=0x4020,starters={[0]="bulbasaur","squirtle","charmander"}},
+  emerald={postgame=0x864,starterVar=0x4023,repelVar=0x4021,starters={[0]="treecko","torchic","mudkip"}},
+}
+local function ids() return IDS[require("src.core.GameVersion").get()] or IDS.firered end
 function M.available(row,session)
   if row.enabled==false then return false end
   local F=require("src.core.game3.scripting.flags")
-  return row.unlock=="always" or F.getFlag(session,nil,row.unlock=="postgame" and 0x844 or row.flag)
+  return row.unlock=="always" or F.getFlag(session,nil,row.unlock=="postgame" and ids().postgame or row.flag)
 end
 function M.species(row,session)
   if row.selection~="starter" then return row.species end
-  local starter=require("src.core.game3.scripting.flags").getVar(session,nil,0x4031)
-  return row.starters[starter==0 and "bulbasaur" or starter==2 and "charmander" or "squirtle"]
+  local game=ids();local starter=require("src.core.game3.scripting.flags").getVar(session,nil,game.starterVar)
+  return row.starters[game.starters[starter] or game.starters[1]]
 end
 function M.move(row,state,rng)
   local choices={};for _,id in ipairs(row.maps) do if id~=state.map then choices[#choices+1]=id end end
@@ -60,7 +66,7 @@ function M.install(mod,rows)
     local candidate=candidates[Rng.Random()%#candidates+1];local row=candidate.row
     if Rng.Random()%100>=row.chance then return encounter end
     local F=require("src.core.game3.scripting.flags")
-    if F.getVar(session,nil,0x4020)>0 then
+    if F.getVar(session,nil,ids().repelVar)>0 then
       for _,mon in ipairs(session.party or {}) do if not mon.isEgg and (mon.hp or 0)>0 then
         if (mon.level or 1)>row.level then return encounter end;break
       end end

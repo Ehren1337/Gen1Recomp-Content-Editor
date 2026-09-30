@@ -1862,7 +1862,7 @@ function Gfx.draw(S, x, y, w, h, App)
   else
     if Generation.isGen2(S) then
       Kit.text("micro",
-        "Gold uses COLL_* quads (paint below). Gen1 walkable/door CSV lists are unused.",
+        Generation.label(S) .. " uses COLL_* quads (paint below). Walkable/door CSV lists are unused.",
         viewX, fy, PAL.faint)
       fy = fy + 18 * s
     else

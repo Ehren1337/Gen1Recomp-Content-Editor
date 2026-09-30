@@ -79,7 +79,7 @@ local function defaultDraft(id)
     profile = "content",
     game_version = string.format(">=%s <%d.0.0", engine, major + 1),
     games = games,
-    gen2compat = Generation.coversGen2(games) or Generation.isGen2(nil) or false,
+    gen2compat = false,
     category = "GAMEPLAY",
     priority = 100,
     permissions = {},

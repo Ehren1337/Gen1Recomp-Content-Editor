@@ -30,6 +30,9 @@ return (function()
   p.diploma = (function() return 
 {}
   end)()
+  p.encounters = (function() return 
+{}
+  end)()
   p.eventFlags = (function() return 
 {}
   end)()
@@ -52,7 +55,234 @@ return (function()
   end)()
   p.gen3 = (function() return 
 {
+  encounters = {},
+  items = {},
   maps = {
+    EM_E2E_COPY = {
+      bgEvents = {
+        {
+                  elevation = 0,
+                  kind = 0,
+                  scriptKey = "g3:081e8eea",
+                  scriptPtr = 136220394,
+                  type = "sign",
+                  x = 11,
+                  y = 9,
+                },
+        {
+                  elevation = 0,
+                  kind = 1,
+                  scriptKey = "g3:08271e73",
+                  scriptPtr = 136781427,
+                  type = "sign",
+                  x = 7,
+                  y = 16,
+                },
+        {
+                  elevation = 0,
+                  kind = 1,
+                  scriptKey = "g3:08271e6a",
+                  scriptPtr = 136781418,
+                  type = "sign",
+                  x = 15,
+                  y = 6,
+                },
+        {
+                  elevation = 0,
+                  kind = 1,
+                  scriptKey = "g3:08271e73",
+                  scriptPtr = 136781427,
+                  type = "sign",
+                  x = 8,
+                  y = 16,
+                },
+        {
+                  elevation = 0,
+                  kind = 1,
+                  scriptKey = "g3:08271e6a",
+                  scriptPtr = 136781418,
+                  type = "sign",
+                  x = 16,
+                  y = 6,
+                },
+      },
+      connections = {
+        north = {
+          map = "EM_ROUTE103",
+          offset = 0,
+        },
+        south = {
+          map = "EM_ROUTE101",
+          offset = 0,
+        },
+        west = {
+          map = "EM_ROUTE102",
+          offset = 0,
+        },
+      },
+      coordEvents = {
+        {
+                  elevation = 3,
+                  scriptKey = "g3:081e903f",
+                  scriptPtr = 136220735,
+                  value = 0,
+                  var = 16465,
+                  x = 0,
+                  y = 10,
+                },
+        {
+                  elevation = 3,
+                  scriptKey = "g3:081e9086",
+                  scriptPtr = 136220806,
+                  value = 1,
+                  var = 16583,
+                  x = 8,
+                  y = 19,
+                },
+        {
+                  elevation = 3,
+                  scriptKey = "g3:081e90a6",
+                  scriptPtr = 136220838,
+                  value = 1,
+                  var = 16583,
+                  x = 9,
+                  y = 19,
+                },
+        {
+                  elevation = 3,
+                  scriptKey = "g3:081e90c6",
+                  scriptPtr = 136220870,
+                  value = 1,
+                  var = 16583,
+                  x = 10,
+                  y = 19,
+                },
+      },
+      height = 20,
+      id = "EM_E2E_COPY",
+      mapScripts = {
+        onDiveWarp = {},
+        onFrame = {},
+        onTransition = "g3:081e8ea8",
+        onWarpIntoMap = {},
+      },
+      music = 363,
+      name = "EM_E2E_COPY",
+      objects = {
+        {
+                  elevation = 3,
+                  flag = 0,
+                  graphics = 14,
+                  graphicsId = 14,
+                  index = 1,
+                  kind = 0,
+                  localId = 1,
+                  movement = "STAY",
+                  movementType = 9,
+                  range = "LEFT",
+                  rangeX = 0,
+                  rangeY = 0,
+                  scriptKey = "g3:081e8ef3",
+                  scriptPtr = 136220403,
+                  sight = 0,
+                  trainerRange = 0,
+                  trainerType = 0,
+                  x = 16,
+                  y = 11,
+                },
+        {
+                  elevation = 3,
+                  flag = 0,
+                  graphics = 83,
+                  graphicsId = 83,
+                  index = 2,
+                  kind = 0,
+                  localId = 2,
+                  movement = "STAY",
+                  movementType = 8,
+                  range = "DOWN",
+                  rangeX = 0,
+                  rangeY = 0,
+                  scriptKey = "g3:081e8efc",
+                  scriptPtr = 136220412,
+                  sight = 0,
+                  trainerRange = 0,
+                  trainerType = 0,
+                  x = 13,
+                  y = 7,
+                },
+        {
+                  elevation = 3,
+                  flag = 0,
+                  graphics = 39,
+                  graphicsId = 39,
+                  index = 3,
+                  kind = 0,
+                  localId = 3,
+                  movement = "STAY",
+                  movementType = 10,
+                  range = "RIGHT",
+                  rangeX = 0,
+                  rangeY = 0,
+                  scriptKey = "g3:081e901f",
+                  scriptPtr = 136220703,
+                  sight = 0,
+                  trainerRange = 0,
+                  trainerType = 0,
+                  x = 8,
+                  y = 9,
+                },
+        {
+                  elevation = 3,
+                  flag = 979,
+                  graphics = 240,
+                  graphicsId = 240,
+                  index = 4,
+                  kind = 0,
+                  localId = 4,
+                  movement = "STAY",
+                  movementType = 7,
+                  range = "UP",
+                  rangeX = 1,
+                  rangeY = 1,
+                  scriptKey = "g3:081e9070",
+                  scriptPtr = 136220784,
+                  sight = 0,
+                  trainerRange = 0,
+                  trainerType = 0,
+                  x = 11,
+                  y = 19,
+                },
+      },
+      pair = "general__petalburg",
+      warps = {
+        {
+                  destMap = "EM_OLDALE_TOWN_HOUSE1",
+                  destWarp = 1,
+                  x = 5,
+                  y = 7,
+                },
+        {
+                  destMap = "EM_OLDALE_TOWN_HOUSE2",
+                  destWarp = 1,
+                  x = 15,
+                  y = 16,
+                },
+        {
+                  destMap = "EM_OLDALE_TOWN_POKEMON_CENTER_1F",
+                  destWarp = 1,
+                  x = 6,
+                  y = 16,
+                },
+        {
+                  destMap = "EM_OLDALE_TOWN_MART",
+                  destWarp = 1,
+                  x = 14,
+                  y = 6,
+                },
+      },
+      width = 20,
+    },
     EM_LITTLEROOT_TOWN = {
       allowEscaping = 0,
       bgEvents = {
@@ -421,20 +651,324 @@ return (function()
       },
     },
   },
+  moves = {},
   pokemon = {
     TREECKO = {
+      abilities = {
+        "OVERGROW",
+      },
+      baseExp = 65,
       baseStats = {
+        attack = 45,
+        defense = 35,
         hp = 77,
+        specialAttack = 65,
+        specialDefense = 55,
+        speed = 70,
+      },
+      catchRate = 45,
+      dex = 252,
+      dexEntry = {
+        height = 5,
+        kind = "E2E KIND",
+        weight = 50,
+      },
+      eggCycles = 20,
+      eggGroups = { 1, 14 },
+      evolutions = {
+        {
+                  level = 16,
+                  method = "EVO_LEVEL",
+                  species = "GROVYLE",
+                },
+      },
+      friendship = 70,
+      genderRatio = 31,
+      growthRate = "MEDIUM_SLOW",
+      id = "TREECKO",
+      index = 277,
+      learnset = {
+        {
+                  level = 1,
+                  move = "POUND",
+                },
+        {
+                  level = 1,
+                  move = "LEER",
+                },
+        {
+                  level = 6,
+                  move = "ABSORB",
+                },
+        {
+                  level = 11,
+                  move = "QUICK_ATTACK",
+                },
+        {
+                  level = 16,
+                  move = "PURSUIT",
+                },
+        {
+                  level = 21,
+                  move = "SCREECH",
+                },
+        {
+                  level = 26,
+                  move = "MEGA_DRAIN",
+                },
+        {
+                  level = 31,
+                  move = "AGILITY",
+                },
+        {
+                  level = 36,
+                  move = "SLAM",
+                },
+        {
+                  level = 41,
+                  move = "DETECT",
+                },
+        {
+                  level = 46,
+                  move = "GIGA_DRAIN",
+                },
+      },
+      name = "TREECKO",
+      tmhm = {
+        "FOCUS_PUNCH",
+        "TOXIC",
+        "BULLET_SEED",
+        "HIDDEN_POWER",
+        "SUNNY_DAY",
+        "PROTECT",
+        "GIGA_DRAIN",
+        "SAFEGUARD",
+        "FRUSTRATION",
+        "SOLARBEAM",
+        "IRON_TAIL",
+        "RETURN",
+        "DIG",
+        "BRICK_BREAK",
+        "DOUBLE_TEAM",
+        "ROCK_TOMB",
+        "AERIAL_ACE",
+        "FACADE",
+        "SECRET_POWER",
+        "REST",
+        "ATTRACT",
+        "CUT",
+        "STRENGTH",
+        "FLASH",
+        "ROCK_SMASH",
+      },
+      trueColor = true,
+      types = {
+        "GRASS",
       },
     },
   },
+  text = {
+    gText_Birch_Welcome = {
+      {
+              s = "E2E welcome",
+              t = "text",
+            },
+      {
+              t = "eos",
+            },
+    },
+  },
+  trainers = {},
+}
+  end)()
+  p.gen3Assets = (function() return 
+{
+  ["data/generated/gba/rse/bag/bg.png"] = {
+    file = "assets/gen3/rse/bag/bg.png",
+    height = 160,
+    width = 240,
+  },
+}
+  end)()
+  p.gen3ContentWorkspaces = (function() return 
+{
+  encounters = true,
+  items = true,
+  moves = true,
+  pokemon = true,
+  text = true,
+  trainers = true,
+}
+  end)()
+  p.gen3DexText = (function() return 
+{
+  [277] = "E2E dex line\nsecond line",
 }
   end)()
   p.gen3Exact = (function() return 
 {
+  encounters = {},
+  items = {},
   maps = {
     EM_LITTLEROOT_TOWN = true,
   },
+  moves = {},
+  pokemon = {
+    TREECKO = true,
+  },
+  text = {
+    gText_Birch_Welcome = true,
+  },
+  trainers = {},
+}
+  end)()
+  p.gen3Fly = (function() return 
+{
+  {
+      enabled = true,
+      flag = 2159,
+      name = "LITTLEROOT TOWN",
+      section = 0,
+      unlock = "flag",
+      x = 4,
+      y = 2,
+    },
+  {
+      enabled = true,
+      flag = 2160,
+      name = "OLDALE TOWN",
+      section = 1,
+      unlock = "flag",
+      x = 6,
+      y = 17,
+    },
+  {
+      enabled = true,
+      flag = 2161,
+      name = "DEWFORD TOWN",
+      section = 2,
+      unlock = "flag",
+      x = 2,
+      y = 11,
+    },
+  {
+      enabled = true,
+      flag = 2162,
+      name = "LAVARIDGE TOWN",
+      section = 3,
+      unlock = "flag",
+      x = 9,
+      y = 7,
+    },
+  {
+      enabled = true,
+      flag = 2163,
+      name = "FALLARBOR TOWN",
+      section = 4,
+      unlock = "flag",
+      x = 14,
+      y = 8,
+    },
+  {
+      enabled = true,
+      flag = 2164,
+      name = "VERDANTURF TOWN",
+      section = 5,
+      unlock = "flag",
+      x = 16,
+      y = 4,
+    },
+  {
+      enabled = true,
+      flag = 2165,
+      name = "PACIFIDLOG TOWN",
+      section = 6,
+      unlock = "flag",
+      x = 8,
+      y = 16,
+    },
+  {
+      enabled = true,
+      flag = 2166,
+      map = "EM_OLDALE_TOWN",
+      name = "PETALBURG CITY",
+      section = 7,
+      unlock = "always",
+      x = 6,
+      y = 17,
+    },
+  {
+      enabled = true,
+      flag = 2167,
+      name = "SLATEPORT CITY",
+      section = 8,
+      unlock = "flag",
+      x = 19,
+      y = 20,
+    },
+  {
+      enabled = true,
+      flag = 2168,
+      name = "MAUVILLE CITY",
+      section = 9,
+      unlock = "flag",
+      x = 22,
+      y = 6,
+    },
+  {
+      enabled = true,
+      flag = 2169,
+      name = "RUSTBORO CITY",
+      section = 10,
+      unlock = "flag",
+      x = 16,
+      y = 39,
+    },
+  {
+      enabled = true,
+      flag = 2170,
+      name = "FORTREE CITY",
+      section = 11,
+      unlock = "flag",
+      x = 5,
+      y = 7,
+    },
+  {
+      enabled = true,
+      flag = 2171,
+      name = "LILYCOVE CITY",
+      section = 12,
+      unlock = "flag",
+      x = 24,
+      y = 15,
+    },
+  {
+      enabled = true,
+      flag = 2172,
+      name = "MOSSDEEP CITY",
+      section = 13,
+      unlock = "flag",
+      x = 28,
+      y = 17,
+    },
+  {
+      enabled = true,
+      flag = 2173,
+      name = "SOOTOPOLIS CITY",
+      section = 14,
+      unlock = "flag",
+      x = 43,
+      y = 32,
+    },
+  {
+      enabled = true,
+      flag = 2174,
+      name = "EVER GRANDE CITY",
+      section = 15,
+      unlock = "flag",
+      x = 27,
+      y = 49,
+    },
 }
   end)()
   p.gen3Layered = (function() return 
@@ -3270,8 +3804,1308 @@ return (function()
   },
 }
   end)()
+  p.gen3MapLayouts = (function() return 
+{
+  EM_E2E_COPY = {
+    blank = false,
+    height = 20,
+    source = "EM_OLDALE_TOWN",
+    width = 20,
+  },
+}
+  end)()
   p.gen3Modes = (function() return 
-{}
+{
+  encounters = {},
+  items = {},
+  maps = {
+    EM_E2E_COPY = "register",
+  },
+  moves = {},
+  pokemon = {
+    TREECKO = "patch",
+  },
+  text = {
+    gText_Birch_Welcome = "override",
+  },
+  trainers = {},
+}
+  end)()
+  p.gen3Screens = (function() return 
+{
+  emeraldCredits = {
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "POKéMON EMERALD VERSION",
+                },
+          {
+                  isTitle = true,
+                  text = "Credits",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Director",
+                },
+          {
+                  isTitle = false,
+                  text = "E2E Tester",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Art Director",
+                },
+          {
+                  isTitle = false,
+                  text = "Ken Sugimori",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "World Director",
+                },
+          {
+                  isTitle = false,
+                  text = "Junichi Masuda",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Lead Programmer",
+                },
+          {
+                  isTitle = false,
+                  text = "Hisashi Sogabe",
+                },
+          {
+                  isTitle = true,
+                  text = "Lead Graphic Artist",
+                },
+          {
+                  isTitle = false,
+                  text = "Motofumi Fujiwara",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Hisashi Sogabe",
+                },
+          {
+                  isTitle = false,
+                  text = "Tomomichi Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "Nozomu Saito",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Akito Mori",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroyuki Nakamura",
+                },
+          {
+                  isTitle = false,
+                  text = "Masao Taya",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Nohara",
+                },
+          {
+                  isTitle = false,
+                  text = "Miyuki Iwasawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Yoshinori Matsuda",
+                },
+          {
+                  isTitle = false,
+                  text = "Keita Kagaya",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Tetsuya Watanabe",
+                },
+          {
+                  isTitle = false,
+                  text = "Sosuke Tamada",
+                },
+          {
+                  isTitle = false,
+                  text = "Takenori Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Graphic Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Motofumi Fujiwara",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Graphic Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Kenkichi Toyama",
+                },
+          {
+                  isTitle = false,
+                  text = "Asuka Iwashita",
+                },
+          {
+                  isTitle = false,
+                  text = "Takao Unno",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Graphic Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Ken Sugimori",
+                },
+          {
+                  isTitle = false,
+                  text = "Hironobu Yoshida",
+                },
+          {
+                  isTitle = false,
+                  text = "Aimi Tomita",
+                },
+          {
+                  isTitle = false,
+                  text = "Kanako Eo",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Music Composition",
+                },
+          {
+                  isTitle = false,
+                  text = "Go Ichinose",
+                },
+          {
+                  isTitle = false,
+                  text = "Junichi Masuda",
+                },
+          {
+                  isTitle = false,
+                  text = "Morikazu Aoki",
+                },
+          {
+                  isTitle = false,
+                  text = "Hitomi Sato",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Sound Effects & POKéMON Voices",
+                },
+          {
+                  isTitle = false,
+                  text = "Go Ichinose",
+                },
+          {
+                  isTitle = false,
+                  text = "Morikazu Aoki",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Game Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Shigeki Morimoto",
+                },
+          {
+                  isTitle = false,
+                  text = "Teruyuki Shimoyamada",
+                },
+          {
+                  isTitle = false,
+                  text = "Takeshi Kawachimaru",
+                },
+          {
+                  isTitle = false,
+                  text = "Akihito Tomisawa",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Game Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Suguru Nakatsui",
+                },
+          {
+                  isTitle = false,
+                  text = "Tetsuji Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "Hitomi Sato",
+                },
+          {
+                  isTitle = false,
+                  text = "Kenji Matsushima",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Game Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Junichi Masuda",
+                },
+          {
+                  isTitle = false,
+                  text = "Koji Nishino",
+                },
+          {
+                  isTitle = false,
+                  text = "Shigeru Ohmori",
+                },
+          {
+                  isTitle = false,
+                  text = "Tadashi Takahashi",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Scenario Plot",
+                },
+          {
+                  isTitle = false,
+                  text = "Akihito Tomisawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Junichi Masuda",
+                },
+          {
+                  isTitle = false,
+                  text = "Koji Nishino",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Scenario",
+                },
+          {
+                  isTitle = false,
+                  text = "Akihito Tomisawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Hitomi Sato",
+                },
+          {
+                  isTitle = false,
+                  text = "Toshinobu Matsumiya",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Script Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Tomomichi Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Nohara",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Map Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Suguru Nakatsui",
+                },
+          {
+                  isTitle = false,
+                  text = "Teruyuki Shimoyamada",
+                },
+          {
+                  isTitle = false,
+                  text = "Shigeru Ohmori",
+                },
+          {
+                  isTitle = false,
+                  text = "Tetsuji Ohta",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Battle Frontier Data",
+                },
+          {
+                  isTitle = false,
+                  text = "Tetsuji Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Parametric Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Teruyuki Shimoyamada",
+                },
+          {
+                  isTitle = false,
+                  text = "Shigeki Morimoto",
+                },
+          {
+                  isTitle = false,
+                  text = "Tetsuji Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "Koji Nishino",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "POKéDEX Text",
+                },
+          {
+                  isTitle = false,
+                  text = "Kenji Matsushima",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Environment & Tool Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Hisashi Sogabe",
+                },
+          {
+                  isTitle = false,
+                  text = "Sosuke Tamada",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroyuki Nakamura",
+                },
+          {
+                  isTitle = false,
+                  text = "Akito Mori",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "POKéMON Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Ken Sugimori",
+                },
+          {
+                  isTitle = false,
+                  text = "Motofumi Fujiwara",
+                },
+          {
+                  isTitle = false,
+                  text = "Shigeki Morimoto",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "POKéMON Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Hironobu Yoshida",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Ohta",
+                },
+          {
+                  isTitle = false,
+                  text = "Asuka Iwashita",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "POKéMON Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Takao Unno",
+                },
+          {
+                  isTitle = false,
+                  text = "Kanako Eo",
+                },
+          {
+                  isTitle = false,
+                  text = "Aimi Tomita",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "POKéMON Designers",
+                },
+          {
+                  isTitle = false,
+                  text = "Atsuko Nishida",
+                },
+          {
+                  isTitle = false,
+                  text = "Muneo Saito",
+                },
+          {
+                  isTitle = false,
+                  text = "Rena Yoshikawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Jun Okutani",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Support Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Mitsuhara",
+                },
+          {
+                  isTitle = false,
+                  text = "Daisuke Hoshino",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "NCL Product Testing",
+                },
+          {
+                  isTitle = false,
+                  text = "NCL Super Mario Club",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Package & Manual Illustration",
+                },
+          {
+                  isTitle = false,
+                  text = "Ken Sugimori",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Special Thanks",
+                },
+          {
+                  isTitle = false,
+                  text = "Kenji Tominaga",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroki Enomoto",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Special Thanks",
+                },
+          {
+                  isTitle = false,
+                  text = "Kazuya Suyama",
+                },
+          {
+                  isTitle = false,
+                  text = "Kenjiro Ito",
+                },
+          {
+                  isTitle = false,
+                  text = "Michiko Takizawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Makiko Takada",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Special Thanks",
+                },
+          {
+                  isTitle = false,
+                  text = "Mikiko Ohhashi",
+                },
+          {
+                  isTitle = false,
+                  text = "Takanao Kondo",
+                },
+          {
+                  isTitle = false,
+                  text = "Rui Kawaguchi",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Special Thanks",
+                },
+          {
+                  isTitle = false,
+                  text = "Takahiro Ohnishi",
+                },
+          {
+                  isTitle = false,
+                  text = "Norihide Okamura",
+                },
+          {
+                  isTitle = false,
+                  text = "Shunsuke Kohori",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Information Supervisors",
+                },
+          {
+                  isTitle = false,
+                  text = "Kazuyuki Terada",
+                },
+          {
+                  isTitle = false,
+                  text = "Yuri Sakurai",
+                },
+          {
+                  isTitle = false,
+                  text = "Yumi Funasaka",
+                },
+          {
+                  isTitle = false,
+                  text = "Naoko Yanase",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Artwork",
+                },
+          {
+                  isTitle = false,
+                  text = "Sachiko Nakamichi",
+                },
+          {
+                  isTitle = false,
+                  text = "Fujiko Nomura",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Artwork",
+                },
+          {
+                  isTitle = false,
+                  text = "Hideyuki Nakajima",
+                },
+          {
+                  isTitle = false,
+                  text = "Hidenori Saeki",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Artwork",
+                },
+          {
+                  isTitle = false,
+                  text = "Yoko Watanabe",
+                },
+          {
+                  isTitle = false,
+                  text = "Sakae Kimura",
+                },
+          {
+                  isTitle = false,
+                  text = "Chiaki Shinkai",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Coordinators",
+                },
+          {
+                  isTitle = false,
+                  text = "Kazuki Yoshihara",
+                },
+          {
+                  isTitle = false,
+                  text = "Akira Kinashi",
+                },
+          {
+                  isTitle = false,
+                  text = "Retsuji Nomoto",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "English Version Coordinators",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiro Nakamura",
+                },
+          {
+                  isTitle = false,
+                  text = "Seth McMahill",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Translator",
+                },
+          {
+                  isTitle = false,
+                  text = "Nob Ogasawara",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Text Editor",
+                },
+          {
+                  isTitle = false,
+                  text = "Teresa Lillygren",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "NCL Coordinator",
+                },
+          {
+                  isTitle = false,
+                  text = "Kimiko Nakamichi",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Teruki Murakawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Souichi Yamamoto",
+                },
+          {
+                  isTitle = false,
+                  text = "Yuichiro Ito",
+                },
+          {
+                  isTitle = false,
+                  text = "Akira Kinashi",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Graphic Designer",
+                },
+          {
+                  isTitle = false,
+                  text = "Akira Kinashi",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Environment & Tool Programmers",
+                },
+          {
+                  isTitle = false,
+                  text = "Teruki Murakawa",
+                },
+          {
+                  isTitle = false,
+                  text = "Souichi Yamamoto",
+                },
+          {
+                  isTitle = false,
+                  text = "Kimiko Nakamichi",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "NOA Product Testing",
+                },
+          {
+                  isTitle = false,
+                  text = "Thomas Hertzog",
+                },
+          {
+                  isTitle = false,
+                  text = "Erik Johnson",
+                },
+          {
+                  isTitle = false,
+                  text = "Mika Kurosawa",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Braille Code Check",
+                },
+          {
+                  isTitle = false,
+                  text = "National Federation of the Blind",
+                },
+          {
+                  isTitle = false,
+                  text = "Patricia A. Maurer",
+                },
+          {
+                  isTitle = false,
+                  text = "Japan Braille Library",
+                },
+          {
+                  isTitle = false,
+                  text = "European Blind Union",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Braille Code Check",
+                },
+          {
+                  isTitle = false,
+                  text = "Australian Braille Authority",
+                },
+          {
+                  isTitle = false,
+                  text = "Royal New Zealand Federation for the Blind",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Special Thanks",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroyuki Uesugi",
+                },
+          {
+                  isTitle = false,
+                  text = "Motoyasu Tojima",
+                },
+          {
+                  isTitle = false,
+                  text = "Nicola Pratt-Barlow",
+                },
+          {
+                  isTitle = false,
+                  text = "Shellie Dow",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Task Managers",
+                },
+          {
+                  isTitle = false,
+                  text = "Azusa Tajima",
+                },
+          {
+                  isTitle = false,
+                  text = "Shusaku Egami",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = true,
+                  text = "Producers",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroyuki Jinnai",
+                },
+          {
+                  isTitle = false,
+                  text = "Hitoshi Yamagami",
+                },
+          {
+                  isTitle = false,
+                  text = "Gakuji Nomoto",
+                },
+          {
+                  isTitle = false,
+                  text = "Hiroaki Tsuru",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Executive Director",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoshi Tajiri",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Executive Producers",
+                },
+          {
+                  isTitle = false,
+                  text = "Satoru Iwata",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+    {
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = true,
+                  text = "Executive Producers",
+                },
+          {
+                  isTitle = false,
+                  text = "Tsunekaz Ishihara",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+          {
+                  isTitle = false,
+                  text = "",
+                },
+        },
+  },
+  emeraldCreditsEnabled = true,
+}
+  end)()
+  p.gen3Starters = (function() return 
+{
+  {
+      level = 12,
+      map = "EM_ROUTE101",
+      matchSpecies = {
+        "TREECKO",
+      },
+      nickname = "E2E",
+      onlyFirst = true,
+      species = "MUDKIP",
+      starterSlot = 0,
+    },
+}
   end)()
   p.gen3TileAnimations = (function() return 
 {}
@@ -6663,7 +8497,122 @@ return (function()
 {}
   end)()
   p.pokemon = (function() return 
-{}
+{
+  TREECKO = {
+    _isNew = false,
+    abilities = {
+      "OVERGROW",
+    },
+    baseExp = 65,
+    baseStats = {
+      attack = 45,
+      defense = 35,
+      hp = 77,
+      specialAttack = 65,
+      specialDefense = 55,
+      speed = 70,
+    },
+    catchRate = 45,
+    dex = 252,
+    dexEntry = {
+      height = 5,
+      kind = "E2E KIND",
+      weight = 50,
+    },
+    eggCycles = 20,
+    eggGroups = { 1, 14 },
+    evolutions = {
+      {
+              level = 16,
+              method = "EVO_LEVEL",
+              species = "GROVYLE",
+            },
+    },
+    friendship = 70,
+    genderRatio = 31,
+    growthRate = "MEDIUM_SLOW",
+    id = "TREECKO",
+    index = 277,
+    learnset = {
+      {
+              level = 1,
+              move = "POUND",
+            },
+      {
+              level = 1,
+              move = "LEER",
+            },
+      {
+              level = 6,
+              move = "ABSORB",
+            },
+      {
+              level = 11,
+              move = "QUICK_ATTACK",
+            },
+      {
+              level = 16,
+              move = "PURSUIT",
+            },
+      {
+              level = 21,
+              move = "SCREECH",
+            },
+      {
+              level = 26,
+              move = "MEGA_DRAIN",
+            },
+      {
+              level = 31,
+              move = "AGILITY",
+            },
+      {
+              level = 36,
+              move = "SLAM",
+            },
+      {
+              level = 41,
+              move = "DETECT",
+            },
+      {
+              level = 46,
+              move = "GIGA_DRAIN",
+            },
+    },
+    name = "TREECKO",
+    tmhm = {
+      "FOCUS_PUNCH",
+      "TOXIC",
+      "BULLET_SEED",
+      "HIDDEN_POWER",
+      "SUNNY_DAY",
+      "PROTECT",
+      "GIGA_DRAIN",
+      "SAFEGUARD",
+      "FRUSTRATION",
+      "SOLARBEAM",
+      "IRON_TAIL",
+      "RETURN",
+      "DIG",
+      "BRICK_BREAK",
+      "DOUBLE_TEAM",
+      "ROCK_TOMB",
+      "AERIAL_ACE",
+      "FACADE",
+      "SECRET_POWER",
+      "REST",
+      "ATTRACT",
+      "CUT",
+      "STRENGTH",
+      "FLASH",
+      "ROCK_SMASH",
+    },
+    trueColor = true,
+    types = {
+      "GRASS",
+    },
+  },
+}
   end)()
   p.profile = (function() return 
 "content"
@@ -6690,7 +8639,17 @@ return (function()
 {}
   end)()
   p.text = (function() return 
-{}
+{
+  gText_Birch_Welcome = {
+    {
+          s = "E2E welcome",
+          t = "text",
+        },
+    {
+          t = "eos",
+        },
+  },
+}
   end)()
   p.text_pointers = (function() return 
 {}

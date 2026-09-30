@@ -1,4 +1,16 @@
 local M={}
+-- oakPrint looks its ROM line up by key; answer that one lookup with `line`.
+function M.printLine(print,scene,key,speed,line)
+  if not line then return print(scene,key,speed) end
+  local RomText=require("src.core.game3.rom_text");local ascii=RomText.ascii
+  RomText.ascii=function(_,ctx)
+    RomText.ascii=ascii;ctx=ctx or {}
+    return (line:gsub("{PLAYER}",function() return tostring(ctx.playerName or "") end)
+      :gsub("{RIVAL}",function() return tostring(ctx.rivalName or "") end))
+  end
+  local ok,err=pcall(print,scene,key,speed);RomText.ascii=ascii
+  if not ok then error(err,0) end
+end
 function M.configure(scene,settings,lines)
   settings=settings or {};scene._editorOakSettings=settings
   if settings.species then
@@ -12,7 +24,7 @@ function M.configure(scene,settings,lines)
   end
   if lines then
     local original=scene.oakPrint
-    scene.oakPrint=function(self,key,speed) return original(self,lines[key] or key,speed) end
+    scene.oakPrint=function(self,key,speed) return M.printLine(original,self,key,speed,lines[key]) end
   end
   local frame=scene.frame
   scene.frame=function(self,...)

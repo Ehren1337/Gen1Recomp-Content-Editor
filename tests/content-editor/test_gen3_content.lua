@@ -6,7 +6,7 @@ return function(data,root)
   S.project.gen3={pokemon={BULBASAUR={baseStats={hp=81}}}}
   A.prepare(S)
   assert(S.project.pokemon.BULBASAUR.baseStats.attack==data.pokemon.BULBASAUR.baseStats.attack,"Migration lost unedited stats")
-  S.trainerId="326";S.trainerSection="basics";S.g3EncounterId="FR_ROUTE_1";S.g3EncounterKind="land"
+  S.trainerId="326";S.trainerSection="basics";S.g3EncounterId="ROUTE_1";S.g3EncounterKind="land"
   S.pokemonId="BULBASAUR";S.itemId="POTION";S.moveId="TACKLE"
   local Kit=require("Kit")
   local original=Kit.textfield
@@ -15,7 +15,7 @@ return function(data,root)
     if id=="g3_price" then return "75" end
     if id=="mv_pow" then return "70" end
     if id=="g3_tr_name" then return "Test Rival" end
-    if id=="g3_enc_rate" then return "33" end
+    if id=="g3_enc_rateallland" then return "33" end
     if id=="pl_boot_money" then return "12345" end
     if id=="g3_rule_critMultiplier" then return "3" end
     if id=="br_eggs" then return "12" end
@@ -29,7 +29,7 @@ return function(data,root)
     require(name).draw(S,20,80,1320,740,app);Kit.endFrame()
   end
   Kit.textfield=original
-  S.gen3Id="EDITOR_TEST_STEPS";S.g3EventMode="scripts"
+  S.gen3Id="EDITOR_TEST_STEPS";S.g3EventMode="scripts";S["g3StoryAdvanced/EDITOR_TEST_STEPS"]=true;S["g3CommandRaw/event/EDITOR_TEST_STEPS"]=true
   S.project.gen3.map_scripts={[S.gen3Id]={{op="setvar",var=0x4000,value=5},{op="end"}}}
   S.project.gen3Modes={map_scripts={[S.gen3Id]="register"}}
   S.dirty=false
@@ -60,10 +60,10 @@ return function(data,root)
   S.project.moves.EDITOR_TACKLE=A.newRecord(S,"moves","EDITOR_TACKLE")
   S.project.pokemon.EDITOR_MON=A.newRecord(S,"pokemon","EDITOR_MON")
   assert(S.project.trainers["326"].name=="Test Rival")
-  assert(S.project.encounters.FR_ROUTE_1.land.rate==33)
+  assert(S.project.encounters.ROUTE_1.land.rate==33)
   local trainer=S.project.trainers["326"]
   trainer.party={{species="MEW",level=42,heldItem="POTION",moves={"TACKLE","0","0","0"}}}
-  S.project.encounters.FR_ROUTE_1.land.slots[1]={species="MEW",minLevel=7,maxLevel=9}
+  S.project.encounters.ROUTE_1.land.slots[1]={species="MEW",minLevel=7,maxLevel=9}
   local D=require("Gen3Dialog")
   local ir={{t="text",s="Before "},{t="player"},{t="ext",code=4,args={1}},{t="nl"},{t="rival"},{t="eos"}}
   local changed=D.encode(D.display(ir):gsub("Before","After"),ir)
@@ -120,7 +120,7 @@ return function(data,root)
   local trainers=G.catalog(fresh,"trainers");local encounters=G.catalog(fresh,"encounters")
   assert(trainers["326"].name=="Test Rival" and trainers["326"].party[1].species=="MEW")
   assert(trainers["326"].party[1].heldItem=="POTION")
-  assert(encounters.FR_ROUTE_1.land.rate==33 and encounters.FR_ROUTE_1.land.slots[1].maxLevel==9)
+  assert(encounters.ROUTE_1.land.rate==33 and encounters.ROUTE_1.land.slots[1].maxLevel==9)
   assert(G.catalog(fresh,"text").Text_BootedUpPC[3].code==4)
   local effects=require("src.core.game3.battle.effects")
   assert(effects.get("EXP_POISON_EFFECT")==effects.get("EXP_BURN_EFFECT"))

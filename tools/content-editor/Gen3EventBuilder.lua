@@ -88,7 +88,7 @@ function M.draw(S,x,y,w,h,App)
   end
   caption("2. Choose where this conversation happens")
   local maps=L.mergeIds(S.project.maps or {},S.data.maps or {});local labels={}
-  for _,id in ipairs(maps) do labels[id]=id:gsub("^FR_",""):gsub("_"," ") end
+  for _,id in ipairs(maps) do labels[id]=id:gsub("^FR_",""):gsub("^EM_",""):gsub("_"," ") end
   P.field(S,{x=x,y=y,w=w,h=29*s,ids=maps,labels=labels,current=d.map,title="CHOOSE MAP",onPick=function(v) d.map=v;d.npc=nil;d.created=nil end});y=y+40*s
   local map=(S.project.maps or {})[d.map] or (S.data.maps or {})[d.map]
   local ids,names={},{}

@@ -441,7 +441,7 @@ function BattleAnimPreview.draw(S, moveId, x, y, w, s)
       tostring(moveId), step, total, playing and "" or " · done")
   else
     info = gen2
-      and "Press PLAY · Gold AnimRunner + battle_anims.gfx"
+      and "Press PLAY · " .. Generation.label(S) .. " AnimRunner + battle_anims.gfx"
       or "Press PLAY · needs ROM battle_anims + tilesheets"
   end
   Kit.text("micro", Kit.ellipsize("micro", info, w), x, y + vh + 12 * s, PAL.muted)

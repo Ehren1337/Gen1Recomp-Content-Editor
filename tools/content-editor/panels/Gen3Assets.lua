@@ -44,7 +44,7 @@ function Panel.draw(S,x,y,w,h,App,filter)
       end)
     end})
   local path=S.g3AssetId
-  if not path or not catalog[path] then Kit.caption(fx,y,"Import FireRed or LeafGreen to extract UI and animation assets");return end
+  if not path or not catalog[path] then Kit.caption(fx,y,"Import FireRed, LeafGreen or Emerald to extract UI and animation assets");return end
   local override=(S.project.gen3Assets or {})[path]
   if S._g3AssetKey~=path or S._g3AssetOverride~=override then
     S._g3AssetKey,S._g3AssetOverride=path,override;S._g3AssetImage=nil;S.g3AssetFrame=0;S.g3AssetPlaying=false

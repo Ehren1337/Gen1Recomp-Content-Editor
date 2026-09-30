@@ -107,7 +107,7 @@ function M.template(S,parent)
   elseif parent=="DEOXYS" then
     family.forms[1].name="Attack"
     local original=copy(S.project.pokemon[parent] or S.data.pokemon[parent]);S.project.pokemon[parent]=original
-    writePictures(S,original,410,1,0)
+    writePictures(S,original,410,0,0);family.forms[1].needsArtwork=true
     local _,normal=M.add(S,parent,"Normal");writePictures(S,normal,410,0,0)
     for _,name in ipairs({"Defense","Speed"}) do local row=M.add(S,parent,name);row.needsArtwork=true end
   end
@@ -122,20 +122,20 @@ function M.draw(S,mon,x,y,w,App)
       local ids,labels={},{}
       for i=1,28 do ids[i]=i;labels[i]=i<=26 and string.char(64+i) or i==27 and "!" or "?" end
       if parent=="CASTFORM" then ids={1,2,3,4};labels={"Normal","Sunny","Rainy","Snowy"}
-      elseif parent=="DEOXYS" then ids={1,2,3,4};labels={"Attack (FireRed)","Normal","Defense","Speed"} end
+      elseif parent=="DEOXYS" then ids={1,2,3,4};labels={"Attack","Normal","Defense","Speed"} end
       S.g3NativeForms=S.g3NativeForms or {}
       local nativeSelection=parent=="UNOWN" and (S.g3NativeUnown or 1) or (S.g3NativeForms[parent] or 1)
       C.field(S,{x=x,y=y,w=w,h=30*s,current=nativeSelection,ids=ids,labels=labels,title="Pokemon form",onPick=function(id) if parent=="UNOWN" then S.g3NativeUnown=id end;S.g3NativeForms[parent]=id end});y=y+40*s
-      K.caption(x,y,parent=="UNOWN" and "All 28 original forms are available." or parent=="CASTFORM" and "Forecast changes the form with the weather." or "FireRed contains Normal and Attack artwork. Defense and Speed need imported sprites.");y=y+30*s
+      K.caption(x,y,parent=="UNOWN" and "All 28 original forms are available." or parent=="CASTFORM" and "Forecast changes the form with the weather." or "The cache has Normal artwork only. Attack, Defense and Speed need imported sprites.");y=y+30*s
       S._nativeUnownPictures=S._nativeUnownPictures or {}
       local selected=nativeSelection
       S._nativeFormPictures=S._nativeFormPictures or {}
       local cacheKey=parent..selected
-      local available=parent~="DEOXYS" or selected<=2
+      local available=parent~="DEOXYS" or selected==2
       if available and not S._nativeFormPictures[cacheKey] then
         local ok,pictures=pcall(function()
           local species=parent=="UNOWN" and (selected==1 and 201 or 411+selected) or parent=="CASTFORM" and 385 or 410
-          local frame=parent=="CASTFORM" and selected-1 or parent=="DEOXYS" and (selected==1 and 1 or 0) or 0
+          local frame=parent=="CASTFORM" and selected-1 or 0
           local palette=parent=="CASTFORM" and frame or 0
           local pictures={}
           for i=1,4 do pictures[i]=love.graphics.newImage(assert(require("Gen3Rom").formPicture(S,species,i%2==0,frame,palette,i>2))) end
@@ -143,7 +143,7 @@ function M.draw(S,mon,x,y,w,App)
         end)
         if ok then S._nativeFormPictures[cacheKey]=pictures;if parent=="UNOWN" then S._nativeUnownPictures[selected]=pictures end else S.status=tostring(pictures) end
       end
-      if not available then K.caption(x,y,"Artwork is not present in this ROM. Use Edit these forms to import it.") end
+      if not available then K.caption(x,y,"This artwork is not in the cache. Use Edit these forms to import it.") end
       for i,img in ipairs(S._nativeFormPictures[cacheKey] or {}) do K.caption(x+(i-1)*160*s,y,({"Front","Back","Shiny front","Shiny back"})[i]);img:setFilter("nearest","nearest");love.graphics.setColor(1,1,1,1);love.graphics.draw(img,x+(i-1)*160*s,y+24*s,0,2*s,2*s) end
       y=y+165*s
       K.caption(x,y,"Party icon")

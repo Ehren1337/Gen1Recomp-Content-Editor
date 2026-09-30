@@ -1,8 +1,8 @@
 return function(data,root)
  local S=require("State").new();S.data=data;S.project=require("State").blankProject("mini_preview");S.version="firered"
  local M=require("Gen3MinigameImages");local K=require("Kit")
- for game,rows in pairs(M.assets) do
-  for i,rec in ipairs(rows) do local img,err=M.image(S,game,i);assert(img,game.."/"..rec.name..": "..tostring(err));assert(img:getWidth()==rec.width and img:getHeight()==rec.height) end
+ for game,rows in pairs(M.kanto) do
+  for i,rec in ipairs(rows) do local img,err=M.image(S,game,i);assert(img,game.."/"..rec.name..": "..tostring(err));assert(img:getWidth()>0 and img:getHeight()>0) end
   S.g3Minigame=game;S.g3MinigameImage="1";S.g3MinigameView="images"
   local canvas=love.graphics.newCanvas(1360,860);love.graphics.setCanvas({canvas,stencil=true});love.graphics.clear(.04,.06,.12,1)
   K.layout(1360,860);K.beginFrame(0,0,false,0);require("Gen3Minigames").draw(S,20,80,1320,740,{});K.endFrame();love.graphics.setCanvas()

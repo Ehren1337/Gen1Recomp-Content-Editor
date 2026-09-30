@@ -4317,7 +4317,7 @@ local function drawMapPreview(S, mapDef, x, y, w, h, App)
   local swH = 12 * s
   local swX, swY = vx + 6 * s, vy + vh - 34 * s
   if Generation.isGen3(S) then
-    Kit.text("micro", "Gen 3 native colors", swX, swY, PAL.faint)
+    Kit.text("micro", Generation.label(S) .. " colors", swX, swY, PAL.faint)
   elseif Generation.isGen2(S) then
     local bgSet, tod = Preview.gen2MapBgSet(S, mapDef)
     local cell = 8 * s

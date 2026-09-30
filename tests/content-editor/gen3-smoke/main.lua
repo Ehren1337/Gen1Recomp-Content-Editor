@@ -102,10 +102,10 @@ function love.load()
   local png=canvas:newImageData():encode("png")
   local f=assert(io.open(root.."/tests/content-editor/gen3-smoke/panels.png","wb")); f:write(png:getString()); f:close()
   local nativePath=root.."/tests/content-editor/gen3-smoke/native-project"
-  S.mapId="FR_ROUTE10";S.builderMapId=S.mapId;S.mapEditMode="map"
-  S._vanillaMapBackup={FR_ROUTE10=real.maps.FR_ROUTE10}
+  S.mapId="FR_ROUTE_10";S.builderMapId=S.mapId;S.mapEditMode="map"
+  S._vanillaMapBackup={FR_ROUTE_10=real.maps.FR_ROUTE_10}
   local Maps=require("Maps")
-  assert(Maps.resolveMap(S,S.mapId).width*2==real.maps.FR_ROUTE10.width)
+  assert(Maps.resolveMap(S,S.mapId).width*2==real.maps.FR_ROUTE_10.width)
   local Preview=require("Preview")
   local shader=Preview.pushPaletteShader
   Preview.pushPaletteShader=function() error("FireRed preview attempted a four-color palette shader") end

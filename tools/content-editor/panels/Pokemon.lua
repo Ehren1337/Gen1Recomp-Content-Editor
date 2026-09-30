@@ -1802,7 +1802,7 @@ local function drawDex(S, mon, mutate, App, formX, fy, formW, labelW, fh, s)
   end
 
   if Generation.isGen2(S) then
-    Kit.text("micro", "Gold dex lives in gen2Pokedex.entries (not on the species record).",
+    Kit.text("micro", Generation.label(S) .. " dex lives in gen2Pokedex.entries (not on the species record).",
       formX, fy, PAL.muted)
     fy = fy + 20 * s
     local id = mon.id

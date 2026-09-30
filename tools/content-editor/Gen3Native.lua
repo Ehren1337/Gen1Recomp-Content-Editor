@@ -2,8 +2,8 @@ local M={}
 function M.used(p)
   if next(p.gen3BattlePositions or {}) then return true end
   if next(p.pokemon or {}) or next((p.gen3 or {}).pokemon or {}) then return true end
-  if p.gen3Screens or p.gen3Roamers or p.gen3Fame then return true end
-  return next(p.gen3Forms or {}) or p.gen3Fly or next(p.gen3OakScene or {}) or next(p.gen3Oak or {}) or p.gen3Breeding or next(p.gen3Behaviors or {}) or next(p.gen3TrainerMusic or {}) or next(p.items or {}) or next(p.gen3Help or {}) or next(p.gen3Trades or {}) or next(p.gen3Effects or {}) or next(p.gen3BattleRules or {}) or require("Gen3Workbench").used(p) or next(p.gen3Animations or {}) or next(p.gen3Assets or {}) or next(p.gen3Audio or {})
+  if p.gen3Screens or p.gen3Roamers or p.gen3Fame or next(p.gen3DexText or {}) then return true end
+  return next(p.gen3Forms or {}) or p.gen3Fly or next(p.gen3OakScene or {}) or next(p.gen3Oak or {}) or p.gen3BirchScene or p.gen3Breeding or next(p.gen3Behaviors or {}) or next(p.gen3TrainerMusic or {}) or next(p.items or {}) or next(p.gen3Help or {}) or next(p.gen3Trades or {}) or next(p.gen3Effects or {}) or next(p.gen3BattleRules or {}) or require("Gen3Workbench").used(p) or next(p.gen3Animations or {}) or next(p.gen3Assets or {}) or next(p.gen3Audio or {})
 end
 function M.emit(p,encode,out)
   require("Gen3TeachyTv").emit(p,encode,out)
@@ -21,6 +21,7 @@ function M.emit(p,encode,out)
   require("Gen3Forms").emit(p,encode,out)
   require("Gen3Fly").emit(p,encode,out)
   require("Gen3Oak").emit(p,encode,out)
+  require("Gen3Birch").emit(p,encode,out)
   require("Gen3Workbench").emit(p,encode,out)
   require("Gen3BattleRules").emit(p,encode,out)
   require("Gen3Effects").emit(p,encode,out)
@@ -54,7 +55,15 @@ function M.emit(p,encode,out)
       else assert(type(value)=="number" and value%1==0 and value>=0 and value<=65535,"Audio remaps need an integer ID") end
     end
   end
-  out[#out+1]="  local native = "..encode({items=p.items or {},help=p.gen3Help or {},animations=p.gen3Animations or {},assets=p.gen3Assets or {},audio=p.gen3Audio or {}})
+  local dex={}
+  for _,rec in pairs((p.gen3 or {}).pokemon or {}) do
+    if rec.index and rec.dexEntry then dex[rec.index]={category=rec.dexEntry.kind,height=rec.dexEntry.height,weight=rec.dexEntry.weight} end
+  end
+  for index,text in pairs(p.gen3DexText or {}) do
+    assert(type(index)=="number" and type(text)=="string","Invalid Pokédex description")
+    dex[index]=dex[index] or {};dex[index].description=text;dex[index].description2=text
+  end
+  out[#out+1]="  local native = "..encode({items=p.items or {},help=p.gen3Help or {},animations=p.gen3Animations or {},assets=p.gen3Assets or {},audio=p.gen3Audio or {},dex=dex})
   out[#out+1]=M.source
 end
 M.source=[=[
@@ -147,8 +156,28 @@ M.source=[=[
       return proceed(obj,neighbor)
     end)
   end
+  -- Emerald screens load PNGs through scene_kit straight from disk, not the cache.
+  if require("src.core.GameVersion").get()=="emerald" and next(native.assets) then
+    local SceneKit=require("src.ui.game3.rse.scene_kit")
+    if not SceneKit._editorImageBridge then
+      SceneKit._editorImageBridge=true
+      local image=SceneKit.image
+      SceneKit.image=function(path) return Runtime.call("editor.gen3.rse.image",image,path) end
+    end
+    local images={}
+    mod.hooks:wrap("editor.gen3.rse.image",function(proceed,path)
+      local asset=path and native.assets[path]
+      if not asset then return proceed(path) end
+      if images[path]==nil then
+        local ok,img=pcall(function() return love.graphics.newImage(love.filesystem.newFileData(assert(mod:read(asset.file)),"asset.png")) end)
+        if ok then img:setFilter("nearest","nearest") end
+        images[path]=ok and img or false
+      end
+      return images[path] or proceed(path)
+    end)
+  end
   mod.hooks:wrap("editor.gen3.cache",function(proceed,path)
-    local key=path:gsub("^firered/",""):gsub("^leafgreen/","")
+    local key=path:gsub("^firered/",""):gsub("^leafgreen/",""):gsub("^emerald/","")
     if not key:match("^data/generated/gba/") then key="data/generated/gba/"..key end
     local asset=native.assets[key]
     if asset then
@@ -204,6 +233,17 @@ M.source=[=[
       end
       return memo[key]
     end
+    if key=="data/generated/gba/pokemon/pokedex/entries.lua" and next(native.dex) and bytes then
+      if not memo[key] then
+        local pack=assert(loadstring(bytes))()
+        for index,row in pairs(native.dex) do
+          if not pack[index] then pack[index]={};for k,v in pairs(pack[0] or {}) do pack[index][k]=v end end
+          for k,v in pairs(row) do pack[index][k]=v end
+        end
+        memo[key]="return "..encode(pack)
+      end
+      return memo[key]
+    end
     if key=="data/generated/gba/help/pack.lua" and next(native.help) and bytes then
       if not memo[key] then
         local pack=assert(loadstring(bytes))()
@@ -224,6 +264,8 @@ M.source=[=[
     if next(native.items) or next(native.help) or next(native.assets) then
       invalidateNativeImages()
     end
+    local PokedexData=package.loaded["src.core.game3.pokedex_data"]
+    if PokedexData and next(native.dex) then PokedexData._entries=nil end
     for map,song in pairs(native.audio.mapSongs or {}) do
       if ctx.game.data.maps[map] then ctx.game.data.maps[map].music=song end
     end

@@ -2,7 +2,7 @@
 return {
   categories = {
     { id = "start", label = "Getting started" },
-    { id = "gen3", label = "Gen 3 features" },
+    { id = "gen3", label = "Game features" },
     { id = "maps", label = "Maps and events" },
     { id = "data", label = "Pokemon and data" },
   },
@@ -13,7 +13,7 @@ return {
       summary = "Make a mod, point the editor at your game, save it and play it.",
       steps = {
         { "PROJECT tab, 1 PROJECT: type a name in New mod id and press Create. Your mods show as buttons there too -- click one to open it.", go = { tab = "project" } },
-        { "2 TARGET GAME: pick the game the mod is for (FireRed, LeafGreen or Emerald for Gen 3).", go = { tab = "project" } },
+        { "2 TARGET GAME: pick the one game the mod is for.", go = { tab = "project" } },
         { "3 GAME DATA: Link Recomp to your Gen1Recomp folder (Playtest needs it), or Import ROM so the editor can read the game. Nothing from the ROM is copied into your mod.", go = { tab = "project" } },
         { "Change something in any tab, then press Save at the top right (Ctrl+S). Save writes your mod into mods/<your mod id>." },
         { "4 CHECK & RUN: Validate mod finds mistakes, Scan mod checks for ripped game files, and Playtest mod starts the game with your mod.", go = { tab = "project" } },

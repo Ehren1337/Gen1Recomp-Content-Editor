@@ -16,7 +16,7 @@ function M.draw(S,x,y,w,h,App)
   local ids=L.sortedKeys(records)
   S.g3TradeId=S.g3TradeId or ids[1]
   local fx,fw=L.drawList(S,App,x,y,w,h,"SCRIPTED TRADES",ids,{selKey="g3TradeId",queryKey="g3TradeQuery",offsetKey="g3TradeOffset",
-    label=function(id) local r=records[id];return r and (r.give.." → "..r.get) or id end,
+    label=function(id) local r=records[id];return r and (r.give.." -> "..r.get) or id end,
     footerLabel="New trade",onFooter=function()
       local n=1;while records["TRADE_"..n] do n=n+1 end
       local id="TRADE_"..n

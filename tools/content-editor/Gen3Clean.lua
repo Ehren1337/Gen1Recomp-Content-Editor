@@ -48,12 +48,13 @@ function M.apply(S)
   return source.id
 end
 
---- FireRed's own maps, for Import template map: { ids }, { [id] = label }.
+--- The game's own maps, for Import template map: { ids }, { [id] = label }.
 function M.templateMaps(S)
   local ids, labels = {}, {}
   local Labels = require("Gen3Labels")
+  local prefix = "^" .. require("Generation").gen3MapPrefix(S)
   for id in pairs(((S.data or {})._editorMaps) or ((S.data or {}).maps) or {}) do
-    if type(id) == "string" and id:match("^FR_") and not ((S.project or {}).maps or {})[id] then
+    if type(id) == "string" and id:match(prefix) and not ((S.project or {}).maps or {})[id] then
       ids[#ids + 1] = id
       labels[id] = Labels.map(id) .. "  (" .. id .. ")"
     end
@@ -71,7 +72,7 @@ function M.importTemplate(S, baseId)
   local copy = require("src.mods.Merge").deepCopy
   local base, err = W.source(S, baseId)
   if not base then return nil, err end
-  local wanted = baseId:gsub("^FR_", "") .. "_TEMPLATE"
+  local wanted = baseId:gsub("^" .. require("Generation").gen3MapPrefix(S), "") .. "_TEMPLATE"
   local source, map = L.createMap(S, wanted, base.cellWidth, base.cellHeight, base.baseTileset)
   if not source then return nil, map end
   local id = source.id

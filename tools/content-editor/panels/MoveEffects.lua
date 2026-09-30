@@ -431,7 +431,7 @@ function MoveEffects.draw(S, x, y, w, h, App)
     else
       Kit.text("micro",
         gen2
-          and "Vanilla Gold effect (read-only). Override in the mod to edit."
+          and ("Vanilla " .. Generation.label(S) .. " effect (read-only). Override in the mod to edit.")
           or "Vanilla engine effect (read-only). Create a mod effect, or clone to edit.",
         viewX, fy, PAL.muted)
       fy = fy + 20 * s

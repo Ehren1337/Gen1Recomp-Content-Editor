@@ -1,0 +1,127 @@
+tabs: guides project manifest cart code patches maps encounters dialog shops trades trainers ai player ui items pokemon breeding moves anims effects types rules audio gfx events
+FLAG guides
+       3 GAME DATA: Link Recomp to your Gen1Recomp folder (Playtest needs it), or Import ROM so the editor can read the game. Nothing from the ROM is copied into your 
+FLAG project
+       Blue
+       Crystal
+       Emerald
+       FireRed
+       Gold
+       LeafGreen
+       Local cache (data/generated) — Remembered: C:\Users\amand\OneDrive\Documents\GitHub\Gen1Recomp-Content-Editor\runtime\gen1recomp
+       Red
+       Validate finds content errors. Scan checks assets for ROM dumps and sprite rips. Playtest launches Linked Recomp.
+       Yellow
+OK   manifest
+OK   cart
+OK   code
+OK   patches
+OK   maps
+OK   encounters
+OK   dialog
+OK   shops
+OK   trades
+OK   trainers
+OK   ai
+OK   player
+FLAG ui
+       status: Previewing UI · title · Music_TitleScreen
+OK   items
+OK   pokemon
+OK   breeding
+OK   moves
+OK   anims
+OK   effects
+OK   types
+OK   rules
+OK   audio
+OK   gfx
+OK   events
+OK   code_codeSourceKind-mod
+OK   code_codeSourceKind-repo
+OK   maps_mapViewMode-editor
+OK   maps_mapViewMode-world
+OK   maps_mapEditMode-map_mapViewMode-editor
+OK   maps_mapEditMode-events_mapViewMode-editor
+OK   maps_builderPane-details_mapEditMode-map_mapViewMode-editor
+OK   maps_builderPane-layers_mapEditMode-map_mapViewMode-editor
+OK   maps_builderPane-tileset_mapEditMode-map_mapViewMode-editor
+OK   maps_builderPane-stamps_mapEditMode-map_mapViewMode-editor
+OK   maps_builderPane-warps_mapEditMode-map_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-basics_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-objects_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-warps_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-signs_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-coordEvents_mapViewMode-editor
+OK   maps_mapEditMode-events_mapSection-encounters_mapViewMode-editor
+OK   pokemon_pokemonSection-basics
+OK   pokemon_pokemonSection-learnset
+OK   pokemon_pokemonSection-evolutions
+OK   pokemon_pokemonSection-trees
+OK   pokemon_pokemonSection-tmhm
+OK   pokemon_pokemonSection-dex
+OK   trainers_trainerSection-basics
+OK   trainers_trainerSection-parties
+OK   trainers_trainerSection-place
+OK   events_eventsMode-scripts
+OK   events_eventsMode-hooks
+OK   events_eventsMode-starters
+OK   events_eventsMode-phone
+OK   events_eventsMode-saveflags
+OK   events_eventsMode-gifts
+OK   events_eventsMode-decorations
+OK   events_eventsMode-trainerhouse
+OK   encounters_encountersMode-wild
+OK   encounters_encountersMode-special
+OK   player_playerMode-start
+OK   player_playerMode-advanced
+OK   player_playerMode-overworld
+OK   player_playerMode-pics
+OK   ui_uiMode-title
+FLAG ui_uiMode-intro
+       status: Previewing UI · intro · Music_GoldSilverOpening
+FLAG ui_uiMode-oak
+       status: Previewing UI · oak · Music_Route30
+FLAG ui_uiMode-credits
+       status: Previewing UI · credits · Music_Credits
+FLAG ui_uiMode-minigames
+       status: Previewing UI · minigames · Music_GameCorner
+FLAG ui_uiMode-boot
+       Gen2CopyrightSplash
+       Gen2CrystalIntro
+       Gen2CrystalSplash
+       Gen2GameFreakPresents
+       Gen2GoldSilverIntro
+       Gen2MainMenu
+       Gen2OakSpeech
+       Gen2TitleState
+OK   ui_uiMode-menus
+OK   ui_uiMode-fonts
+FLAG ui_uiMode-strings
+       But, it failed!
+OK   ui_uiMode-townmap
+OK   ui_uiMode-badges
+FLAG ui_uiMode-scripts
+         Crystal intro
+         Yellow intro
+       -- Every Gold/Silver difference arrives as a title.lua key, defaulted to Gold.
+       -- Gen 2 title: colored TitleScreenTilemap BG, scrolling clouds, Ho-Oh
+OK   anims_battleAnimMode-moves
+OK   anims_battleAnimMode-scripts
+OK   anims_battleAnimMode-ids
+OK   anims_battleAnimMode-objects
+OK   anims_battleAnimMode-gfx
+OK   rules_rulesMode-statuses
+OK   rules_rulesMode-scales
+OK   rules_rulesMode-apricorns
+OK   rules_rulesMode-radio
+OK   rules_rulesMode-lua
+OK   audio_audioMode-music
+OK   audio_audioMode-cries
+OK   audio_audioMode-sfx
+OK   audio_audioMode-map_songs
+OK   gfx_gfxMode-palettes
+OK   gfx_gfxMode-sprites
+FLAG gfx_gfxMode-tilesets
+       Click a metatile to set all 4 COLL bytes. Green=land  Red=wall  Magenta=grass  Blue=water  Yellow=door  Orange=warp
+PASS: 95 views checked, 0 failed, 11 flagged

@@ -509,7 +509,7 @@ function Cart.draw(S, x, y, w, h, App)
   end)
   row("base", function(fx, fy, fw, fh_)
     require("ChoicePicker").field(S,{x=fx,y=fy,w=fw,h=fh_,current=d.base or S.version or "red",ids=BASES,
-      labels={red="Red",blue="Blue",yellow="Yellow",gold="Gold",silver="Silver",crystal="Crystal",firered="FireRed",leafgreen="LeafGreen"},
+      labels={red="Red",blue="Blue",yellow="Yellow",gold="Gold",silver="Silver",crystal="Crystal",firered="FireRed",leafgreen="LeafGreen",emerald="Emerald"},
       title="Game for this cartridge",tooltip="Choose the original game this cartridge uses.",
       onPick=function(id) d.base=id;markDirty(S) end})
   end)

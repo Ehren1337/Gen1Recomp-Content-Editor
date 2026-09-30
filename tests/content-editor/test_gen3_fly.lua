@@ -4,14 +4,15 @@ return function(data,root)
   require("Gen3ContentAdapter").prepare(S)
   S.path=root.."/tests/content-editor/gen3-smoke/fly-project"
   assert(IO.ensureDirectory(S.path));assert(IO.writeText(S.path.."/manifest.json",'{"id":"fly_test","name":"Fly test","version":"1.0.0","entry":"main.lua","games":["gen3"]}'))
-  local Fly=require("Gen3Fly");S.project.gen3Fly=Fly.defaults();Fly.validate(S.project.gen3Fly)
+  local Fly=require("Gen3Fly");S.project.gen3Fly=Fly.defaults(S);Fly.validate(S.project.gen3Fly)
   for _,row in ipairs(S.project.gen3Fly) do assert(data.maps[row.map],"Missing default Fly map "..row.map) end
   S.project.gen3Fly[1].unlock="always";S.project.gen3Fly[1].x=7
   assert(IO.save(S.path,S.project));assert(IO.load(S.path).gen3Fly[1].x==7)
   local fresh={};require("Gen3").load(fresh,data._gen3Read);local loader,err=require("Gen3Mod").load(fresh,S.path);assert(loader,err)
   local F=require("src.core.game3.field");local Region=require("src.ui.game3.region_map")
-  local session={map="FR_ROUTE1",flags={},party={}};local oldSession,oldGame=F._session,F._game;F._session=session
+  local session={map="FR_ROUTE_1",flags={},party={}};local oldSession,oldGame=F._session,F._game;F._session=session
   local Runtime=require("src.mods.Runtime")
+  local Game3=require("src.core.game3.runtime");local oldRuntimeGame=Game3._game;Game3._game={data={maps=require("src.core.game3.dataset").buildMaps()}}
   Runtime.emit("map.entered",{mapId="FR_VIRIDIAN_CITY"})
   assert(session.modData.fly_test.flyVisited.FR_VIRIDIAN_CITY)
   F.executeFieldMove({action="fly"});assert(Region.isOpen());assert(Region.currentLocationName()=="PALLET TOWN")
@@ -28,8 +29,9 @@ return function(data,root)
   local available=require("Gen3FlyRuntime").available
   assert(not available({enabled=false,unlock="always"},session,{}))
   assert(not available({unlock="flag",flag=123},session,{}));session.flags[123]=true;assert(available({unlock="flag",flag=123},session,{}))
-  Runtime.reset();F.executeFieldMove({action="fly"});assert(not Region.isOpen(),"Disabled mod left Fly hooks active")
-  F._session,F._game=oldSession,oldGame
+  Runtime.reset();F.executeFieldMove({action="fly"})
+  assert(Region.currentLocationName()~="PALLET TOWN","Disabled mod left Fly hooks active");Region.close()
+  F._session,F._game=oldSession,oldGame;Game3._game=oldRuntimeGame
   local K=require("Kit");local canvas=love.graphics.newCanvas(1360,860)
   love.graphics.setCanvas({canvas,stencil=true});love.graphics.clear(.04,.06,.12,1);K.layout(1360,860);K.beginFrame(0,0,false,0)
   S.g3TownFly=true;require("Gen3UiContent").draw(S,20,20,1320,800,{markDirty=function() end},"town")

@@ -291,8 +291,8 @@ function ModIO.create(id, name, version)
     gamesLit[i] = string.format("%q", g)
   end
   local gamesJson = "[" .. table.concat(gamesLit, ", ") .. "]"
-  local gen2compat = (Generation.coversGen2(games) or Generation.isGen2(target))
-    and "true" or "false"
+  -- gen2compat=true would add every Gen 2 game to a one-game mod.
+  local gen2compat = "false"
   local manifest = string.format([[{
   "id": "%s",
   "name": "%s",
@@ -564,9 +564,8 @@ function ModIO.save(modDir, project, version)
     end
   end
 
-  -- Keep the generated display name aligned with the project. Compatibility
-  -- is user-authored manifest metadata: selecting a ROM for editing or
-  -- playtesting must not narrow a cross-generation mod's declared support.
+  -- Keep the generated display name aligned with the project. A project
+  -- targets exactly one game; gen2compat=true would add every Gen 2 game.
   local manifestPath = join(modDir, "manifest.json")
   if ModIO.exists(manifestPath) then
     local mh = io.open(manifestPath, "rb")
@@ -576,6 +575,10 @@ function ModIO.save(modDir, project, version)
       local manifest, decodeErr = Json.decode(text)
       if not manifest then return false, decodeErr end
       if project.name then manifest.name = project.name end
+      if require("src.core.GameVersion").VERSIONS[project.game] then
+        manifest.games = { project.game }
+        manifest.gen2compat = false
+      end
       if gen3Wrapper then manifest.entry = "editor_entry.lua" end
       if require("Generation").isGen3({version=project.game}) and
           (next(project.gen3Borders or {}) or next(project.gen3Terrain or {}) or next((project.gen3 or {}).maps or {}) or next(project.gen3MapLayouts or {}) or require("Gen3Native").used(project) or require("Gen3Void").used(project)) then

@@ -27,9 +27,12 @@ local function drawList(S, data, x, y, lw, h, guide)
   local first, view = Pane.begin(S, "guideListScroll", x + 8 * s, y + 40 * s, lw - 16 * s, h - 48 * s)
   local ly = first
   for _, cat in ipairs(data.categories) do
-    Kit.text("micro", cat.label:upper(), view.x + 6 * s, ly + 6 * s, PAL.caption or PAL.muted)
-    ly = ly + 28 * s
-    for _, g in ipairs(Guides.byCategory(cat.id, data.guides)) do
+    local list = Guides.byCategory(cat.id, data.guides)
+    if #list > 0 then
+      Kit.text("micro", cat.label:upper(), view.x + 6 * s, ly + 6 * s, PAL.caption or PAL.muted)
+      ly = ly + 28 * s
+    end
+    for _, g in ipairs(list) do
       if Kit.chip(view.x, ly, view.contentW, 28 * s, g.title ~= "" and g.title or "(untitled)", g == guide,
           PAL.green, PAL.steel, g.summary) then
         S.guideId = g.id
@@ -44,7 +47,7 @@ end
 
 -- Reading a guide -----------------------------------------------------------------
 
-local function drawGuide(S, App, guide, px, pw, y, h, gen3)
+local function drawGuide(S, App, guide, px, pw, y, h)
   local s = Kit.scale
   local G = love.graphics
   local f = Kit.fonts and Kit.fonts.small
@@ -55,20 +58,14 @@ local function drawGuide(S, App, guide, px, pw, y, h, gen3)
   if f then G.setFont(f) end
   G.printf(guide.summary or "", px, ty, pw, "left")
   ty = ty + wrapped(f, guide.summary or "", pw) * lineH + 6 * s
-  if guide.gen3 then
-    Kit.text("micro", gen3 and "FireRed / LeafGreen" or "FireRed / LeafGreen mods only -- open or make a Gen 3 mod to use this",
-      px, ty, gen3 and PAL.faint or PAL.yellow)
-    ty = ty + 24 * s
-  end
   ty = ty + 6 * s
   Pane.track(S, "guideStepScroll", guide.id)
   local firstS, sv = Pane.begin(S, "guideStepScroll", px, ty, pw + 12 * s, y + h - ty - 12 * s)
   local sy = firstS
   local btnW = 150 * s
-  local canGo = not guide.gen3 or gen3
   for i, step in ipairs(guide.steps or {}) do
     local text = step[1] or ""
-    local hasGo = step.go and step.go.tab and canGo
+    local hasGo = step.go and step.go.tab
     local textW = sv.contentW - 44 * s - (hasGo and (btnW + 16 * s) or 0)
     local n = wrapped(f, text, textW)
     local rowH = math.max(n * lineH, 30 * s)
@@ -95,6 +92,11 @@ function M.draw(S, x, y, w, h, App)
   local s = Kit.scale
   local gen3 = require("Generation").isGen3(S)
   local data = Guides.data()
+  if not gen3 then
+    local guides = {}
+    for _, g in ipairs(data.guides) do if not g.gen3 then guides[#guides + 1] = g end end
+    data.guides = guides
+  end
   local guide = Guides.find(S.guideId, data.guides) or data.guides[1]
   S.guideId = guide and guide.id or nil
 
@@ -108,7 +110,7 @@ function M.draw(S, x, y, w, h, App)
     Kit.text("small", "No guides.", px, y + 20 * s, PAL.muted)
     return
   end
-  drawGuide(S, App, guide, px, pw, y, h, gen3)
+  drawGuide(S, App, guide, px, pw, y, h)
 end
 
 return M

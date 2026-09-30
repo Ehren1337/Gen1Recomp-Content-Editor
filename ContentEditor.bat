@@ -3,6 +3,13 @@ title Gen1Recomp Content Editor
 cd /d "%~dp0"
 if exist "love\portable.txt" set "POKEPORT_IDENTITY=gen1recomp-content-editor-portable"
 set "EDITOR_SOURCE=%CD%"
+if exist ".gitmodules" if not exist "runtime\gen1recomp\src\core\GameVersion.lua" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fetch_runtime.ps1"
+  if errorlevel 1 (
+    echo Could not download the Gen1Recomp runtime. You can still link a Gen1Recomp folder in the editor.
+    pause
+  )
+)
 set "NEED_PREP="
 if not exist "main.lua" (
   set "NEED_PREP=1"

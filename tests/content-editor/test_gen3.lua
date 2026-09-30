@@ -10,7 +10,7 @@ local Version = require("src.core.GameVersion")
 assert(Generation.num({version="firered"}) == 3)
 assert(not Generation.isGen2({version="firered",data={trainers={classes={}}}}))
 assert(Generation.manifestGames({version="firered"})[1] == "firered")
-assert(Generation.manifestGames({version="red"})[1] == "all")
+assert(Generation.manifestGames({version="red"})[1] == "red")
 local fixtures = {
   maps = {FR_TEST={id="FR_TEST",width=10,height=10}},
   ["gba/pokemon/names"] = {[1]="BULBASAUR"},

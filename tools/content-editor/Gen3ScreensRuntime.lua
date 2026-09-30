@@ -94,6 +94,15 @@ function M.install(mod,config)
   end
   return proceed(...)
  end)
+ if config.emeraldCredits then
+  local Machine=require("src.ui.game3.rse.gba_machine");local rseKey="editor.gen3.screens.emerald_credits"
+  bridge(Machine,"manifest",rseKey)
+  mod.hooks:wrap(rseKey,function(proceed,machine,path)
+   local m=proceed(machine,path)
+   if path=="data/generated/gba/credits_rse/manifest.lua" then m.pages=config.emeraldCredits;m.pageCount=#config.emeraldCredits end
+   return m
+  end)
+ end
  return view
 end
 return M

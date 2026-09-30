@@ -264,7 +264,7 @@ function AiClasses.draw(S, x, y, w, h, App)
 
   if gen2 then
     Kit.text("micro",
-      "Gold: TRNATTR_AI_MOVE_WEIGHTS bits enable these layers. Class bits → Trainers tab.",
+      Generation.label(S) .. ": TRNATTR_AI_MOVE_WEIGHTS bits enable these layers. Class bits → Trainers tab.",
       viewX, fy, PAL.faint)
     fy = fy + 18 * s
 

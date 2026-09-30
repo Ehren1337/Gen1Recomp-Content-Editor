@@ -6,7 +6,7 @@ end
 function M.map(id)
   local g,n=tostring(id):match("^(%d+):(%d+)$")
   if g then id=require("src.import.gba.map_catalog").mapIdFor(g,n) or id end
-  return tostring(id):gsub("^FR_",""):gsub("^SEVII_",""):gsub("_"," ")
+  return tostring(id):gsub("^FR_",""):gsub("^EM_",""):gsub("^SEVII_",""):gsub("_"," ")
 end
 --- Encounter tables: the game has several ids for one map (FR_ROUTE_1,
 -- ROUTE_1, "3:19"); the Encounters list shows one per map name. Returns

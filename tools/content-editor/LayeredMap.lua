@@ -297,7 +297,8 @@ end
 function LayeredMap.createMap(S, wantedId, cellWidth, cellHeight, tilesetId)
   local project = ensureProject(assert(S.project, "no project"))
   local gen3=require("Generation").isGen3(S)
-  if gen3 and not tostring(wantedId):match("^FR_") then wantedId="FR_"..tostring(wantedId or "NEW_MAP") end
+  local prefix=require("Generation").gen3MapPrefix(S)
+  if gen3 and not tostring(wantedId):match("^"..prefix) then wantedId=prefix..tostring(wantedId or "NEW_MAP") end
   local id = uniqueMapId(S, wantedId)
   local width = math.max(2, math.floor(tonumber(cellWidth) or 20))
   local height = math.max(2, math.floor(tonumber(cellHeight) or 18))

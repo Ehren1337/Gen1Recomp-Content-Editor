@@ -1092,7 +1092,7 @@ function Trainers.draw(S, x, y, w, h, App)
       end
     else
       Kit.text("micro",
-        "Gold palette: palettes.trainers[" .. tostring(tr.id or S.trainerId or "?")
+        Generation.label(S) .. " palette: palettes.trainers[" .. tostring(tr.id or S.trainerId or "?")
           .. "] (edit under Gfx → Trainers)",
         viewX, fy, PAL.faint)
       fy = fy + 18 * s
@@ -1717,7 +1717,7 @@ function Trainers.draw(S, x, y, w, h, App)
 
   else -- place
     Kit.text("micro", Generation.isGen2(S)
-        and "Gold placements use object.trainer (class index + member). Edit on Maps."
+        and (Generation.label(S) .. " placements use object.trainer (class index + member). Edit on Maps.")
         or "Beat flags are per map object. Prefer Maps → Objects → Beat flag.",
       viewX, fy, PAL.muted)
     fy = fy + 18 * s

@@ -1,12 +1,17 @@
 local M={}
-local modes={{id="credits",label="End credits"},{id="areas",label="Area previews"},{id="intro",label="Title / Intro"},{id="oak",label="Oak intro"},{id="playback",label="Animation preview"},{id="menus",label="Windows / borders"},{id="bag",label="Bag screens"},{id="party",label="Pokemon menu"},{id="summary",label="Pokemon summary"},{id="backgrounds",label="Battle backgrounds"},{id="minigames",label="Mini-games"},{id="battle",label="Battle"},
+local modes={{id="credits",label="End credits"},{id="areas",label="Area previews",kanto=true},{id="intro",label="Title / Intro"},{id="oak",label="Oak intro"},{id="playback",label="Animation preview"},{id="menus",label="Windows / borders"},{id="bag",label="Bag screens"},{id="party",label="Pokemon menu"},{id="summary",label="Pokemon summary"},{id="backgrounds",label="Battle backgrounds"},{id="minigames",label="Mini-games"},{id="battle",label="Battle"},
   {id="town",label="Town Map"},{id="fonts",label="Fonts"},{id="dex",label="Pokedex"},{id="trainer",label="Trainer Card"},
-  {id="fame",label="Fame Checker"},{id="teachy",label="Teachy TV"},{id="naming",label="Naming"},{id="help",label="Help"},{id="overworld",label="Overworld sprites"},{id="banners",label="Location banners"},{id="all",label="All assets"}}
+  {id="fame",label="Fame Checker",kanto=true},{id="teachy",label="Teachy TV",kanto=true},{id="naming",label="Naming"},{id="help",label="Help",kanto=true},{id="overworld",label="Overworld sprites"},{id="banners",label="Location banners"},{id="all",label="All assets"}}
 function M.draw(S,x,y,w,h,App)
   local scale=require("Kit").scale
+  -- `kanto` screens exist only in FireRed / LeafGreen.
+  local game=require("Generation").id(S)
+  local kanto=game=="firered" or game=="leafgreen"
   local ids,labels={},{}
-  for _,mode in ipairs(modes) do ids[#ids+1]=mode.id;labels[mode.id]=mode.label end
-  S.g3UiMode=S.g3UiMode or "intro"
+  for _,mode in ipairs(modes) do
+    if kanto or not mode.kanto then ids[#ids+1]=mode.id;labels[mode.id]=(game=="emerald" and mode.id=="oak") and "Birch intro" or mode.label end
+  end
+  if not labels[S.g3UiMode or ""] then S.g3UiMode="intro" end
   require("ChoicePicker").field(S,{x=x,y=y,w=math.min(w,340*scale),h=28*scale,current=S.g3UiMode,ids=ids,labels=labels,title="Choose a game screen",onPick=function(id)
     S.g3UiMode=id;S.g3AssetQuery="";S.g3AssetId=nil;S.g3AssetOffset=0
   end})
@@ -25,9 +30,9 @@ function M.draw(S,x,y,w,h,App)
     if mode=="overworld" then return path:match("/ow/%d+%.rgba$") end
     if mode=="intro" then return path:find("/intro/",1,true) end
     if mode=="menus" then return path:find("/chrome/",1,true) and not path:find("/fonts/",1,true) end
-    if mode=="bag" then return path:find("/items/bag/",1,true) and not path:find("/icons/",1,true) end
+    if mode=="bag" then return (path:find("/items/bag/",1,true) or path:find("/rse/bag/",1,true)) and not path:find("/icons/",1,true) end
     if mode=="party" then return path:find("/pokemon/party/",1,true) end
-    if mode=="summary" then return path:find("/pokemon/summary/",1,true) end
+    if mode=="summary" then return path:find("/pokemon/summary/",1,true) or path:find("/rse/summary/",1,true) end
     if mode=="backgrounds" then return path:find("/pokemon/battle/terrain",1,true) end
     if mode=="battle" then return path:find("/pokemon/battle",1,true) end
     if mode=="fonts" then return path:find("/fonts/",1,true) end

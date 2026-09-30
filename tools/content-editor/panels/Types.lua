@@ -326,8 +326,8 @@ function Types.draw(S, x, y, w, h, App)
 
   Kit.text("micro",
     gen2
-      and "x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE. Gold physical/special is by type index."
-      or "Matchups use Gen1 x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE.",
+      and ("x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE. " .. Generation.label(S) .. " physical/special is by type index.")
+      or "Matchups use x10 multipliers: 0 immune, 5 NVE, 10 neutral, 20 SE.",
     viewX, fy, PAL.muted)
   fy = fy + 22 * s
   Kit.caption(viewX, fy, "AS ATTACKER vs...")

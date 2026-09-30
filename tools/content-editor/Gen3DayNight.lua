@@ -67,11 +67,14 @@ end
 
 --- Turn day and night on or off. Turning it on in a project with no night
 -- looks yet starts from the default ones (Gen3DayNightDefaults).
-function M.setEnabled(project, on)
+-- `kanto` = false (Emerald): the defaults and Crystal's lists are FireRed's,
+-- so Encounter tables stay off and no default looks are added.
+function M.setEnabled(project, on, kanto)
+  kanto = kanto ~= false
   if M.enabled(project) == (on == true) then return false end
   own(project).enabled = on == true or nil
-  if on then project.gen3DayNight.encountersOff = nil end -- Encounter tables come on with the clock
-  if on and not (project.gen3DayNight.paint and next(project.gen3DayNight.paint)) then
+  if on then project.gen3DayNight.encountersOff = (not kanto) or nil end -- Encounter tables come on with the clock
+  if on and kanto and not (project.gen3DayNight.paint and next(project.gen3DayNight.paint)) then
     M.addDefaultLooks(project)
   end
   tidy(project)

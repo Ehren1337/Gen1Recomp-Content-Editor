@@ -19,7 +19,8 @@ return function(data,root,mount)
   end
   for i=1,2 do
     S.g3NativeForms.DEOXYS=i;Forms.draw(S,data.pokemon.DEOXYS,20,20,1320,{markDirty=function() error("Browsing changed project") end})
-    assert(S._nativeFormPictures["DEOXYS"..i] and #S._nativeFormPictures["DEOXYS"..i]==4,"Missing Deoxys frame")
+    assert((i==2)==(S._nativeFormPictures["DEOXYS"..i]~=nil),"Only Normal Deoxys is in the cache")
+    assert(i~=2 or #S._nativeFormPictures.DEOXYS2==4,"Missing Deoxys frame")
   end
   assert(not S.project.gen3Forms,"Browsing forms created overrides")
   local originalRow=K.row;local count=0

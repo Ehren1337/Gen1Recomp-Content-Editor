@@ -19,8 +19,9 @@ local function isArray(t)
   return true
 end
 
+-- Keep strings on one line: writeValue re-indents multi-line array items.
 local function escapeStr(s)
-  return string.format("%q", tostring(s))
+  return (string.format("%q", tostring(s)):gsub("\\\n", "\\n"))
 end
 
 -- MK301: mods must not reference the player's ROM-derived cache.
@@ -1877,6 +1878,30 @@ function ModWriter.emitUiScripts(out, project)
   out[#out + 1] = ""
 end
 
+function ModWriter.emitUiTrueColor(out, project)
+  local rels = {}
+  for rel, on in pairs(type(project) == "table" and project.uiTrueColor or {}) do
+    if on and type(rel) == "string" and rel:match("^assets/")
+        and not rel:match("^assets/generated/") then
+      rels[#rels + 1] = string.format("mod.path .. %q", "/" .. rel)
+    end
+  end
+  if #rels == 0 then return end
+  table.sort(rels)
+  out[#out + 1] = "  -- True-color UI images (UI tab)"
+  out[#out + 1] = "  do"
+  out[#out + 1] = "    local uiTrueColor = package.loaded.UiTrueColorRuntime"
+  out[#out + 1] = "    if not uiTrueColor then"
+  out[#out + 1] = "      uiTrueColor = (function()\n"
+    .. assert(love.filesystem.read("tools/content-editor/UiTrueColorRuntime.lua")) .. "\nend)()"
+  out[#out + 1] = "      package.loaded.UiTrueColorRuntime = uiTrueColor"
+  out[#out + 1] = "    end"
+  out[#out + 1] = "    uiTrueColor.setPaths(mod.path, { " .. table.concat(rels, ", ") .. " })"
+  out[#out + 1] = "    uiTrueColor.installRuntime()"
+  out[#out + 1] = "  end"
+  out[#out + 1] = ""
+end
+
 function ModWriter.emitCustomUi(out, project, gen2)
   if type(out) ~= "table" or type(project) ~= "table" then return end
   local titleCustom = ModWriter.customLayout(project, "title")
@@ -2302,7 +2327,7 @@ end
 function ModWriter.emitMain(project, baseData, derivedModId)
   if project.gen3 and next(project.gen3) then
     assert(Generation.isGen3({ version = project.game or project.version }),
-      "Select FireRed or LeafGreen to export this project's Gen 3 edits")
+      "Select FireRed, LeafGreen or Emerald to export this project's Gen 3 edits")
   end
   if Generation.isGen3({ version = project.game or project.version }) then
     return require("Gen3").emit(project, ModWriter.encodeLua)
@@ -4260,7 +4285,14 @@ function ModWriter.emitMain(project, baseData, derivedModId)
       out[#out + 1] = "      if type(data) ~= \"table\" then return end"
       out[#out + 1] = "      local t = data.title or data.gen2Title"
       out[#out + 1] = "      if type(t) ~= \"table\" then t = {}; data.title = t; data.gen2Title = t end"
-      out[#out + 1] = "      for k, v in pairs(_title) do t[k] = v end"
+      out[#out + 1] = "      for k, v in pairs(_title) do"
+      out[#out + 1] = "        if (k == \"suicuneFrames\" or k == \"suicuneFramesGray\") and type(t[k]) == \"table\" then"
+      out[#out + 1] = "          local frames = {}"
+      out[#out + 1] = "          for i, p in ipairs(t[k]) do frames[i] = p end"
+      out[#out + 1] = "          for i, p in pairs(v) do frames[i] = p end"
+      out[#out + 1] = "          t[k] = frames"
+      out[#out + 1] = "        else t[k] = v end"
+      out[#out + 1] = "      end"
       out[#out + 1] = "    end)"
       out[#out + 1] = "  end"
       out[#out + 1] = ""
@@ -5017,6 +5049,7 @@ function ModWriter.emitMain(project, baseData, derivedModId)
   end
 
   ModWriter.emitUiScripts(out, project)
+  ModWriter.emitUiTrueColor(out, project)
   ModWriter.emitCustomUi(out, project, gen2)
 
   -- engine Strings() overrides

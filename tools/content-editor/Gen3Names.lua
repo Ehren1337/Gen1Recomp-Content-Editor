@@ -1,6 +1,6 @@
 local M={}
 function M.map(id)
-  local text=tostring(id or ""):gsub("^FR_",""):gsub("_"," "):lower()
+  local text=tostring(id or ""):gsub("^FR_",""):gsub("^EM_",""):gsub("_"," "):lower()
   return (text:gsub("(%a)([%w']*)",function(a,b) return a:upper()..b end))
 end
 function M.dialog(id,body)

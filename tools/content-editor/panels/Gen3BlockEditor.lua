@@ -773,7 +773,7 @@ function M.draw(S, x, y, w, h, App)
   -- Header: what uses this tileset, and what has changed.
   local maps = usedBy[pair] or {}
   local names = {}
-  for i = 1, math.min(4, #maps) do names[i] = tostring(maps[i]):gsub("^FR_", "") end
+  for i = 1, math.min(4, #maps) do names[i] = tostring(maps[i]):gsub("^FR_", ""):gsub("^EM_", "") end
   local used = #maps == 0 and "Not used by any map"
     or ("Used by " .. table.concat(names, ", ") .. (#maps > 4 and (" +" .. (#maps - 4) .. " more") or ""))
   Kit.text("small", used, vx, fy, PAL.detail)

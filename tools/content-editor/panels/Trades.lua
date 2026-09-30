@@ -217,7 +217,7 @@ function Trades.draw(S, x, y, w, h, App)
 
   Kit.text("micro",
     gen2
-      and "Gold: Save emits npc_trades:override (script `trade` id)."
+      and (Generation.label(S) .. ": Save emits npc_trades:override (script `trade` id).")
       or "Events step \"In-game trade\" uses this 1-based index + a done flag.",
     viewX, fy, PAL.muted)
   fy = fy + 22 * s

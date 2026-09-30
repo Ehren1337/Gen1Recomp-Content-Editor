@@ -69,7 +69,7 @@ end
 
 local TABS = {
   { id = "guides",   label = "GUIDES",
-    tip = "Step-by-step guides: getting started, maps, events, Pokemon and Gen 3 features" },
+    tip = "Step-by-step guides: getting started, maps, events, Pokemon and game features" },
   { id = "project",  label = "PROJECT",
     tip = "Create / open mod, boot & constants, validate / scan / playtest" },
   { id = "manifest", label = "MANIFEST",
@@ -79,7 +79,7 @@ local TABS = {
   { id = "code",     label = "CODE",
     tip = "Browse and edit Lua files under mods/" },
   { id = "patches",  label = "GAME PATCHES",
-    tip = "Switch features this mod adds to the game on or off (FireRed: real time clock)" },
+    tip = "Switch features this mod adds to the game on or off" },
   { id = "maps",     label = "MAPS",
     tip = "Unified 16x16 terrain, events, encounters, and map settings" },
   { id = "encounters", label = "ENCOUNTERS",
@@ -87,15 +87,15 @@ local TABS = {
   { id = "dialog",   label = "DIALOG",
     tip = "NPC / sign TEXT_* strings and bindings" },
   { id = "shops",    label = "SHOPS",
-    tip = "Poké Mart inventories (Gen1 TEXT_* / Gold MART_* shelves)" },
+    tip = "Poké Mart inventories" },
   { id = "trades",   label = "TRADES",
-    tip = "In-game trades (Gen1 field.trades / Gold NPC trades)" },
+    tip = "In-game trades" },
   { id = "trainers", label = "TRAINERS",
     tip = "Trainer classes, parties, and battle headers" },
   { id = "ai",       label = "AI",
-    tip = "Gen1 AI classes / Gold scoring layers (BASIC, SMART, …)" },
+    tip = "Trainer AI classes and scoring layers" },
   { id = "player",   label = "PLAYER",
-    tip = "Gen1 Red / Gold Chris: OW sheets, remaps, battle & intro pics" },
+    tip = "Player overworld sheets, remaps, battle & intro pics" },
   { id = "ui",       label = "UI",
     tip = "Title/splash, theme, fonts, strings, town map, badge icons" },
   { id = "items",    label = "ITEMS",
@@ -103,7 +103,7 @@ local TABS = {
   { id = "pokemon",  label = "POKEMON",
     tip = "Species stats, sprites, icons, learnsets" },
   { id = "breeding", label = "BREEDING",
-    tip = "Gold: egg groups / steps / moves and Day-Care knobs" },
+    tip = "Egg groups, egg steps, egg moves and Day-Care settings" },
   { id = "moves",    label = "MOVES",
     tip = "Move power, accuracy, effects, advanced flags" },
   { id = "anims",    label = "ANIMS",
@@ -130,11 +130,21 @@ function App.tabList()
 end
 
 local function activeTabs()
+  if require("Generation").num(S)==1 then
+    local result={}
+    for _,tab in ipairs(TABS) do if tab.id~="breeding" then result[#result+1]=tab end end
+    return result
+  end
   if not require("Generation").isGen3(S) then return TABS end
   local extra={trades=true,effects=true,rules=true,ai=true,breeding=true,shops=true,types=true,project=true,manifest=true,cart=true,code=true,patches=true,guides=true,player=true,ui=true,anims=true,audio=true,gfx=true}
   local result={}
   for _,tab in ipairs(TABS) do if extra[tab.id] or require("Gen3").tabs[tab.id] then result[#result+1]=tab end end
   return result
+end
+
+--- Tabs shown for the loaded game.
+function App.visibleTabs()
+  return activeTabs()
 end
 
 local PANELS = {
@@ -256,6 +266,14 @@ local function refreshModsAndEvents()
   end
 end
 
+-- Game screens previewed in the editor look up this game's ROM, SE and song tables.
+local function selectGen3Tables()
+  if not require("Generation").isGen3(S) then return end
+  for _, name in ipairs({ "src.import.gba.versions", "src.core.game3.se_ids", "src.core.game3.song_ids" }) do
+    require(name).select(S.version)
+  end
+end
+
 function App.reloadData(opts)
   opts = opts or {}
   if not S then return false end
@@ -268,6 +286,7 @@ function App.reloadData(opts)
   version = (prefs and prefs.lastVersion) or version or "red"
   S.version = version
   App.dataVersion = version
+  selectGen3Tables()
   S._gen3Catalog = nil
   S._g3Identity = nil
   S.dataSource = source
@@ -417,6 +436,7 @@ function App.load(modPath, opts)
   local source, prefs, status = DataSource.apply({ version = version })
   S.version = (prefs and prefs.lastVersion) or version
   App.dataVersion = S.version
+  selectGen3Tables()
   S._gen3Catalog = nil
   S._g3Identity = nil
   S.dataSource = source

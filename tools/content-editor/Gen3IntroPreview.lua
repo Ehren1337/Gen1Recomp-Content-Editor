@@ -7,8 +7,34 @@ local function scoped(fn)
   for _,key in ipairs(keys) do Audio[key]=saved[key] end
   return ok,value
 end
+-- Emerald's Birch reads text and images from the game, so the project's edits
+-- are swapped in only while the preview steps or draws.
+local function birchScoped(S,fn)
+  local RomText=require("src.core.game3.rom_text");local Kit=require("src.ui.game3.rse.scene_kit")
+  local keys=require("Gen3Birch").order;local saved,image={},Kit.image
+  for _,key in ipairs(keys) do saved[key]=RomText.overrides[key];RomText.overrides[key]=S.project.text[key] or saved[key] end
+  S._g3BirchImages=S._g3BirchImages or {}
+  Kit.image=function(path)
+    local asset=(S.project.gen3Assets or {})[path]
+    if not asset then return image(path) end
+    if not S._g3BirchImages[asset.file] then
+      local img=love.graphics.newImage(love.filesystem.newFileData(assert(require("ModIO").readText(S.path.."/"..asset.file)),"asset.png"))
+      img:setFilter("nearest","nearest");S._g3BirchImages[asset.file]=img
+    end
+    return S._g3BirchImages[asset.file]
+  end
+  local ok,err=scoped(fn)
+  Kit.image=image
+  for _,key in ipairs(keys) do RomText.overrides[key]=saved[key] end
+  return ok,err
+end
+local function run(S,p,fn)
+  if p.birch then return birchScoped(S,fn) end
+  return scoped(fn)
+end
 function M.stop(S)
   local p=S.g3IntroPreview;if not p then return end
+  if p.birch then p.birch:destroy() end
   if p.movie then p.movie:destroy() end
   if p.oak then p.oak:destroy();require("src.ui.game3.naming").dismiss() end
   if p.title then require("src.ui.game3.title_screen").leave(p.title) end
@@ -17,6 +43,14 @@ end
 function M.play(S,kind)
   M.stop(S)
   local p={kind=kind,frame=0,project=S.project};S.g3IntroPreview=p
+  if kind=="birch" then
+    local ok,err=birchScoped(S,function()
+      p.birch=require("src.ui.game3.rse.birch_speech").new({textSpeed=(S.project.gen3BirchScene or {}).textSpeed or 1})
+      p.canvas=love.graphics.newCanvas(240,160);p.canvas:setFilter("nearest","nearest")
+    end)
+    if not ok then p.error=err end
+    return ok,err
+  end
   local ok,err=scoped(function()
     local assets={}
     for path in pairs(require("Gen3Resources").assets(S.data)) do
@@ -49,8 +83,11 @@ function M.play(S,kind)
 end
 function M.step(S,dt)
   local p=S.g3IntroPreview;if not p or p.error then return end
-  local ok,err=scoped(function()
-    if p.oak then
+  local ok,err=run(S,p,function()
+    if p.birch then
+      local pending=p.keys or {};p.keys={}
+      p.birch:update({wasPressed=function(_,key) return pending[key] end,isDown=function() return false end},dt or 1/60)
+    elseif p.oak then
       local pending=p.keys or {};p.keys={}
       p.oak:update({wasPressed=function(_,key) return pending[key] end,isDown=function() return false end},dt or 1/60)
     elseif p.movie then p.movie:update(nil,dt or 1/60)
@@ -68,7 +105,7 @@ function M.render(S)
   local p=S.g3IntroPreview;if not p or p.error then return end
   love.graphics.push("all");local previous=love.graphics.getCanvas()
   love.graphics.setCanvas({p.canvas,stencil=true});love.graphics.origin();love.graphics.setScissor();love.graphics.setShader();love.graphics.clear(0,0,0,1)
-  local ok,err=scoped(function() if p.oak then p.oak:draw() elseif p.movie then p.movie:draw() else require("src.ui.game3.title_screen").draw(p.title) end end)
+  local ok,err=run(S,p,function() if p.birch then p.birch:draw() elseif p.oak then p.oak:draw() elseif p.movie then p.movie:draw() else require("src.ui.game3.title_screen").draw(p.title) end end)
   love.graphics.setCanvas(previous);love.graphics.pop()
   if not ok then p.error=err end
   return p.canvas

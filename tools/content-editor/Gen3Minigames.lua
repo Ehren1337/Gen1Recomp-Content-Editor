@@ -9,17 +9,17 @@ function M.draw(S,x,y,w,h,App)
  if S.g3MinigameView=="playback" then require("Gen3MinigamePreview").draw(S,id,x,y,w,h);return end
  require("Gen3MinigamePreview").stop(S)
  local Images=require("Gen3MinigameImages");local ids,labels={},{}
- for i,rec in ipairs(Images.assets[id]) do ids[i]=tostring(i);labels[tostring(i)]=rec.name end
+ for i,rec in ipairs(Images.list(S,id)) do ids[i]=tostring(i);labels[tostring(i)]=rec.name end
  local selected=tostring(S.g3MinigameImage or "1");if not labels[selected] then selected="1" end
  P.field(S,{x=x,y=y,w=w,h=28*s,ids=ids,labels=labels,current=selected,title="CHOOSE IMAGE",onPick=function(v) S.g3MinigameImage=v end})
  local data,err=Images.image(S,id,tonumber(selected))
  if not data then K.caption(x,y+80*s,err or "Unable to read mini-game image");return end
- local rec=Images.assets[id][tonumber(selected)]
+ local rec=Images.list(S,id)[tonumber(selected)]
  if S._miniGameImageData~=data then S._miniGameImageData=data;S._miniGameTexture=love.graphics.newImage(data);S._miniGameTexture:setFilter("nearest","nearest") end
  local image=S._miniGameTexture
  local scale=math.min((w-24*s)/data:getWidth(),math.max(1,h-140*s)/data:getHeight(),4*s)
  love.graphics.setColor(1,1,1,1);love.graphics.draw(image,x+12*s,y+80*s,0,scale,scale)
- K.caption(x,y+h-45*s,rec.name.." - original ROM graphics ("..data:getWidth().." x "..data:getHeight()..")")
+ K.caption(x,y+h-45*s,rec.name.." - original game graphics ("..data:getWidth().." x "..data:getHeight()..")")
  K.caption(x,y+h-20*s,"Image preview. Use Animation preview to watch a demonstration. Asset replacement is not supported yet.")
 end
 return M

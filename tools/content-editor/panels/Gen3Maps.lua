@@ -260,25 +260,26 @@ function Panel.draw(S,x,y,w,h,App)
   for id,def in pairs((S.project.gen3 or {}).maps or {}) do if not maps[id] then maps[id]=def end end
   local ids=RegList.sortedKeys(maps)
   S.g3MapId=S.g3MapId or ids[1]
-  local fx,fw=RegList.drawList(S,App,x,y,w,h,"Gen 3 maps",ids,
+  local fx,fw=RegList.drawList(S,App,x,y,w,h,require("Generation").label(S).." maps",ids,
     {selKey="g3MapId",queryKey="g3MapQuery",offsetKey="g3MapOffset",listW=210*s,
       label=function(id) local map=(S.project.maps or {})[id];return map and (map.name or map.label) or id end})
-  if not S.g3MapId then Kit.caption(fx,y,"Import FireRed or LeafGreen to load native maps"); return end
+  if not S.g3MapId then Kit.caption(fx,y,"Import FireRed, LeafGreen or Emerald to load native maps"); return end
   local layout,err=Map.layout(S.data,S.g3MapId,S.project)
   if not layout then Kit.caption(fx,y,tostring(err)); return end
   if S.g3MapMode=="layout" then
-    Kit.caption(fx,y,"Source: "..S.g3MapId..". Use a new FR_ ID to duplicate or create a blank map.")
+    local prefix=require("Generation").gen3MapPrefix(S)
+    Kit.caption(fx,y,"Source: "..S.g3MapId..". Use a new "..prefix.." ID to duplicate or create a blank map.")
     if S._g3LayoutFor~=S.g3MapId then
       S._g3LayoutFor=S.g3MapId;S.g3LayoutId=S.g3MapId;S.g3LayoutW=tostring(layout.width);S.g3LayoutH=tostring(layout.height)
     end
-    S.g3LayoutId=Kit.textfield("g3LayoutId",fx,y+36*s,fw,28*s,S.g3LayoutId,"FR_MY_MAP")
+    S.g3LayoutId=Kit.textfield("g3LayoutId",fx,y+36*s,fw,28*s,S.g3LayoutId,prefix.."MY_MAP")
     S.g3LayoutW=Kit.textfield("g3LayoutW",fx,y+80*s,130*s,28*s,S.g3LayoutW,"Width")
     S.g3LayoutH=Kit.textfield("g3LayoutH",fx+144*s,y+80*s,130*s,28*s,S.g3LayoutH,"Height")
     if Kit.button(fx,y+126*s,210*s,28*s,S.g3BlankMap and "Blank terrain" or "Copy source terrain",{}) then S.g3BlankMap=not S.g3BlankMap end
     Kit.caption(fx,y+168*s,"New maps use this tileset. Add a warp to reach them; blank cells start blocked.")
     if Kit.button(fx,y+208*s,180*s,30*s,"Apply layout",{kind="primary"}) then
       local id=S.g3LayoutId;local width,height=tonumber(S.g3LayoutW),tonumber(S.g3LayoutH)
-      if not id:match("^FR_[A-Z0-9_]+$") or (id~=S.g3MapId and maps[id]) then S.status="Choose the current ID or an unused FR_UPPERCASE_ID"
+      if not id:match("^"..prefix.."[A-Z0-9_]+$") or (id~=S.g3MapId and maps[id]) then S.status="Choose the current ID or an unused "..prefix.."UPPERCASE_ID"
       elseif not width or not height or width%1~=0 or height%1~=0 or width<1 or height<1 or width>512 or height>512 then S.status="Dimensions must be integers from 1 to 512"
       else
         local original=(S.project.gen3MapLayouts or {})[S.g3MapId]

@@ -91,6 +91,8 @@ tests/content-editor/leafgreen-smoke/*.png
 /tests/content-editor/hgss-playtest/*.log
 /tests/content-editor/emerald-tabs-smoke/result.txt
 /tests/content-editor/emerald-tabs-smoke/*.png
+/tests/content-editor/emerald-views-smoke/result.txt
+/tests/content-editor/emerald-views-smoke/*.png
 /tests/content-editor/emerald-playtest/mod/
 /tests/content-editor/emerald-playtest/export.txt
 /tests/content-editor/emerald-playtest/*.log

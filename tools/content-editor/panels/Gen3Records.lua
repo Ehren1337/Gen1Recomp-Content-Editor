@@ -53,7 +53,7 @@ function Panel.draw(S, x, y, w, h, App)
   local patches = (S.project.gen3 or {})[name] or {}
   local modes=((S.project.gen3Modes or {})[name] or {})
   local ids = RegList.mergeIds(patches, catalog)
-  local fx, fw = RegList.drawList(S, App, x, y, w, h, "Gen 3 " .. name, ids,
+  local fx, fw = RegList.drawList(S, App, x, y, w, h, require("Generation").label(S) .. " " .. name, ids,
     { selKey = "gen3Id", queryKey = "gen3Query", offsetKey = "gen3Offset",
       footerLabel = name ~= "maps" and "New / duplicate" or nil,
       onFooter=function() S._g3Create=name end })
@@ -88,7 +88,7 @@ function Panel.draw(S, x, y, w, h, App)
   end
   local id = S.gen3Id
   if not id or (catalog[id] == nil and patches[id] == nil) then
-    Kit.caption(fx, y, "Select a record. Import a FireRed or LeafGreen ROM if the list is empty."); return
+    Kit.caption(fx, y, "Select a record. Import the " .. require("Generation").label(S) .. " ROM if the list is empty."); return
   end
   local identity = name .. "/" .. id
   -- Rebuild drafts after undo/redo or a data reload as well as selection changes.
@@ -112,7 +112,7 @@ function Panel.draw(S, x, y, w, h, App)
     for key, value in pairs(S._g3Draft) do S._g3Original[key] = value end
     S._g3Error = nil
   end
-  Kit.caption(fx, y, id .. " — Gen 3 record fields")
+  Kit.caption(fx, y, id .. " — " .. require("Generation").label(S) .. " record fields")
   Kit.caption(fx, y + 24*s, "Edit fields, expand lists, then Apply record and Save.")
   local by = y + 52*s
   if Kit.button(fx, by, 130*s, 28*s, "Apply record", { kind = "primary" }) then

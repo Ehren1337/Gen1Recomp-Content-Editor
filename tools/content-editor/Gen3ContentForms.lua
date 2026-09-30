@@ -110,7 +110,23 @@ function M.dex(S,mon,mutate,App,x,y,w,fh,s)
   F.text("kind","Category")
   F.number("height","Height (decimeters)",0,65535)
   F.number("weight","Weight (hectograms)",0,65535)
+  F.row("Description",function(xx,yy,ww)
+    local texts=S.project.gen3DexText or {}
+    local cur=texts[mon.index] or M.dexText(S,mon.index)
+    local value=(Kit.textfield("g3_description",xx,yy,ww,fh,(cur:gsub("\n","\\n")),""):gsub("\\n","\n"))
+    if value~=cur then texts[mon.index]=value;S.project.gen3DexText=texts;App.markDirty() end
+  end)
+  F.row("",function(xx,yy)
+    Kit.text("micro","Type \\n for a new line",xx,yy+6*s,PAL.faint)
+  end)
   local yy=F.finish();return yy,mon
+end
+function M.dexText(S,index)
+  if not S.data._g3DexEntries then
+    local bytes=S.data._gen3Read("data/generated/gba/pokemon/pokedex/entries.lua")
+    S.data._g3DexEntries=bytes and load(bytes,"=entries","t",{})() or {}
+  end
+  return (S.data._g3DexEntries[index] or {}).description or ""
 end
 function M.items(S,item,mutate,App,x,y,w,fh,s)
   require("Preview").drawItemIcon(S,item,x,y,64*s,64*s)

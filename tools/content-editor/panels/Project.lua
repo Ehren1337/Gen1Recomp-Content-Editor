@@ -183,7 +183,6 @@ function Project.draw(S, x, y, w, h, App)
   row = gameCardY + pad
   local GameVersion = require("src.core.GameVersion")
   local curVer = S.version or App.dataVersion or "red"
-  local gen = Generation.num(S)
   local rawOrder = GameVersion.ORDER or { "red", "blue", "yellow", "gold", "silver", "crystal" }
   local order = {}
   for _, vid in ipairs(rawOrder) do
@@ -220,9 +219,8 @@ function Project.draw(S, x, y, w, h, App)
   end
   row = row + btnH + 8 * s
   Kit.text("micro",
-    string.format("Authoring for %s (Gen %d). Import mounts %scache.",
+    string.format("Authoring for %s. Import mounts %scache.",
       (GameVersion.info(curVer) and GameVersion.info(curVer).displayName) or curVer,
-      gen,
       (GameVersion.cachePrefix and GameVersion.cachePrefix(curVer)) or ""),
     gameX, row, PAL.muted)
   row = gameCardY + gameCardH + 16 * s
@@ -265,7 +263,7 @@ function Project.draw(S, x, y, w, h, App)
   local dsW = math.min(150 * s, math.floor((dataW - 2 * dsGap) / 3))
   if Kit.button(dataX, row, dsW, btnH, "Link Recomp", {
       kind = "primary",
-      tooltip = "Use data/generated (or red|blue|yellow|gold|silver|crystal|firered|leafgreen/) from a Gen1Recomp install",
+      tooltip = "Use data/generated (or red|blue|yellow|gold|silver|crystal|firered|leafgreen|emerald/) from a Gen1Recomp install",
     }) then
     App.pickFolder("Choose Gen1Recomp folder", function(path)
       App.linkRecompFolder(path)
@@ -273,7 +271,7 @@ function Project.draw(S, x, y, w, h, App)
   end
   if Kit.button(dataX + dsW + dsGap, row, dsW, btnH, "Import ROM", {
       kind = "accent",
-      tooltip = "Import US Red/Blue/Yellow (.gb, 1 MiB) Gold/Silver/Crystal (.gbc) or FireRed/LeafGreen USA 1.0 or 1.1 (.gba)\n"
+      tooltip = "Import US Red/Blue/Yellow (.gb, 1 MiB) Gold/Silver/Crystal (.gbc), FireRed/LeafGreen USA 1.0 or 1.1, or Emerald USA (.gba)\n"
         .. "into the versioned save-directory cache",
     }) then
     App.pickFile("Choose Pokemon ROM",
@@ -289,7 +287,7 @@ function Project.draw(S, x, y, w, h, App)
   row = row + btnH + 8 * s
   if Kit.button(dataX, row, dsW, btnH, "Clear cache", {
       kind = "danger",
-      tooltip = "Delete save-directory ROM caches (red|blue|yellow|gold|silver|crystal|firered|leafgreen/…)\n"
+      tooltip = "Delete save-directory ROM caches (red|blue|yellow|gold|silver|crystal|firered|leafgreen|emerald/…)\n"
         .. "and flush editor image caches, then reload data.\n"
         .. "Does not delete a Linked Gen1Recomp folder.",
   }) then
@@ -328,7 +326,7 @@ function Project.draw(S, x, y, w, h, App)
   if Kit.button(dataX, row, dsW, btnH, "Open cache", {
       kind = "ghost",
       tooltip = (cacheFolder and ("Open:\n" .. cacheFolder) or "Open the save-directory ROM cache")
-        .. "\nImported data lives here (red|blue|yellow|gold|silver|crystal|firered|leafgreen/)",
+        .. "\nImported data lives here (red|blue|yellow|gold|silver|crystal|firered|leafgreen|emerald/)",
     }) then
     if App.openCacheFolder then App.openCacheFolder() end
   end

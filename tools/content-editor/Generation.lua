@@ -9,6 +9,12 @@ function Generation.id(S)
   return "red"
 end
 
+--- The selected game's short name ("Silver", "FireRed").
+function Generation.label(S)
+  local rec = require("src.core.GameVersion").VERSIONS[Generation.id(S)]
+  return rec and rec.label or Generation.id(S)
+end
+
 function Generation.num(S)
   local ok, GameVersion = pcall(require, "src.core.GameVersion")
   if ok and GameVersion and GameVersion.generation then
@@ -66,6 +72,11 @@ function Generation.isGen3(S)
   return Generation.num(S) == 3
 end
 
+-- Gen 3 map IDs: FireRed and LeafGreen share FR_, Emerald uses EM_.
+function Generation.gen3MapPrefix(S)
+  return Generation.id(S) == "emerald" and "EM_" or "FR_"
+end
+
 function Generation.isGen2(S)
   if Generation.isGen3(S) then return false end
   if Generation.num(S) == 2 then return true end
@@ -82,8 +93,7 @@ end
 -- Latest Recomp gates mods per version (`games: ["red"]` will not load on
 -- Blue). New editor mods target every game this engine supports.
 function Generation.manifestGames(_S)
-  if Generation.isGen3(_S) then return { Generation.id(_S) } end
-  return { "all" }
+  return { Generation.id(_S) }
 end
 
 function Generation.coversGen2(games)
