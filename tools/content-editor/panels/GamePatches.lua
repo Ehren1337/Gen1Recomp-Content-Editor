@@ -2,7 +2,8 @@
 -- (nothing in the engine is changed; each one is generated into main.lua).
 -- FireRed / LeafGreen / Emerald: the real time clock (day and night,
 -- Gen3DayNight); on FireRed / LeafGreen with its encounter tables as a
--- setting of it.
+-- setting of it. Emerald: the Physical/Special split (Gen3Split) and the
+-- System Clock (Gen3SystemClock).
 --
 -- Each patch is a title, one line under it and an Off / On switch; what it
 -- does in detail opens in a pop-up (Description).
@@ -125,7 +126,28 @@ local function cleanText(S)
   }
 end
 
-M.describe = { clock = clockText, encounters = encounterText, clean = cleanText }
+local function splitText(S)
+  local on = require("Gen3Split").enabled(S.project)
+  return "Physical/Special Split", {
+    "Each move is Physical or Special by itself, as in Gen 4, instead of by its type. Fire Punch hits with Attack, Shadow Ball with Special Attack.",
+    "Every original move starts at its official Gen 4 category. Change one in MOVES > Category.",
+    "Hidden Power and Weather Ball stay Special whatever type they become.",
+    on and "It is on." or "It is off: moves are Physical or Special by their type.",
+  }
+end
+
+local function systemClockText(S)
+  local on = require("Gen3SystemClock").enabled(S.project)
+  return "System Clock", {
+    "On a new game, checking the bedroom clock sets the game's clock to the PC's clock. No clock screen opens and the story goes on as normal.",
+    "From then on the game's time is the PC's time: berries, tides and daily events follow it.",
+    "Saves that already set their clock keep their own time.",
+    on and "It is on." or "It is off: the player sets the bedroom clock by hand.",
+  }
+end
+
+M.describe = { clock = clockText, encounters = encounterText, clean = cleanText, split = splitText,
+  systemClock = systemClockText }
 
 M.confirms = {
   clean = {
@@ -162,7 +184,9 @@ local function kanto(S)
   return game == "firered" or game == "leafgreen"
 end
 
--- `kanto` patches and subs are FireRed / LeafGreen only.
+local function emerald(S) return require("Generation").id(S) == "emerald" end
+
+-- `kanto` patches and subs are FireRed / LeafGreen only; `emerald` ones Emerald only.
 M.PATCHES = {
   {
     id = "clean", kanto = true, title = "Clean Project", subtitle = "Start from scratch: no story, events or maps",
@@ -204,6 +228,19 @@ M.PATCHES = {
           off = "Encounter tables off: Crystal's lists taken back out, all-day lists used" },
       },
     },
+  },
+  {
+    id = "split", emerald = true, title = "Physical/Special Split", subtitle = "Moves are Physical or Special by themselves, as in Gen 4",
+    isOn = function(S) return require("Gen3Split").enabled(S.project) end,
+    setOn = function(S, on) return require("Gen3Split").setEnabled(S.project, on) end,
+    status = { on = "Physical/Special split on", off = "Physical/Special split off" },
+    settings = { tooltip = "Each move's Category (MOVES tab)", open = function(S) S.tab = "moves" end },
+  },
+  {
+    id = "systemClock", emerald = true, title = "System Clock", subtitle = "The bedroom clock is set from the PC's clock",
+    isOn = function(S) return require("Gen3SystemClock").enabled(S.project) end,
+    setOn = function(S, on) return require("Gen3SystemClock").setEnabled(S.project, on) end,
+    status = { on = "System clock on", off = "System clock off" },
   },
 }
 
@@ -295,7 +332,7 @@ function M.draw(S, x, y, w, h, App)
   local blocked = Kit.blockClicks
   if open then Kit.blockClicks = true end
   for _, patch in ipairs(M.PATCHES) do
-    if kanto(S) or not patch.kanto then y = patchCard(S, App, patch, x, y, cw) end
+    if (kanto(S) or not patch.kanto) and (emerald(S) or not patch.emerald) then y = patchCard(S, App, patch, x, y, cw) end
   end
   Kit.blockClicks = blocked
   if open then popup(S, App, x, top, w, h) end

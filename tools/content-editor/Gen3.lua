@@ -140,6 +140,7 @@ function Gen3.emit(project, encode)
   require("Gen3SpeciesCapacity").install()
   require("Gen3Trades").prepare(project)
   require("Gen3ContentAdapter").compile(project)
+  local contestEvos = require("Gen3ContestEvo").compile(project)
   require("Gen3AudioAdapter").compile(project)
   local problem = Gen3.projectError(project)
   assert(not problem, problem)
@@ -228,6 +229,13 @@ function Gen3.emit(project, encode)
   require("Gen3Clock").emit(project, encode, out)
   -- New Pokemon evolve from the start (no National Pokedex needed).
   require("Gen3NewPokemon").emit(project, encode, out)
+  -- Emerald: evolve by Cool, Beauty, Cute, Clever or Tough condition.
+  require("Gen3ContestEvo").emit(project, contestEvos, encode, out)
+  -- GAME PATCHES > Physical/Special split. After Gen3Native, so a move's
+  -- category wins over its type's (Types).
+  require("Gen3Split").emit(project, encode, out)
+  -- GAME PATCHES > System Clock: the bedroom clock follows the PC's.
+  require("Gen3SystemClock").emit(project, out)
   -- Outside the map (Border > Around the map): extrude and painted tiles.
   require("Gen3Void").emit(project, encode, out)
   -- GAME PATCHES > Clean Project: no story on a new game, the short intro.

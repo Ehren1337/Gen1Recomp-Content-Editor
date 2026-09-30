@@ -1541,7 +1541,11 @@ end
 local function drawEvolutions(S, mon, mutate, App, formX, fy, formW, fh, s)
   local gen2 = Generation.isGen2(S)
   local methods = gen2 and EVO_METHODS_GEN2 or EVO_METHODS
-  if Generation.isGen3(S) then methods=require("src.mods.Schemas").gen3View.EVOLUTIONS end
+  if Generation.isGen3(S) then
+    methods={}
+    for _,id in ipairs(require("src.mods.Schemas").gen3View.EVOLUTIONS) do methods[#methods+1]=id end
+    if Generation.id(S)=="emerald" then for _,id in ipairs(require("Gen3ContestEvo").EXTRA) do methods[#methods+1]=id end end
+  end
   local intoKey = gen2 and "into" or "species"
   Kit.text("micro",
     gen2
@@ -1622,9 +1626,9 @@ local function drawEvolutions(S, mon, mutate, App, formX, fy, formW, fh, s)
           App.markDirty()
         end,
       })
-    elseif Generation.isGen3(S) and method=="EVO_BEAUTY" then
+    elseif Generation.isGen3(S) and require("Gen3ContestEvo").METHODS[method] then
       local value=numField(S,App,"pk_ev_beauty_"..i,paramX,fy,80*s,fh,evo.param or 0)
-      if value~=(evo.param or 0) then mon=mutate();mon.evolutions[i].param=math.max(0,value) end
+      if value~=(evo.param or 0) then mon=mutate();mon.evolutions[i].param=math.max(0,math.min(255,value)) end
     elseif gen2 and method == "EVOLVE_HAPPINESS" then
       ChoicePicker.field(S, {
         x = paramX, y = fy, w = math.min(paramW, 130 * s), h = fh,

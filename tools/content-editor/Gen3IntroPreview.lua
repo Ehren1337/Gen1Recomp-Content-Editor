@@ -51,6 +51,17 @@ function M.play(S,kind)
     if not ok then p.error=err end
     return ok,err
   end
+  if require("Generation").id(S)=="emerald" then
+    local ok,err=scoped(function()
+      local boot=require("src.core.game3.profiles.emerald.boot")
+      local machine=require("src.ui.game3.rse.gba_machine").new()
+      if kind=="title" then p.rse=require(boot.title).new(machine,{params=boot.titleParams})
+      else p.rse=require(boot.intro).new(machine,{params=boot.introParams}) end
+      p.canvas=love.graphics.newCanvas(240,160);p.canvas:setFilter("nearest","nearest")
+    end)
+    if not ok then p.error=err end
+    return ok,err
+  end
   local ok,err=scoped(function()
     local assets={}
     for path in pairs(require("Gen3Resources").assets(S.data)) do
@@ -90,6 +101,7 @@ function M.step(S,dt)
     elseif p.oak then
       local pending=p.keys or {};p.keys={}
       p.oak:update({wasPressed=function(_,key) return pending[key] end,isDown=function() return false end},dt or 1/60)
+    elseif p.rse then p.rse:update(nil)
     elseif p.movie then p.movie:update(nil,dt or 1/60)
     else require("src.ui.game3.title_screen").update(p.title,nil,dt or 1/60) end
     p.frame=p.frame+1
@@ -105,7 +117,7 @@ function M.render(S)
   local p=S.g3IntroPreview;if not p or p.error then return end
   love.graphics.push("all");local previous=love.graphics.getCanvas()
   love.graphics.setCanvas({p.canvas,stencil=true});love.graphics.origin();love.graphics.setScissor();love.graphics.setShader();love.graphics.clear(0,0,0,1)
-  local ok,err=run(S,p,function() if p.birch then p.birch:draw() elseif p.oak then p.oak:draw() elseif p.movie then p.movie:draw() else require("src.ui.game3.title_screen").draw(p.title) end end)
+  local ok,err=run(S,p,function() if p.birch then p.birch:draw() elseif p.oak then p.oak:draw() elseif p.rse then p.rse:draw() elseif p.movie then p.movie:draw() else require("src.ui.game3.title_screen").draw(p.title) end end)
   love.graphics.setCanvas(previous);love.graphics.pop()
   if not ok then p.error=err end
   return p.canvas

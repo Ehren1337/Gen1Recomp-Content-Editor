@@ -1,5 +1,7 @@
 local M={}
 local function copy(v) return require("src.mods.Merge").deepCopy(v) end
+-- Emerald's original Deoxys is Speed Forme; FireRed's is Attack Forme.
+local function emerald(S) return require("Generation").id(S)=="emerald" end
 function M.family(S,id)
   for parent,f in pairs(S.project.gen3Forms or {}) do
     if parent==id then return f,parent end
@@ -22,7 +24,7 @@ function M.encounterChoices(S,id)
   elseif parent=="CASTFORM" then
     for i,name in ipairs({"Normal","Sunny","Rainy","Snowy"}) do ids[#ids+1]=tostring(i);labels[tostring(i)]=name end
   elseif parent=="DEOXYS" then
-    for i,name in ipairs({"Attack","Normal"}) do ids[#ids+1]=tostring(i);labels[tostring(i)]=name end
+    for i,name in ipairs({emerald(S) and "Speed" or "Attack","Normal"}) do ids[#ids+1]=tostring(i);labels[tostring(i)]=name end
   end
   local current="automatic"
   if family then for i,row in ipairs(family.forms) do if row.species==id and id~=parent then current=tostring(i) end end end
@@ -104,6 +106,12 @@ function M.template(S,parent)
       local row,rec=M.add(S,parent,name);rec.types=({{"FIRE"},{"WATER"},{"ICE"}})[i]
       row.weather=({"SUN","RAIN","HAIL"})[i];writePictures(S,rec,385,i,i)
     end
+  elseif parent=="DEOXYS" and emerald(S) then
+    family.forms[1].name="Speed"
+    local original=copy(S.project.pokemon[parent] or S.data.pokemon[parent]);S.project.pokemon[parent]=original
+    writePictures(S,original,410,"handled",0)
+    local _,normal=M.add(S,parent,"Normal");writePictures(S,normal,410,0,0)
+    for _,name in ipairs({"Attack","Defense"}) do local row=M.add(S,parent,name);row.needsArtwork=true end
   elseif parent=="DEOXYS" then
     family.forms[1].name="Attack"
     local original=copy(S.project.pokemon[parent] or S.data.pokemon[parent]);S.project.pokemon[parent]=original
@@ -122,20 +130,21 @@ function M.draw(S,mon,x,y,w,App)
       local ids,labels={},{}
       for i=1,28 do ids[i]=i;labels[i]=i<=26 and string.char(64+i) or i==27 and "!" or "?" end
       if parent=="CASTFORM" then ids={1,2,3,4};labels={"Normal","Sunny","Rainy","Snowy"}
-      elseif parent=="DEOXYS" then ids={1,2,3,4};labels={"Attack","Normal","Defense","Speed"} end
+      elseif parent=="DEOXYS" then ids={1,2,3,4};labels=emerald(S) and {"Speed","Normal","Attack","Defense"} or {"Attack","Normal","Defense","Speed"} end
       S.g3NativeForms=S.g3NativeForms or {}
       local nativeSelection=parent=="UNOWN" and (S.g3NativeUnown or 1) or (S.g3NativeForms[parent] or 1)
       C.field(S,{x=x,y=y,w=w,h=30*s,current=nativeSelection,ids=ids,labels=labels,title="Pokemon form",onPick=function(id) if parent=="UNOWN" then S.g3NativeUnown=id end;S.g3NativeForms[parent]=id end});y=y+40*s
-      K.caption(x,y,parent=="UNOWN" and "All 28 original forms are available." or parent=="CASTFORM" and "Forecast changes the form with the weather." or "The cache has Normal artwork only. Attack, Defense and Speed need imported sprites.");y=y+30*s
+      K.caption(x,y,parent=="UNOWN" and "All 28 original forms are available." or parent=="CASTFORM" and "Forecast changes the form with the weather." or emerald(S) and "The cache has Speed and Normal artwork. Attack and Defense need imported sprites." or "The cache has Normal artwork only. Attack, Defense and Speed need imported sprites.");y=y+30*s
       S._nativeUnownPictures=S._nativeUnownPictures or {}
       local selected=nativeSelection
       S._nativeFormPictures=S._nativeFormPictures or {}
       local cacheKey=parent..selected
-      local available=parent~="DEOXYS" or selected==2
+      local speed=parent=="DEOXYS" and selected==1 and emerald(S)
+      local available=parent~="DEOXYS" or selected==2 or speed
       if available and not S._nativeFormPictures[cacheKey] then
         local ok,pictures=pcall(function()
           local species=parent=="UNOWN" and (selected==1 and 201 or 411+selected) or parent=="CASTFORM" and 385 or 410
-          local frame=parent=="CASTFORM" and selected-1 or 0
+          local frame=parent=="CASTFORM" and selected-1 or speed and "handled" or 0
           local palette=parent=="CASTFORM" and frame or 0
           local pictures={}
           for i=1,4 do pictures[i]=love.graphics.newImage(assert(require("Gen3Rom").formPicture(S,species,i%2==0,frame,palette,i>2))) end

@@ -2,7 +2,7 @@ local M={}
 function M.used(p)
   if next(p.gen3BattlePositions or {}) then return true end
   if next(p.pokemon or {}) or next((p.gen3 or {}).pokemon or {}) then return true end
-  if p.gen3Screens or p.gen3Roamers or p.gen3Fame or next(p.gen3DexText or {}) then return true end
+  if p.gen3Screens or p.gen3Roamers or p.gen3Fame or next(p.gen3DexText or {}) or require("Gen3Berries").used(p) then return true end
   return next(p.gen3Forms or {}) or p.gen3Fly or next(p.gen3OakScene or {}) or next(p.gen3Oak or {}) or p.gen3BirchScene or p.gen3Breeding or next(p.gen3Behaviors or {}) or next(p.gen3TrainerMusic or {}) or next(p.items or {}) or next(p.gen3Help or {}) or next(p.gen3Trades or {}) or next(p.gen3Effects or {}) or next(p.gen3BattleRules or {}) or require("Gen3Workbench").used(p) or next(p.gen3Animations or {}) or next(p.gen3Assets or {}) or next(p.gen3Audio or {})
 end
 function M.emit(p,encode,out)
@@ -63,7 +63,10 @@ function M.emit(p,encode,out)
     assert(type(index)=="number" and type(text)=="string","Invalid Pokédex description")
     dex[index]=dex[index] or {};dex[index].description=text;dex[index].description2=text
   end
-  out[#out+1]="  local native = "..encode({items=p.items or {},help=p.gen3Help or {},animations=p.gen3Animations or {},assets=p.gen3Assets or {},audio=p.gen3Audio or {},dex=dex})
+  require("Gen3Berries").validate(p)
+  local berries=p.gen3Berries or {}
+  out[#out+1]="  local native = "..encode({items=p.items or {},help=p.gen3Help or {},animations=p.gen3Animations or {},assets=p.gen3Assets or {},audio=p.gen3Audio or {},dex=dex,
+    berries={flavors=berries.flavors or {},names=berries.names or {}}})
   out[#out+1]=M.source
 end
 M.source=[=[
@@ -244,6 +247,18 @@ M.source=[=[
       end
       return memo[key]
     end
+    if key=="data/generated/gba/berries/berries.lua" and (next(native.berries.flavors) or next(native.berries.names)) and bytes then
+      if not memo[key] then
+        local pack=assert(loadstring(bytes))()
+        for index,row in pairs(native.berries.flavors) do
+          local berry=assert(pack.berries[index],"Unknown berry "..tostring(index))
+          for k,v in pairs(row) do berry[k]=v end
+        end
+        for color,name in pairs(native.berries.names) do pack.pokeblockNames[color]=name end
+        memo[key]="return "..encode(pack)
+      end
+      return memo[key]
+    end
     if key=="data/generated/gba/help/pack.lua" and next(native.help) and bytes then
       if not memo[key] then
         local pack=assert(loadstring(bytes))()
@@ -266,6 +281,11 @@ M.source=[=[
     end
     local PokedexData=package.loaded["src.core.game3.pokedex_data"]
     if PokedexData and next(native.dex) then PokedexData._entries=nil end
+    if next(native.berries.flavors) or next(native.berries.names) then
+      require("src.core.game3.rse.berry_blender").resetCaches()
+      require("src.core.game3.rse.pokeblock").setNames(nil)
+      require("src.core.game3.rse.berry_trees").reset()
+    end
     for map,song in pairs(native.audio.mapSongs or {}) do
       if ctx.game.data.maps[map] then ctx.game.data.maps[map].music=song end
     end

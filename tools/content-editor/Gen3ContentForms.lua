@@ -177,7 +177,8 @@ function M.items(S,item,mutate,App,x,y,w,fh,s)
   F.enum(S,"registrability","Register to SELECT",{["0"]="No",["1"]="Yes"})
   F.enum(S,"battleUsage","Use in battle",{["0"]="Not usable",["1"]="Choose a party Pokemon",["2"]="Use directly"})
   F.number("secondaryId","Variant / secondary ID",0,65535)
-  return F.finish()
+  local yy,rec=F.finish()
+  return require("Gen3Berries").draw(S,rec,App,x,yy+8*s,w,fh,s),rec
 end
 function M.moves(S,move,mutate,App,x,y,w,fh,s)
   local F=form(move,mutate,App,x,y,w,fh,s)

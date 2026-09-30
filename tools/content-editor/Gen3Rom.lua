@@ -10,8 +10,10 @@ function M.formPicture(S,species,back,frame,_,shiny)
     return nil,"This species has no original artwork"
   end
   frame=frame or 0
+  -- "handled" is Emerald's second Deoxys picture (Speed Forme).
+  local suffix=frame=="handled" and "_handled" or frame>0 and "_"..frame or ""
   local path="data/generated/gba/pokemon/"..(back and "back" or "front")..(shiny and "_shiny" or "")
-    .."/"..species..(frame>0 and "_"..frame or "")..".rgba"
+    .."/"..species..suffix..".rgba"
   local read=S.data and S.data._gen3Read or require("src.import.CacheFs").readActive
   local bytes=read(path)
   if not bytes or #bytes~=64*64*4 then return nil,"Missing Gen 3 cache: "..path end
